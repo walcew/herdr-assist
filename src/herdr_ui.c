@@ -13,7 +13,7 @@
 #include "panel_cfg.h"
 #include "ui_theme.h"
 
-#define DETAIL_POLL_TICKS 6    /* 6 x 500ms = 3s entre read_pane */
+#define DETAIL_POLL_TICKS 20   /* 20 x 150ms = 3s entre read_pane */
 #define HEAT_CELLS        12   /* células do mapa de calor por host */
 #define ACTION_BAR_H      48
 
@@ -814,5 +814,7 @@ void herdr_ui_init(void)
     refresh_home();
     show_tab(UI_TAB_HOME);
 
-    lv_timer_create(ui_timer_cb, 500, NULL);
+    /* 150ms: o tick quase sempre sai no early-out por geração; o que importa
+       é encurtar a janela entre o push da ponte e o refresh da tela. */
+    lv_timer_create(ui_timer_cb, 150, NULL);
 }

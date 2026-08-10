@@ -6,8 +6,12 @@
 
 O Herdr expõe sua API num unix socket, que um dispositivo na rede não alcança.
 Esta ponte traduz: fala o protocolo nativo do Herdr (JSON por linha) e serve o
-mesmo conteúdo por TCP, com push real — o Herdr avisa quando algo muda, então
-não há polling.
+mesmo conteúdo por TCP. Os eventos do Herdr disparam o envio na hora, mas não
+bastam: o agent_status é derivado por regra sobre o conteúdo do terminal e o
+Herdr 0.8.0 não emite pane.agent_status_changed nessas transições (verificado
+ao vivo). Quem garante o teto de latência é a reconciliação por timeout — um
+pane.list local por segundo enquanto houver painel conectado, com broadcast
+só quando o estado de fato mudou.
 
 Sem dependências externas: só a stdlib, compatível com o python3 de fábrica do
 macOS (3.9). Roda como plugin do Herdr (ver start.sh), que fornece as variáveis
@@ -31,6 +35,7 @@ import re
 import secrets
 import socket
 import sys
+import time
 
 SOCK = (os.environ.get("HERDR_SOCK")
         or os.environ.get("HERDR_SOCKET_PATH")  # fornecida pelo plugin do Herdr
@@ -66,9 +71,18 @@ CHROME_RE = re.compile(
 TOOL_OPTIONS = ["yes, single permission", "trust, always allow", "no (tab to edit)"]
 SUBAGENT_OPTIONS = ["approve all pending", "configure individually", "exit (cancel subagents)"]
 
+# Eventos sem pane_id na assinatura; sinalizam mudança na composição dos panes.
+GENERIC_EVENTS = ("pane.updated", "pane.created", "pane.closed",
+                  "pane.agent_detected", "pane.focused", "pane.exited")
+DEBOUNCE_S = 0.25        # silêncio que fecha uma rajada de eventos
+BURST_CAP_S = 0.5        # rajada contínua não adia o envio além disto
+RECONCILE_BUSY_S = 1.0   # painel conectado: teto de latência do status
+RECONCILE_IDLE_S = 5.0   # sem painel: só manter o cache morno
+
 clients: set[asyncio.StreamWriter] = set()
 known_panes: set[str] = set()
 last_status: dict[str, str] = {}
+last_snapshot = ""       # último {"type":"agents"} serializado que foi ao ar
 _req_id = 0
 
 
@@ -137,14 +151,18 @@ def detect_options(text: str) -> list[str]:
     return TOOL_OPTIONS
 
 
-async def broadcast(msg: dict) -> None:
-    data = (json.dumps(msg, separators=(",", ":")) + "\n").encode()
+async def broadcast_line(line: str) -> None:
+    data = (line + "\n").encode()
     for w in list(clients):
         try:
             w.write(data)
             await w.drain()
         except (ConnectionResetError, BrokenPipeError):
             clients.discard(w)
+
+
+async def broadcast(msg: dict) -> None:
+    await broadcast_line(json.dumps(msg, separators=(",", ":")))
 
 
 async def read_pane(pane_id: str, lines: int = 40) -> str:
@@ -155,11 +173,18 @@ async def read_pane(pane_id: str, lines: int = 40) -> str:
     return clean_output(result.get("read", {}).get("text", ""))
 
 
-async def push_agents() -> list[dict]:
-    """Envia o estado atual de todos os agentes e avisa sobre quem bloqueou."""
+async def push_agents() -> set[str] | None:
+    """Reconcilia com o Herdr; envia aos painéis só o que de fato mudou.
+
+    Retorna os pane_ids de TODOS os panes (com e sem agente) para o event_loop
+    saber quando reassinar, ou None se o Herdr não respondeu — que não é motivo
+    para reassinar.
+    """
+    global last_snapshot
     result = await herdr_request("pane.list")
     if not result:
-        return []
+        return None
+    panes = result.get("panes", [])
     agents = [
         {
             "pane_id": p["pane_id"],
@@ -168,11 +193,14 @@ async def push_agents() -> list[dict]:
             "project": os.path.basename(p.get("cwd", "")),
             "workspace_id": p.get("workspace_id", ""),
         }
-        for p in result.get("panes", []) if p.get("agent")
+        for p in panes if p.get("agent")
     ]
     known_panes.clear()
     known_panes.update(a["pane_id"] for a in agents)
-    await broadcast({"type": "agents", "agents": agents})
+    snapshot = json.dumps({"type": "agents", "agents": agents}, separators=(",", ":"))
+    if snapshot != last_snapshot:
+        last_snapshot = snapshot
+        await broadcast_line(snapshot)
 
     for a in agents:
         pid, status = a["pane_id"], a["status"]
@@ -182,11 +210,18 @@ async def push_agents() -> list[dict]:
                              "project": a["project"], "prompt": content[:500],
                              "options": detect_options(content)})
         last_status[pid] = status
-    return agents
+    return {p["pane_id"] for p in panes}
 
 
 async def event_loop() -> None:
-    """Assina os eventos do Herdr e reemite o estado quando algo muda."""
+    """Mantém os painéis em dia combinando eventos e reconciliação.
+
+    Os eventos genéricos e o pane.agent_status_changed (assinado por pane, o
+    único jeito que a API aceita) disparam envio imediato; o timeout do
+    readline faz o resto — fecha rajadas (DEBOUNCE_S) e, no silêncio, vira a
+    reconciliação que garante o teto de latência do status. Quando o conjunto
+    de panes muda, a conexão é refeita para reassinar os novos.
+    """
     while True:
         try:
             reader, writer = await asyncio.open_unix_connection(SOCK)
@@ -194,31 +229,69 @@ async def event_loop() -> None:
             log.warning("Herdr indisponível, tentando em 5s")
             await asyncio.sleep(5)
             continue
-        subs = [{"type": t} for t in ("pane.updated", "pane.created", "pane.closed",
-                                      "pane.agent_detected", "pane.focused", "pane.exited")]
+
+        subscribed = await push_agents()   # estado inicial + panes a assinar
+        if subscribed is None:
+            writer.close()
+            await asyncio.sleep(2)
+            continue
+        subs = [{"type": t} for t in GENERIC_EVENTS]
+        subs += [{"type": "pane.agent_status_changed", "pane_id": pid}
+                 for pid in sorted(subscribed)]
         writer.write((json.dumps({"id": "sub", "method": "events.subscribe",
                                   "params": {"subscriptions": subs}}) + "\n").encode())
         await writer.drain()
-        log.info("assinado aos eventos do Herdr")
-        await push_agents()
+        resubscribe = False
+        pending_since = None
+        got_response = False
         try:
             while True:
-                line = await reader.readline()
+                if pending_since:
+                    timeout = DEBOUNCE_S
+                else:
+                    timeout = RECONCILE_BUSY_S if clients else RECONCILE_IDLE_S
+                try:
+                    line = await asyncio.wait_for(reader.readline(), timeout)
+                except asyncio.TimeoutError:
+                    pending_since = None
+                    ids = await push_agents()
+                    if ids is not None and ids != subscribed:
+                        resubscribe = True
+                        break
+                    continue
                 if not line:
                     break
-                # Vários eventos chegam em rajada; um pequeno atraso agrupa a
-                # rajada inteira num único envio ao painel.
-                await asyncio.sleep(0.3)
-                while not reader.at_eof():
-                    try:
-                        await asyncio.wait_for(reader.readline(), timeout=0.05)
-                    except asyncio.TimeoutError:
+                try:
+                    msg = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not got_response:   # 1ª linha é a resposta do subscribe
+                    got_response = True
+                    if "error" in msg:
+                        log.warning("subscribe recusado: %s",
+                                    msg["error"].get("message"))
+                    else:
+                        log.info("assinado: %d genéricos + %d panes",
+                                 len(GENERIC_EVENTS), len(subscribed))
+                    continue
+                ev = msg.get("event", "")
+                now = time.monotonic()
+                if (ev == "pane_agent_status_changed" or
+                        (pending_since and now - pending_since > BURST_CAP_S)):
+                    pending_since = None
+                    ids = await push_agents()
+                    if ids is not None and ids != subscribed:
+                        resubscribe = True
                         break
-                await push_agents()
+                elif pending_since is None:
+                    pending_since = now
         except (ConnectionResetError, BrokenPipeError):
             pass
         finally:
             writer.close()
+        if resubscribe:
+            log.info("conjunto de panes mudou, reassinando")
+            continue
         log.warning("conexão de eventos caiu, reassinando em 2s")
         await asyncio.sleep(2)
 
@@ -298,7 +371,10 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     log.info("painel conectado: %s", peer)
     clients.add(writer)
     try:
-        await push_agents()  # estado inicial, sem esperar o próximo evento
+        await push_agents()      # atualiza o cache (e broadcasta se mudou)
+        if last_snapshot:        # entrega direta: o broadcast acima pode ter
+            writer.write((last_snapshot + "\n").encode())  # sido suprimido
+            await writer.drain()
         while True:
             line = await reader.readline()
             if not line:
