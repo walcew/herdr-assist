@@ -6,6 +6,7 @@
 
 #include <lvgl.h>
 
+#include "avatar.h"
 #include "herdr_model.h"
 #include "herdr_conn.h"
 #include "herdr_ui_settings.h"
@@ -26,10 +27,6 @@ static lv_obj_t *s_kb_overlay;
 /* --- home --- */
 static lv_obj_t *s_clock;
 static lv_obj_t *s_date;
-static lv_obj_t *s_pet_eye[2];
-static lv_obj_t *s_pet_mouth;
-static lv_obj_t *s_pet_mood;
-static lv_obj_t *s_card_val[4];
 static lv_obj_t *s_host_area;
 
 typedef struct {
@@ -249,85 +246,12 @@ static void toggle_sort_cb(lv_event_t *e)
 
 /* ---------- home ---------- */
 
-static void build_pet(lv_obj_t *parent)
-{
-    lv_obj_t *pet = ui_card(parent, 18);
-    lv_obj_set_size(pet, 62, 62);
-    lv_obj_set_style_border_width(pet, 1, 0);
-    lv_obj_set_style_border_color(pet, UI_BORDER, 0);
-
-    for (int i = 0; i < 2; i++) {
-        s_pet_eye[i] = lv_obj_create(pet);
-        lv_obj_set_size(s_pet_eye[i], 7, 11);
-        lv_obj_set_style_radius(s_pet_eye[i], 4, 0);
-        lv_obj_set_style_bg_color(s_pet_eye[i], UI_TEXT, 0);
-        lv_obj_set_style_border_width(s_pet_eye[i], 0, 0);
-        lv_obj_align(s_pet_eye[i], LV_ALIGN_TOP_MID, i == 0 ? -9 : 9, 19);
-        lv_obj_clear_flag(s_pet_eye[i], LV_OBJ_FLAG_SCROLLABLE);
-    }
-
-    s_pet_mouth = lv_obj_create(pet);
-    lv_obj_set_size(s_pet_mouth, 12, 3);
-    lv_obj_set_style_radius(s_pet_mouth, 2, 0);
-    lv_obj_set_style_bg_color(s_pet_mouth, UI_MUTED, 0);
-    lv_obj_set_style_border_width(s_pet_mouth, 0, 0);
-    lv_obj_align(s_pet_mouth, LV_ALIGN_TOP_MID, 0, 37);
-    lv_obj_clear_flag(s_pet_mouth, LV_OBJ_FLAG_SCROLLABLE);
-
-    s_pet_mood = lv_obj_create(pet);
-    lv_obj_set_size(s_pet_mood, 11, 11);
-    lv_obj_set_style_radius(s_pet_mood, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_pet_mood, UI_IDLE, 0);
-    lv_obj_set_style_border_width(s_pet_mood, 2, 0);
-    lv_obj_set_style_border_color(s_pet_mood, UI_BG, 0);
-    lv_obj_align(s_pet_mood, LV_ALIGN_TOP_RIGHT, 0, 0);
-    lv_obj_clear_flag(s_pet_mood, LV_OBJ_FLAG_SCROLLABLE);
-}
-
-static void build_summary_cards(lv_obj_t *parent)
-{
-    static const char *labels[4] = { "Ativas", "Em andamento", "Ociosas", "Bloqueadas" };
-
-    lv_obj_t *grid = ui_plain(parent);
-    lv_obj_set_size(grid, LV_PCT(100), 114);
-    lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
-    lv_obj_set_style_pad_row(grid, 6, 0);
-    lv_obj_set_style_pad_column(grid, 6, 0);
-
-    for (int i = 0; i < 4; i++) {
-        lv_obj_t *card = ui_card(grid, 8);
-        lv_obj_set_size(card, 145, 54);
-        lv_obj_set_style_pad_left(card, 12, 0);
-        lv_obj_set_style_pad_top(card, 8, 0);
-
-        s_card_val[i] = lv_label_create(card);
-        lv_label_set_text(s_card_val[i], "0");
-        lv_obj_set_style_text_font(s_card_val[i], &lv_font_ui_20, 0);
-        lv_obj_set_style_text_color(s_card_val[i], UI_TEXT, 0);
-        lv_obj_align(s_card_val[i], LV_ALIGN_TOP_LEFT, 0, 0);
-
-        lv_obj_t *dot = lv_obj_create(card);
-        lv_obj_set_size(dot, 7, 7);
-        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(dot, 0, 0);
-        lv_obj_set_style_bg_color(dot, i == 1 ? UI_WORKING : i == 2 ? UI_IDLE :
-                                       i == 3 ? UI_BLOCKED : UI_TEXT, 0);
-        lv_obj_align(dot, LV_ALIGN_TOP_LEFT, 0, 28);
-
-        lv_obj_t *key = lv_label_create(card);
-        lv_label_set_text(key, labels[i]);
-        lv_obj_set_style_text_font(key, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(key, UI_MUTED, 0);
-        lv_obj_align(key, LV_ALIGN_TOP_LEFT, 12, 25);
-    }
-}
-
 static void build_host_cards(lv_obj_t *parent)
 {
     const panel_cfg_t *cfg = panel_cfg_get();
 
     s_host_area = ui_plain(parent);
-    lv_obj_set_size(s_host_area, LV_PCT(100), 198);
+    lv_obj_set_size(s_host_area, LV_PCT(100), 152);
     lv_obj_set_flex_flow(s_host_area, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_host_area, 6, 0);
     lv_obj_add_flag(s_host_area, LV_OBJ_FLAG_SCROLLABLE);
@@ -402,12 +326,10 @@ static void build_home(void)
     lv_obj_set_style_text_color(s_date, UI_MUTED, 0);
     lv_obj_align(s_date, LV_ALIGN_LEFT_MID, 2, 20);
 
-    lv_obj_t *pet_slot = ui_plain(hero);
-    lv_obj_set_size(pet_slot, 62, 62);
-    lv_obj_align(pet_slot, LV_ALIGN_RIGHT_MID, 0, 0);
-    build_pet(pet_slot);
+    lv_obj_t *avatar_slot = ui_plain(s_home);
+    lv_obj_set_size(avatar_slot, AVATAR_SLOT_W, AVATAR_SLOT_H);
+    avatar_create(avatar_slot);
 
-    build_summary_cards(s_home);
     build_host_cards(s_home);
     ui_dock(s_home, UI_TAB_HOME, dock_cb);
 }
@@ -437,33 +359,28 @@ static void refresh_clock(void)
 
 static void refresh_home(void)
 {
-    int total = s_ui_agent_count;
     int working = 0;
-    int idle = 0;
     int blocked = 0;
     for (int i = 0; i < s_ui_agent_count; i++) {
         switch (status_rank(s_ui_agents[i].status)) {
         case 0: blocked++; break;
         case 1: working++; break;
-        case 2: idle++;    break;
         default: break;
         }
     }
-    lv_label_set_text_fmt(s_card_val[0], "%d", total);
-    lv_label_set_text_fmt(s_card_val[1], "%d", working);
-    lv_label_set_text_fmt(s_card_val[2], "%d", idle);
-    lv_label_set_text_fmt(s_card_val[3], "%d", blocked);
 
-    /* humor do mascote: o pior estado manda */
-    lv_color_t mood = blocked ? UI_BLOCKED : working ? UI_WORKING : UI_IDLE;
-    lv_obj_set_style_bg_color(s_pet_mood, mood, 0);
-    lv_coord_t eye_h = blocked ? 7 : 11;                    /* apertados = preocupado */
-    lv_coord_t mouth_w = blocked ? 8 : working ? 10 : 14;   /* larga = tudo bem */
-    for (int i = 0; i < 2; i++) {
-        lv_obj_set_height(s_pet_eye[i], eye_h);
-        lv_obj_align(s_pet_eye[i], LV_ALIGN_TOP_MID, i == 0 ? -9 : 9, blocked ? 21 : 19);
+    /* estado do avatar: sem host online = desconectado; senão o pior manda */
+    const panel_cfg_t *cfg = panel_cfg_get();
+    bool online = false;
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        if (cfg->hosts[h].enabled && herdr_model_get_conn(h) == HERDR_CONN_ONLINE) {
+            online = true;
+            break;
+        }
     }
-    lv_obj_set_width(s_pet_mouth, mouth_w);
+    avatar_set_state(!online ? AVATAR_ST_DISCONNECTED :
+                     blocked ? AVATAR_ST_BLOCKED :
+                     working ? AVATAR_ST_WORKING : AVATAR_ST_IDLE);
 
     for (int w = 0; w < s_hw_count; w++) {
         host_widget_t *hw = &s_hw[w];
