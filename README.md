@@ -97,9 +97,22 @@ pareando com o painel certo, e não com outro dispositivo que esteja anunciando.
 
 ### Abrindo o painel de administração
 
-O Herdr 0.8.0 **não lista ações de plugin em menu nenhum** — os itens do menu de contexto
-são fixos, e o campo `contexts` do manifest só declara em que contextos a ação é válida.
-As vias de uso são o keybinding e a CLI, então vale ligar o atalho no `config.toml`:
+Pela linha de comando, de dentro de qualquer pane do Herdr:
+
+```bash
+herdr plugin pane open --plugin herdr-assist --entrypoint admin   # abre
+herdr plugin pane close --plugin herdr-assist --entrypoint admin  # ou tecle "q"
+```
+
+A tela abre em overlay sobre o pane ativo. Dentro dela: `p` pareia um painel, `r` gira o
+token, `x` reinicia a ponte, `q` fecha.
+
+> Por SSH o `herdr` pode não estar no PATH (uma sessão não-interativa não carrega o
+> ambiente do Homebrew): use o caminho completo, normalmente `/opt/homebrew/bin/herdr`.
+
+Vale ligar um atalho, porque o Herdr 0.8.0 **não lista ações de plugin em menu nenhum** —
+os itens do menu de contexto são fixos, e o campo `contexts` do manifest só declara em que
+contextos a ação é válida. Keybinding e CLI são as vias de uso:
 
 ```toml
 [[keys.command]]
@@ -108,15 +121,10 @@ type = "plugin_action"
 command = "herdr-assist.admin"
 ```
 
-`herdr config check` valida e `herdr server reload-config` aplica sem reiniciar. Sem
-atalho, o equivalente é:
+`herdr config check` valida e `herdr server reload-config` aplica sem reiniciar.
 
-```bash
-herdr plugin pane open --plugin herdr-assist --entrypoint admin
-```
-
-A mesma tela de administração mostra o estado da ponte, o token e os painéis conectados,
-e permite girar o token (`r`) ou reiniciar a ponte (`x`). Pela CLI, o token também sai em:
+A mesma tela de administração mostra o estado da ponte, o token e os painéis conectados.
+Pela CLI, o token também sai em:
 
 ```bash
 cat "$(herdr plugin config-dir herdr-assist)/token"
