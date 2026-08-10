@@ -1,0 +1,138 @@
+#include "ui_theme.h"
+
+#include <string.h>
+
+void ui_theme_init(void)
+{
+    lv_disp_t *disp = lv_disp_get_default();
+    /* verde como cor primária deixa switch/checkbox já na cor do design */
+    lv_theme_t *th = lv_theme_default_init(disp, UI_IDLE, UI_MUTED, true, &lv_font_ui_14);
+    lv_disp_set_theme(disp, th);
+    lv_obj_set_style_bg_color(lv_scr_act(), UI_BG, 0);
+}
+
+lv_obj_t *ui_plain(lv_obj_t *parent)
+{
+    lv_obj_t *o = lv_obj_create(parent);
+    lv_obj_set_style_bg_opa(o, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(o, 0, 0);
+    lv_obj_set_style_radius(o, 0, 0);
+    lv_obj_set_style_pad_all(o, 0, 0);
+    lv_obj_set_style_shadow_width(o, 0, 0);
+    lv_obj_clear_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+    return o;
+}
+
+lv_obj_t *ui_screen(void)
+{
+    lv_obj_t *s = ui_plain(lv_scr_act());
+    lv_obj_set_size(s, LV_HOR_RES, LV_VER_RES);
+    lv_obj_align(s, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s, UI_BG, 0);
+    lv_obj_add_flag(s, LV_OBJ_FLAG_HIDDEN);
+    return s;
+}
+
+lv_obj_t *ui_card(lv_obj_t *parent, lv_coord_t radius)
+{
+    lv_obj_t *c = lv_obj_create(parent);
+    lv_obj_set_style_bg_color(c, UI_PANEL, 0);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_radius(c, radius, 0);
+    lv_obj_set_style_shadow_width(c, 0, 0);
+    lv_obj_set_style_pad_all(c, 0, 0);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    return c;
+}
+
+lv_obj_t *ui_icon_btn(lv_obj_t *parent, const char *symbol, lv_event_cb_t cb, void *user_data)
+{
+    lv_obj_t *b = lv_btn_create(parent);
+    lv_obj_set_size(b, UI_ICON_BTN, UI_ICON_BTN);
+    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(b, UI_PANEL, 0);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, UI_BORDER, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    if (cb) {
+        lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, user_data);
+    }
+    lv_obj_t *l = lv_label_create(b);
+    lv_label_set_text(l, symbol);
+    lv_obj_set_style_text_font(l, &lv_font_ui_16, 0);
+    lv_obj_set_style_text_color(l, UI_TEXT, 0);
+    lv_obj_center(l);
+    return b;
+}
+
+lv_obj_t *ui_topbar(lv_obj_t *parent, const char *title, lv_obj_t **out_title)
+{
+    lv_obj_t *bar = ui_plain(parent);
+    lv_obj_set_size(bar, LV_HOR_RES, UI_TOPBAR_H);
+    lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(bar, 12, 0);
+    lv_obj_set_style_pad_right(bar, 12, 0);
+    lv_obj_set_style_pad_column(bar, 10, 0);
+
+    if (title) {
+        lv_obj_t *t = lv_label_create(bar);
+        lv_label_set_text(t, title);
+        lv_obj_set_style_text_font(t, &lv_font_ui_16, 0);
+        lv_obj_set_style_text_color(t, UI_TEXT, 0);
+        lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+        lv_obj_set_flex_grow(t, 1);
+        if (out_title) {
+            *out_title = t;
+        }
+    }
+    return bar;
+}
+
+lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
+{
+    static const char *icons[] = { LV_SYMBOL_HOME, LV_SYMBOL_LIST, LV_SYMBOL_SETTINGS };
+
+    lv_obj_t *dock = lv_obj_create(parent);
+    lv_obj_set_size(dock, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(dock, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_set_style_bg_color(dock, UI_PANEL, 0);
+    lv_obj_set_style_border_width(dock, 1, 0);
+    lv_obj_set_style_border_color(dock, UI_BORDER, 0);
+    lv_obj_set_style_radius(dock, 22, 0);
+    lv_obj_set_style_pad_all(dock, 5, 0);
+    lv_obj_set_style_pad_column(dock, 4, 0);
+    lv_obj_set_style_shadow_width(dock, 24, 0);
+    lv_obj_set_style_shadow_color(dock, lv_color_black(), 0);
+    lv_obj_set_style_shadow_ofs_y(dock, 10, 0);
+    lv_obj_set_flex_flow(dock, LV_FLEX_FLOW_ROW);
+    lv_obj_clear_flag(dock, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (int i = 0; i < 3; i++) {
+        bool on = (i == (int)active);
+        lv_obj_t *item = lv_btn_create(dock);
+        lv_obj_set_size(item, 62, 38);
+        lv_obj_set_style_radius(item, 17, 0);
+        lv_obj_set_style_shadow_width(item, 0, 0);
+        lv_obj_set_style_bg_color(item, on ? UI_TEXT : UI_PANEL, 0);
+        lv_obj_set_style_bg_opa(item, on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_add_event_cb(item, cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+
+        lv_obj_t *l = lv_label_create(item);
+        lv_label_set_text(l, icons[i]);
+        lv_obj_set_style_text_font(l, &lv_font_ui_16, 0);
+        lv_obj_set_style_text_color(l, on ? UI_BG : UI_MUTED, 0);
+        lv_obj_center(l);
+    }
+    return dock;
+}
+
+lv_color_t ui_status_color(const char *status)
+{
+    if (strcmp(status, "blocked") == 0) return UI_BLOCKED;
+    if (strcmp(status, "working") == 0) return UI_WORKING;
+    if (strcmp(status, "idle") == 0)    return UI_IDLE;
+    return UI_MUTED;
+}

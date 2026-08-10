@@ -10,18 +10,10 @@
 
 #include "net.h"
 #include "panel_cfg.h"
+#include "ui_theme.h"
 
-/* Mesma paleta da herdr_ui.c */
-#define COL_BG        lv_color_hex(0x14161a)
-#define COL_PANEL     lv_color_hex(0x1e2127)
-#define COL_TEXT      lv_color_hex(0xe8e8e8)
-#define COL_MUTED     lv_color_hex(0x8a8f98)
-#define COL_OK        lv_color_hex(0x4caf50)
-#define COL_WARN      lv_color_hex(0xffb300)
-#define COL_DANGER    lv_color_hex(0xef5350)
-
-#define HEADER_H   36
 #define MAX_APS    12
+#define KB_H       (LV_VER_RES / 2)
 
 typedef enum {
     VIEW_MAIN,
@@ -31,9 +23,9 @@ typedef enum {
 } view_t;
 
 static lv_obj_t *s_panel;
-static lv_obj_t *s_title;
-static lv_obj_t *s_btn_save;
+static lv_obj_t *s_bar;
 static lv_obj_t *s_content;
+static lv_obj_t *s_dock;
 static lv_obj_t *s_kb;
 static lv_obj_t *s_ta_pass;
 static lv_obj_t *s_ta_name;
@@ -41,7 +33,7 @@ static lv_obj_t *s_ta_host;
 static lv_obj_t *s_ta_port;
 static lv_obj_t *s_ta_token;
 
-static panel_cfg_t s_edit;          /* cópia em edição; vale ao salvar */
+static panel_cfg_t s_edit;          /* cópia em edição; só vale ao salvar */
 static view_t s_view;
 static int s_edit_host;             /* slot em edição na VIEW_HOST */
 static char s_sel_ssid[CFG_SSID_LEN];
@@ -53,73 +45,34 @@ static void show_scan(void);
 static void show_pass(const char *ssid);
 static void show_host(int idx);
 
-/* ---------- helpers ---------- */
+/* ---------- teclado ---------- */
+
+static void set_content_height(lv_coord_t h)
+{
+    lv_obj_set_height(s_content, h);
+}
 
 static void hide_kb(void)
 {
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    set_content_height(LV_VER_RES - UI_TOPBAR_H);
 }
 
-static lv_obj_t *make_btn(lv_obj_t *parent, const char *text, lv_event_cb_t cb,
-                          void *user_data, lv_color_t bg)
+static void show_kb(lv_obj_t *ta, lv_keyboard_mode_t mode)
 {
-    lv_obj_t *btn = lv_btn_create(parent);
-    lv_obj_set_style_bg_color(btn, bg, 0);
-    lv_obj_add_event_cb(btn, cb, LV_EVENT_CLICKED, user_data);
-    lv_obj_t *l = lv_label_create(btn);
-    lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-    lv_obj_center(l);
-    return btn;
+    lv_keyboard_set_textarea(s_kb, ta);
+    lv_keyboard_set_mode(s_kb, mode);
+    lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_kb);
+    /* encolhe a área útil até o topo do teclado e traz o campo para ela */
+    set_content_height(LV_VER_RES - KB_H - UI_TOPBAR_H);
+    lv_obj_scroll_to_view(ta, LV_ANIM_OFF);
 }
-
-static lv_obj_t *make_section_label(const char *text)
-{
-    lv_obj_t *l = lv_label_create(s_content);
-    lv_label_set_text(l, text);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(l, COL_MUTED, 0);
-    return l;
-}
-
-static lv_obj_t *make_ta(lv_obj_t *parent, const char *label, const char *value,
-                         const char *placeholder)
-{
-    lv_obj_t *row = lv_obj_create(parent);
-    lv_obj_set_size(row, LV_PCT(100), 44);
-    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(row, 0, 0);
-    lv_obj_set_style_pad_all(row, 0, 0);
-    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *l = lv_label_create(row);
-    lv_label_set_text(l, label);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(l, COL_MUTED, 0);
-    lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_set_width(l, 86);
-
-    lv_obj_t *ta = lv_textarea_create(row);
-    lv_textarea_set_one_line(ta, true);
-    lv_textarea_set_text(ta, value);
-    lv_textarea_set_placeholder_text(ta, placeholder);
-    lv_obj_set_style_text_font(ta, &lv_font_montserrat_14, 0);
-    /* largura do conteudo (tela - padding) menos o rotulo de 86px */
-    lv_obj_set_size(ta, LV_HOR_RES - 16 - 90, 40);
-    lv_obj_align(ta, LV_ALIGN_RIGHT_MID, 0, 0);
-    return ta;
-}
-
-/* ---------- teclado ---------- */
 
 static void ta_focus_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
-    lv_keyboard_set_textarea(s_kb, ta);
-    lv_keyboard_set_mode(s_kb, ta == s_ta_port
-                         ? LV_KEYBOARD_MODE_NUMBER : LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_kb);
+    show_kb(ta, ta == s_ta_port ? LV_KEYBOARD_MODE_NUMBER : LV_KEYBOARD_MODE_TEXT_LOWER);
 }
 
 static void kb_cb(lv_event_t *e)
@@ -137,34 +90,115 @@ static void kb_cb(lv_event_t *e)
     hide_kb();                          /* nas demais telas só recolhe */
 }
 
+/* ---------- peças ---------- */
+
+static lv_obj_t *make_row(lv_event_cb_t cb, void *user_data, lv_coord_t h)
+{
+    lv_obj_t *row = lv_btn_create(s_content);
+    lv_obj_set_size(row, LV_PCT(100), h);
+    lv_obj_set_style_bg_color(row, UI_PANEL, 0);
+    lv_obj_set_style_radius(row, 6, 0);
+    lv_obj_set_style_shadow_width(row, 0, 0);
+    lv_obj_set_style_pad_left(row, 12, 0);
+    lv_obj_set_style_pad_right(row, 12, 0);
+    if (cb) {
+        lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, user_data);
+    }
+    return row;
+}
+
+static void make_section_label(const char *text)
+{
+    lv_obj_t *l = lv_label_create(s_content);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(l, UI_MUTED, 0);
+}
+
+static lv_obj_t *make_field(const char *label, const char *value, const char *placeholder)
+{
+    lv_obj_t *row = ui_plain(s_content);
+    lv_obj_set_size(row, LV_PCT(100), 44);
+
+    lv_obj_t *l = lv_label_create(row);
+    lv_label_set_text(l, label);
+    lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(l, UI_MUTED, 0);
+    lv_obj_set_width(l, 86);
+    lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t *ta = lv_textarea_create(row);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_text(ta, value);
+    lv_textarea_set_placeholder_text(ta, placeholder);
+    lv_obj_set_style_text_font(ta, &lv_font_ui_14, 0);
+    lv_obj_set_style_bg_color(ta, UI_PANEL, 0);
+    lv_obj_set_style_border_color(ta, UI_SWITCH_OFF, 0);
+    lv_obj_set_style_border_width(ta, 1, 0);
+    lv_obj_set_style_radius(ta, 6, 0);
+    /* largura do conteúdo (tela - padding) menos o rótulo de 86px */
+    lv_obj_set_size(ta, LV_HOR_RES - 16 - 90, 40);
+    lv_obj_align(ta, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_add_event_cb(ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
+    return ta;
+}
+
+/* Reconstrói a topbar da view atual. back/save = NULL quando não se aplicam. */
+static void build_bar(const char *title, lv_event_cb_t back, lv_event_cb_t save)
+{
+    lv_obj_clean(s_bar);
+    if (back) {
+        ui_icon_btn(s_bar, LV_SYMBOL_LEFT, back, NULL);
+    }
+    lv_obj_t *t = lv_label_create(s_bar);
+    lv_label_set_text(t, title);
+    lv_obj_set_style_text_font(t, &lv_font_ui_16, 0);
+    lv_obj_set_style_text_color(t, UI_TEXT, 0);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+    lv_obj_set_flex_grow(t, 1);
+    if (save) {
+        lv_obj_t *b = ui_icon_btn(s_bar, LV_SYMBOL_SAVE, save, NULL);
+        lv_obj_set_style_bg_color(b, UI_IDLE, 0);
+        lv_obj_set_style_border_color(b, UI_IDLE, 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(b, 0), UI_TERM_BG, 0);
+    }
+}
+
 /* ---------- view: senha do Wi-Fi ---------- */
+
+static void back_to_scan_cb(lv_event_t *e)
+{
+    (void)e;
+    hide_kb();
+    show_scan();
+}
 
 static void show_pass(const char *ssid)
 {
     s_view = VIEW_PASS;
     strlcpy(s_sel_ssid, ssid, CFG_SSID_LEN);
-    lv_obj_add_flag(s_btn_save, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    build_bar("Senha", back_to_scan_cb, NULL);
     lv_obj_clean(s_content);
 
     lv_obj_t *l = lv_label_create(s_content);
-    lv_label_set_text_fmt(l, "rede: %s", ssid);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(l, COL_TEXT, 0);
+    lv_label_set_text_fmt(l, "Rede: %s", ssid);
+    lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(l, UI_TEXT, 0);
 
     s_ta_pass = lv_textarea_create(s_content);
     lv_textarea_set_one_line(s_ta_pass, true);
     lv_textarea_set_password_mode(s_ta_pass, true);
-    lv_textarea_set_placeholder_text(s_ta_pass, "senha (vazio se aberta)");
-    lv_obj_set_style_text_font(s_ta_pass, &lv_font_montserrat_14, 0);
+    lv_textarea_set_placeholder_text(s_ta_pass, "Senha (vazio se aberta)");
+    lv_obj_set_style_text_font(s_ta_pass, &lv_font_ui_14, 0);
+    lv_obj_set_style_bg_color(s_ta_pass, UI_PANEL, 0);
+    lv_obj_set_style_border_color(s_ta_pass, UI_SWITCH_OFF, 0);
     lv_obj_set_width(s_ta_pass, LV_PCT(100));
 
-    lv_keyboard_set_textarea(s_kb, s_ta_pass);
-    lv_keyboard_set_mode(s_kb, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_kb);
+    show_kb(s_ta_pass, LV_KEYBOARD_MODE_TEXT_LOWER);
 }
 
-/* ---------- view: scan de redes ---------- */
+/* ---------- view: redes Wi-Fi ---------- */
 
 static void ap_clicked_cb(lv_event_t *e)
 {
@@ -180,10 +214,17 @@ static void scan_retry_cb(lv_event_t *e)
     show_scan();
 }
 
+static void back_to_main_cb(lv_event_t *e)
+{
+    (void)e;
+    hide_kb();
+    show_main();
+}
+
 static void scan_timer_cb(lv_timer_t *t)
 {
     (void)t;
-    /* bloqueia a task da LVGL ~2s; o aviso "buscando" já está na tela */
+    /* bloqueia a task da LVGL ~2s; o aviso "Buscando" já está na tela */
     s_ap_count = net_wifi_scan(s_aps, MAX_APS);
     if (s_view != VIEW_SCAN) {
         return;                         /* usuário saiu da tela durante o scan */
@@ -191,33 +232,34 @@ static void scan_timer_cb(lv_timer_t *t)
     lv_obj_clean(s_content);
     if (s_ap_count <= 0) {
         lv_obj_t *l = lv_label_create(s_content);
-        lv_label_set_text(l, s_ap_count == 0 ? "nenhuma rede encontrada"
-                                             : "falha ao buscar redes");
-        lv_obj_set_style_text_color(l, COL_MUTED, 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-        lv_obj_t *btn = make_btn(s_content, "tentar de novo", scan_retry_cb, NULL, COL_PANEL);
-        lv_obj_set_size(btn, LV_PCT(100), 40);
+        lv_label_set_text(l, s_ap_count == 0 ? "Nenhuma rede encontrada."
+                                             : "Falha ao buscar redes.");
+        lv_obj_set_style_text_color(l, UI_MUTED, 0);
+        lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
+        lv_obj_t *row = make_row(scan_retry_cb, NULL, 40);
+        lv_obj_t *rl = lv_label_create(row);
+        lv_label_set_text(rl, "Tentar de novo");
+        lv_obj_set_style_text_font(rl, &lv_font_ui_14, 0);
+        lv_obj_center(rl);
         return;
     }
     for (int i = 0; i < s_ap_count; i++) {
-        lv_obj_t *row = lv_btn_create(s_content);
-        lv_obj_set_size(row, LV_PCT(100), 40);
-        lv_obj_set_style_bg_color(row, COL_PANEL, 0);
-        lv_obj_add_event_cb(row, ap_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        lv_obj_t *row = make_row(ap_clicked_cb, (void *)(intptr_t)i, 40);
 
         lv_obj_t *name = lv_label_create(row);
         lv_label_set_text(name, s_aps[i].ssid);
-        lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(name, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(name, UI_TEXT, 0);
         /* SSID longo não pode invadir o RSSI à direita */
-        lv_obj_set_width(name, LV_HOR_RES - 130);
+        lv_obj_set_width(name, LV_HOR_RES - 150);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
         lv_obj_t *info = lv_label_create(row);
-        lv_label_set_text_fmt(info, "%s%d dBm", s_aps[i].secure ? LV_SYMBOL_EYE_CLOSE "  " : "",
+        lv_label_set_text_fmt(info, "%s%d dBm", s_aps[i].secure ? LV_SYMBOL_WIFI "  " : "",
                               s_aps[i].rssi);
-        lv_obj_set_style_text_font(info, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(info, COL_MUTED, 0);
+        lv_obj_set_style_text_font(info, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(info, UI_MUTED, 0);
         lv_obj_align(info, LV_ALIGN_RIGHT_MID, 0, 0);
     }
 }
@@ -225,21 +267,23 @@ static void scan_timer_cb(lv_timer_t *t)
 static void show_scan(void)
 {
     s_view = VIEW_SCAN;
-    lv_obj_add_flag(s_btn_save, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    build_bar("Redes Wi-Fi", back_to_main_cb, NULL);
     hide_kb();
     lv_obj_clean(s_content);
+
     lv_obj_t *l = lv_label_create(s_content);
-    lv_label_set_text(l, "buscando redes...");
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(l, COL_MUTED, 0);
+    lv_label_set_text(l, "Buscando redes...");
+    lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(l, UI_MUTED, 0);
     /* one-shot: deixa a tela pintar antes do scan bloqueante */
     lv_timer_t *t = lv_timer_create(scan_timer_cb, 60, NULL);
     lv_timer_set_repeat_count(t, 1);
 }
 
-/* ---------- view: editor de host ---------- */
+/* ---------- view: editar host ---------- */
 
-static void host_ok_cb(lv_event_t *e)
+static void host_apply_cb(lv_event_t *e)
 {
     (void)e;
     panel_host_t *h = &s_edit.hosts[s_edit_host];
@@ -265,55 +309,38 @@ static void host_remove_cb(lv_event_t *e)
     show_main();
 }
 
-static void host_cancel_cb(lv_event_t *e)
-{
-    (void)e;
-    hide_kb();
-    show_main();
-}
-
 static void show_host(int idx)
 {
     s_view = VIEW_HOST;
     s_edit_host = idx;
-    lv_obj_add_flag(s_btn_save, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    build_bar("Editar host", back_to_main_cb, host_apply_cb);
     hide_kb();
     lv_obj_clean(s_content);
 
     const panel_host_t *h = &s_edit.hosts[idx];
-    char port[8] = "9375";              /* porta padrao da ponte */
+    char port[8] = "9375";              /* porta padrão da ponte */
     if (h->port) {
         snprintf(port, sizeof(port), "%u", h->port);
     }
 
-    s_ta_name = make_ta(s_content, "nome", h->name, "ex: mac");
-    s_ta_host = make_ta(s_content, "endereco", h->host, "ip ou hostname");
-    s_ta_port = make_ta(s_content, "porta", port, "9375");
-    /* token da ponte deste host (acao show-token do plugin exibe no Herdr) */
-    s_ta_token = make_ta(s_content, "token", h->token, "32 hex da ponte");
-    lv_obj_add_event_cb(s_ta_name, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
-    lv_obj_add_event_cb(s_ta_host, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
-    lv_obj_add_event_cb(s_ta_port, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
-    lv_obj_add_event_cb(s_ta_token, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
+    s_ta_name  = make_field("Nome", h->name, "ex: mac");
+    s_ta_host  = make_field("Endereço", h->host, "IP ou hostname");
+    s_ta_port  = make_field("Porta", port, "9375");
+    /* token da ponte deste host (ação show-token do plugin exibe no Herdr) */
+    s_ta_token = make_field("Token", h->token, "32 hex da ponte");
 
-    lv_obj_t *bar = lv_obj_create(s_content);
-    lv_obj_set_size(bar, LV_PCT(100), 48);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 0, 0);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_style_pad_column(bar, 6, 0);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *ok = make_btn(bar, "ok", host_ok_cb, NULL, COL_OK);
-    lv_obj_set_flex_grow(ok, 2);
-    lv_obj_set_height(ok, 40);
-    lv_obj_t *rm = make_btn(bar, "remover", host_remove_cb, NULL, COL_DANGER);
-    lv_obj_set_flex_grow(rm, 1);
-    lv_obj_set_height(rm, 40);
-    lv_obj_t *ca = make_btn(bar, "cancelar", host_cancel_cb, NULL, COL_PANEL);
-    lv_obj_set_flex_grow(ca, 1);
-    lv_obj_set_height(ca, 40);
+    lv_obj_t *rm = lv_btn_create(s_content);
+    lv_obj_set_size(rm, LV_PCT(100), 40);
+    lv_obj_set_style_bg_color(rm, UI_BLOCKED, 0);
+    lv_obj_set_style_radius(rm, 6, 0);
+    lv_obj_set_style_shadow_width(rm, 0, 0);
+    lv_obj_add_event_cb(rm, host_remove_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *rl = lv_label_create(rm);
+    lv_label_set_text(rl, LV_SYMBOL_TRASH "  Remover");
+    lv_obj_set_style_text_font(rl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(rl, UI_TEXT, 0);
+    lv_obj_center(rl);
 }
 
 /* ---------- view: principal ---------- */
@@ -347,30 +374,42 @@ static void add_host_cb(lv_event_t *e)
     }
 }
 
+static void save_cb(lv_event_t *e)
+{
+    (void)e;
+    panel_cfg_save(&s_edit);
+    lv_obj_clean(s_content);
+    lv_obj_t *l = lv_label_create(s_content);
+    lv_label_set_text(l, "Reiniciando...");
+    lv_obj_set_style_text_font(l, &lv_font_ui_16, 0);
+    lv_obj_set_style_text_color(l, UI_TEXT, 0);
+    /* reinício limpa Wi-Fi e conexões; mais simples e confiável que teardown */
+    esp_restart();
+}
+
 static void show_main(void)
 {
     s_view = VIEW_MAIN;
-    lv_label_set_text(s_title, "configuracoes");
-    lv_obj_clear_flag(s_btn_save, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_dock);
+    build_bar("Configurações", NULL, save_cb);
     hide_kb();
     lv_obj_clean(s_content);
 
-    make_section_label("rede wi-fi");
-    lv_obj_t *wrow = lv_btn_create(s_content);
-    lv_obj_set_size(wrow, LV_PCT(100), 44);
-    lv_obj_set_style_bg_color(wrow, COL_PANEL, 0);
-    lv_obj_add_event_cb(wrow, wifi_change_cb, LV_EVENT_CLICKED, NULL);
+    make_section_label("Rede Wi-Fi");
+    lv_obj_t *wrow = make_row(wifi_change_cb, NULL, 44);
     lv_obj_t *wl = lv_label_create(wrow);
-    lv_label_set_text_fmt(wl, "%s", s_edit.wifi_ssid[0] ? s_edit.wifi_ssid : "nao configurada");
-    lv_obj_set_style_text_font(wl, &lv_font_montserrat_14, 0);
+    lv_label_set_text(wl, s_edit.wifi_ssid[0] ? s_edit.wifi_ssid : "Não configurada");
+    lv_obj_set_style_text_font(wl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(wl, UI_TEXT, 0);
     lv_obj_align(wl, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_t *wc = lv_label_create(wrow);
-    lv_label_set_text(wc, "trocar " LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(wc, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(wc, COL_MUTED, 0);
+    lv_label_set_text(wc, "Trocar " LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(wc, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(wc, UI_MUTED, 0);
     lv_obj_align(wc, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    make_section_label("hosts herdr");
+    make_section_label("Hosts herdr");
     bool has_free = false;
     for (int i = 0; i < CFG_MAX_HOSTS; i++) {
         const panel_host_t *h = &s_edit.hosts[i];
@@ -378,131 +417,78 @@ static void show_main(void)
             has_free = true;
             continue;
         }
-        lv_obj_t *row = lv_btn_create(s_content);
-        lv_obj_set_size(row, LV_PCT(100), 48);
-        lv_obj_set_style_bg_color(row, COL_PANEL, 0);
-        lv_obj_add_event_cb(row, host_row_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        lv_obj_t *row = make_row(host_row_cb, (void *)(intptr_t)i, 48);
 
         lv_obj_t *nm = lv_label_create(row);
-        lv_label_set_text_fmt(nm, "%s", h->name[0] ? h->name : h->host);
-        lv_obj_set_style_text_font(nm, &lv_font_montserrat_14, 0);
+        lv_label_set_text(nm, h->name[0] ? h->name : h->host);
+        lv_obj_set_style_text_font(nm, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(nm, UI_TEXT, 0);
         lv_obj_align(nm, LV_ALIGN_LEFT_MID, 0, -9);
 
         lv_obj_t *ad = lv_label_create(row);
         lv_label_set_text_fmt(ad, "%s:%u", h->host, h->port);
-        lv_obj_set_style_text_font(ad, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(ad, COL_MUTED, 0);
+        lv_obj_set_style_text_font(ad, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(ad, UI_MUTED, 0);
         lv_obj_align(ad, LV_ALIGN_LEFT_MID, 0, 10);
 
         lv_obj_t *sw = lv_switch_create(row);
         lv_obj_set_size(sw, 48, 26);
         lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+        lv_obj_set_style_bg_color(sw, UI_SWITCH_OFF, 0);
         if (h->enabled) {
             lv_obj_add_state(sw, LV_STATE_CHECKED);
         }
         lv_obj_add_event_cb(sw, host_switch_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
     }
     if (has_free) {
-        lv_obj_t *add = make_btn(s_content, LV_SYMBOL_PLUS "  adicionar host",
-                                 add_host_cb, NULL, COL_PANEL);
-        lv_obj_set_size(add, LV_PCT(100), 44);
+        lv_obj_t *add = make_row(add_host_cb, NULL, 44);
+        lv_obj_t *al = lv_label_create(add);
+        lv_label_set_text(al, LV_SYMBOL_PLUS "  Adicionar host");
+        lv_obj_set_style_text_font(al, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(al, UI_TEXT, 0);
+        lv_obj_center(al);
     }
 }
 
-/* ---------- header ---------- */
+/* ---------- init/show ---------- */
 
-static void back_cb(lv_event_t *e)
+void herdr_ui_settings_init(lv_event_cb_t dock_cb)
 {
-    (void)e;
-    if (s_view == VIEW_MAIN) {
-        hide_kb();
-        lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);   /* descarta s_edit */
-    } else {
-        show_main();
-    }
-}
+    s_panel = ui_screen();
 
-static void save_cb(lv_event_t *e)
-{
-    (void)e;
-    panel_cfg_save(&s_edit);
-    lv_obj_clean(s_content);
-    lv_obj_t *l = lv_label_create(s_content);
-    lv_label_set_text(l, "reiniciando...");
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(l, COL_TEXT, 0);
-    /* reinício limpa Wi-Fi e conexões; mais simples e confiável que teardown */
-    esp_restart();
-}
+    s_bar = ui_topbar(s_panel, NULL, NULL);
 
-/* ---------- init/open ---------- */
-
-void herdr_ui_settings_init(void)
-{
-    s_panel = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(s_panel, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_style_bg_color(s_panel, COL_BG, 0);
-    lv_obj_set_style_border_width(s_panel, 0, 0);
-    lv_obj_set_style_radius(s_panel, 0, 0);
-    lv_obj_set_style_pad_all(s_panel, 0, 0);
-    lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *hdr = lv_obj_create(s_panel);
-    lv_obj_set_size(hdr, LV_HOR_RES, HEADER_H);
-    lv_obj_align(hdr, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(hdr, COL_PANEL, 0);
-    lv_obj_set_style_border_width(hdr, 0, 0);
-    lv_obj_set_style_radius(hdr, 0, 0);
-    lv_obj_set_style_pad_all(hdr, 0, 0);
-    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t *back = lv_btn_create(hdr);
-    lv_obj_set_size(back, 56, HEADER_H - 6);
-    lv_obj_align(back, LV_ALIGN_LEFT_MID, 4, 0);
-    lv_obj_set_style_bg_color(back, COL_BG, 0);
-    lv_obj_add_event_cb(back, back_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *bl = lv_label_create(back);
-    lv_label_set_text(bl, LV_SYMBOL_LEFT);
-    lv_obj_center(bl);
-
-    s_title = lv_label_create(hdr);
-    lv_label_set_text(s_title, "configuracoes");
-    lv_obj_set_style_text_font(s_title, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_title, COL_TEXT, 0);
-    lv_obj_align(s_title, LV_ALIGN_LEFT_MID, 72, 0);
-
-    s_btn_save = lv_btn_create(hdr);
-    lv_obj_set_size(s_btn_save, 88, HEADER_H - 6);
-    lv_obj_align(s_btn_save, LV_ALIGN_RIGHT_MID, -4, 0);
-    lv_obj_set_style_bg_color(s_btn_save, COL_OK, 0);
-    lv_obj_add_event_cb(s_btn_save, save_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *sl = lv_label_create(s_btn_save);
-    lv_label_set_text(sl, "salvar");           /* salvar reinicia o painel */
-    lv_obj_set_style_text_font(sl, &lv_font_montserrat_12, 0);
-    lv_obj_center(sl);
-
-    s_content = lv_obj_create(s_panel);
-    lv_obj_set_size(s_content, LV_HOR_RES, LV_VER_RES - HEADER_H);
-    lv_obj_align(s_content, LV_ALIGN_TOP_MID, 0, HEADER_H);
-    lv_obj_set_style_bg_color(s_content, COL_BG, 0);
-    lv_obj_set_style_border_width(s_content, 0, 0);
-    lv_obj_set_style_radius(s_content, 0, 0);
-    lv_obj_set_style_pad_all(s_content, 8, 0);
+    s_content = ui_plain(s_panel);
+    lv_obj_set_size(s_content, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
+    lv_obj_align(s_content, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
+    lv_obj_set_style_pad_left(s_content, UI_PAD, 0);
+    lv_obj_set_style_pad_right(s_content, UI_PAD, 0);
+    lv_obj_set_style_pad_bottom(s_content, UI_DOCK_SPACE, 0);
     lv_obj_set_style_pad_row(s_content, 6, 0);
     lv_obj_set_flex_flow(s_content, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_flag(s_content, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_content, LV_DIR_VER);
+
+    s_dock = ui_dock(s_panel, UI_TAB_SETTINGS, dock_cb);
 
     s_kb = lv_keyboard_create(s_panel);
-    lv_obj_set_size(s_kb, LV_HOR_RES, LV_VER_RES / 2);
+    lv_obj_set_size(s_kb, LV_HOR_RES, KB_H);
+    lv_obj_set_style_text_font(s_kb, &lv_font_ui_14, 0);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_CANCEL, NULL);
 }
 
-void herdr_ui_settings_open(void)
+void herdr_ui_settings_show(void)
 {
     s_edit = *panel_cfg_get();
     show_main();
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_panel);
+}
+
+void herdr_ui_settings_hide(void)
+{
+    hide_kb();
+    lv_obj_add_flag(s_panel, LV_OBJ_FLAG_HIDDEN);
 }

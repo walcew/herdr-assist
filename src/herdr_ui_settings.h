@@ -1,20 +1,26 @@
 /**
  * @file
- * @brief Tela de configurações: rede Wi-Fi e hosts Herdr, com persistência em NVS.
+ * @brief Aba de configurações: rede Wi-Fi e hosts Herdr, com persistência em NVS.
  *
- * Edita uma cópia da config; "salvar" grava na NVS e reinicia o painel.
- * herdr_ui_init() chama o init; a engrenagem (ou o primeiro boot sem config)
- * chama o open. Chamar com o mutex da LVGL tomado.
+ * Edita uma cópia da config; o disquete da topbar grava na NVS e reinicia o
+ * painel. As subtelas (redes, senha, host) têm voltar — que descarta — e o
+ * mesmo disquete, que ali só aplica os campos e volta.
+ * Chamar com o mutex da LVGL tomado.
  */
 
 #pragma once
+
+#include <lvgl.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void herdr_ui_settings_init(void);
-void herdr_ui_settings_open(void);
+/** Monta a tela. dock_cb recebe a ui_tab_t clicada, como nas outras abas. */
+void herdr_ui_settings_init(lv_event_cb_t dock_cb);
+
+void herdr_ui_settings_show(void);
+void herdr_ui_settings_hide(void);
 
 #ifdef __cplusplus
 }

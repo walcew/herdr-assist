@@ -2,10 +2,12 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
+#include "esp_sntp.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -15,6 +17,28 @@ static const char *TAG = "net";
 static volatile bool s_up;
 static volatile bool s_scanning;
 static bool s_have_creds;
+static bool s_time_started;
+
+/**
+ * Sobe o SNTP na primeira vez que houver IP.
+ *
+ * O relógio da home é a única coisa que depende disso; sem sincronizar, a UI
+ * mostra "--:--" em vez de uma hora inventada. O fuso vai fixo em UTC-3 (o
+ * Brasil não usa horário de verão desde 2019), no formato POSIX — que é
+ * invertido de propósito: "<-03>3" significa 3 horas a subtrair de UTC.
+ */
+static void time_start(void)
+{
+    if (s_time_started) {
+        return;
+    }
+    s_time_started = true;
+    setenv("TZ", "<-03>3", 1);
+    tzset();
+    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, "pool.ntp.org");
+    esp_sntp_init();
+}
 
 static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -30,6 +54,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
         ip_event_got_ip_t *event = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "IP obtido: " IPSTR, IP2STR(&event->ip_info.ip));
         s_up = true;
+        time_start();
     }
 }
 

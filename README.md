@@ -101,8 +101,9 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 | `src/net.c` | Wi-Fi station com reconexão automática e scan para a tela de config |
 | `src/herdr_conn.c` | Uma conexão TCP por host, parse do protocolo, ping e reconexão |
 | `src/herdr_model.c` | Estado compartilhado entre as tasks de rede e a da UI (mutex + geração) |
-| `src/herdr_ui.c` | UI LVGL: lista de agentes por host, terminal, ações, teclado |
-| `src/herdr_ui_settings.c` | Tela de configurações: scan de Wi-Fi, senha, editor de hosts |
+| `src/ui_theme.c` | Paleta, fontes, topbar e dock compartilhados pelas telas |
+| `src/herdr_ui.c` | UI LVGL: home (relógio, mascote, resumo, mapa de calor), sessões, terminal, ações, teclado |
+| `src/herdr_ui_settings.c` | Aba de configurações: scan de Wi-Fi, senha, editor de hosts |
 | `src/lv_font_terminal_12.c` | Fonte gerada (não editar) — veja `scripts/gen_font.sh` |
 | `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | BSP do fabricante (display, touch, port LVGL) |
 
@@ -124,9 +125,17 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 - **O touch é capacitivo e não precisa de calibração** — o que importa é o remapeamento de
   coordenadas conforme a rotação, feito em `lv_port.c`.
 - **Fontes**: nenhuma fonte que acompanha a LVGL serve aqui — Montserrat e unscii cobrem
-  apenas ASCII 0x20–0x7F, então box-drawing e spinners viram retângulos vazios. Daí a fonte
-  gerada. O `✳` (U+2733) que o Claude usa nos títulos não existe nem na Nerd Font, e é
-  trocado por `*` em `replace_missing_glyphs()`.
+  apenas ASCII 0x20–0x7F, então box-drawing e spinners viram retângulos vazios, e rótulos
+  como "Sessões" e "Endereço" perdem os acentos. São duas famílias geradas: o terminal usa
+  a JetBrainsMono Nerd inteira (`scripts/gen_font.sh`) e a interface usa a Montserrat com o
+  Latin-1 completo, mesclada com a FontAwesome da própria LVGL para os `LV_SYMBOL_*`
+  continuarem valendo (`scripts/gen_font_ui.sh`). O `✳` (U+2733) que o Claude usa nos
+  títulos não existe nem na Nerd Font, e é trocado por `*` em `replace_missing_glyphs()`.
+- **A interface segue o projeto "herdr-assist" no Claude Design** — paleta neutra (cor só
+  em status), topbar sem barra sólida e dock flutuante de três abas. Ao mexer no visual,
+  atualize lá também: `src/ui_theme.h` é a tradução direta daquelas telas.
+- **O relógio da home depende de SNTP** (`net.c`), com fuso fixo em UTC-3. Sem sincronizar,
+  a home mostra `--:--` em vez de uma hora inventada.
 - **Detecção de conexão morta** (`herdr_conn.c`): com push, silêncio é o estado normal, então
   não dá para inferir queda pela ausência de dados. O painel manda `ping` a cada 20 s e
   desiste da conexão após 50 s sem resposta — isso cobre o caso em que o TCP fica aberto mas

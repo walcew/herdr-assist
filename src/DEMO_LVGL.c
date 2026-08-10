@@ -132,7 +132,7 @@ void setup()
     /* primeiro boot: sem rede salva, abre direto as configuracoes */
     ESP_LOGI(TAG, "sem Wi-Fi configurado, abrindo tela de configuracoes");
     bsp_display_lock(0);
-    herdr_ui_settings_open();
+    herdr_ui_show_settings();
     bsp_display_unlock();
   }
 
