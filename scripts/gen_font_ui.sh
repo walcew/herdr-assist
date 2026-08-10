@@ -31,11 +31,11 @@ mont, bold, fa = sys.argv[1], sys.argv[2], sys.argv[3]
 LATIN = ["0x20-0x7E", "0xA0-0xFF"]
 
 # Símbolos usados pela UI e pelos widgets da LVGL (teclado, textarea).
-# Os dois últimos não têm LV_SYMBOL_: são os ícones de agrupar e ordenar da
-# tela de sessões, declarados em ui_theme.h.
+# Os quatro últimos não têm LV_SYMBOL_: são os dois pares de ícones de
+# agrupar e ordenar da tela de sessões, declarados em ui_theme.h.
 SYMBOLS = [0xF00B, 0xF00C, 0xF00D, 0xF013, 0xF015, 0xF053, 0xF054, 0xF067,
            0xF06E, 0xF071, 0xF077, 0xF078, 0xF0C7, 0xF11C, 0xF1EB, 0xF2ED,
-           0xF55A, 0xF8A2, 0xF5FD, 0xF160]
+           0xF55A, 0xF8A2, 0xF5FD, 0xF0C9, 0xF0DC, 0xF160]
 
 # (arquivo, peso, tamanho, ranges do texto, inclui símbolos)
 FONTS = [

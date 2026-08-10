@@ -42,6 +42,8 @@ static int s_hw_count;
 
 /* --- sessões --- */
 static lv_obj_t *s_sess_list;
+static lv_obj_t *s_lbl_group;   /* ícone do botão de agrupamento */
+static lv_obj_t *s_lbl_sort;    /* ícone do botão de ordenação */
 static bool s_group_by_host = true;
 static bool s_sort_priority;
 
@@ -222,10 +224,18 @@ static void blocked_dismiss_cb(lv_event_t *e)
     lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
+/** O ícone de cada botão mostra o modo em vigor, não o que o toque faria. */
+static void update_toolbar_icons(void)
+{
+    lv_label_set_text(s_lbl_group, s_group_by_host ? UI_ICON_GROUPED : UI_ICON_FLAT);
+    lv_label_set_text(s_lbl_sort, s_sort_priority ? UI_ICON_SORT_PRI : UI_ICON_SORT_NAT);
+}
+
 static void toggle_group_cb(lv_event_t *e)
 {
     (void)e;
     s_group_by_host = !s_group_by_host;
+    update_toolbar_icons();
     rebuild_session_rows();
 }
 
@@ -233,6 +243,7 @@ static void toggle_sort_cb(lv_event_t *e)
 {
     (void)e;
     s_sort_priority = !s_sort_priority;
+    update_toolbar_icons();
     rebuild_session_rows();
 }
 
@@ -488,8 +499,9 @@ static void build_sessions(void)
     s_sessions = ui_screen();
 
     lv_obj_t *bar = ui_topbar(s_sessions, "Sessões", NULL);
-    ui_icon_btn(bar, UI_ICON_LAYERS, toggle_group_cb, NULL);
-    ui_icon_btn(bar, UI_ICON_SORT, toggle_sort_cb, NULL);
+    s_lbl_group = lv_obj_get_child(ui_icon_btn(bar, "", toggle_group_cb, NULL), 0);
+    s_lbl_sort = lv_obj_get_child(ui_icon_btn(bar, "", toggle_sort_cb, NULL), 0);
+    update_toolbar_icons();
 
     s_sess_list = ui_plain(s_sessions);
     lv_obj_set_size(s_sess_list, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);

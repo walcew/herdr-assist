@@ -47,9 +47,12 @@ LV_FONT_DECLARE(lv_font_ui_num_20);
 LV_FONT_DECLARE(lv_font_ui_clock_44);
 LV_FONT_DECLARE(lv_font_terminal_12);
 
-/* Ícones fora do conjunto LV_SYMBOL, da mesma FontAwesome (ver gen_font_ui.sh) */
-#define UI_ICON_LAYERS "\xEF\x97\xBD"   /* U+F5FD layer-group */
-#define UI_ICON_SORT   "\xEF\x85\xA0"   /* U+F160 sort-amount-down */
+/* Ícones fora do conjunto LV_SYMBOL, da mesma FontAwesome (ver gen_font_ui.sh).
+   Vêm em pares: o botão troca de ícone para mostrar em que estado está. */
+#define UI_ICON_GROUPED  "\xEF\x97\xBD"   /* U+F5FD layer-group: agrupado por host */
+#define UI_ICON_FLAT     "\xEF\x83\x89"   /* U+F0C9 bars: lista corrida */
+#define UI_ICON_SORT_NAT "\xEF\x83\x9C"   /* U+F0DC sort: ordem natural */
+#define UI_ICON_SORT_PRI "\xEF\x85\xA0"   /* U+F160 sort-amount-down: bloqueadas primeiro */
 
 /* Abas do dock */
 typedef enum {
