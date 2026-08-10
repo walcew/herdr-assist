@@ -207,6 +207,9 @@ static void scan_timer_cb(lv_timer_t *t)
         lv_obj_t *name = lv_label_create(row);
         lv_label_set_text(name, s_aps[i].ssid);
         lv_obj_set_style_text_font(name, &lv_font_montserrat_14, 0);
+        /* SSID longo não pode invadir o RSSI à direita */
+        lv_obj_set_width(name, LV_HOR_RES - 130);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
         lv_obj_t *info = lv_label_create(row);
@@ -465,12 +468,12 @@ void herdr_ui_settings_init(void)
     lv_obj_align(s_title, LV_ALIGN_LEFT_MID, 72, 0);
 
     s_btn_save = lv_btn_create(hdr);
-    lv_obj_set_size(s_btn_save, 150, HEADER_H - 6);
+    lv_obj_set_size(s_btn_save, 88, HEADER_H - 6);
     lv_obj_align(s_btn_save, LV_ALIGN_RIGHT_MID, -4, 0);
     lv_obj_set_style_bg_color(s_btn_save, COL_OK, 0);
     lv_obj_add_event_cb(s_btn_save, save_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *sl = lv_label_create(s_btn_save);
-    lv_label_set_text(sl, "salvar + reiniciar");
+    lv_label_set_text(sl, "salvar");           /* salvar reinicia o painel */
     lv_obj_set_style_text_font(sl, &lv_font_montserrat_12, 0);
     lv_obj_center(sl);
 

@@ -99,7 +99,8 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
   parcial exige também trocar esse RAMWRC por RAMWR — não testado.
 - **Rotação é sempre por software.** O painel ignora MADCTL, então rotação em runtime não
   funciona em nenhuma stack; `LVGL_PORT_ROTATION_DEGREE` em `DEMO_LVGL.c` resolve em tempo
-  de compilação (90° = landscape 480×320).
+  de compilação. O app usa 0° (portrait nativo 320×480), que dispensa a cópia de rotação
+  no flush — se a imagem ficar de cabeça para baixo na sua base, use 180°.
 - **O touch é capacitivo e não precisa de calibração** — o que importa é o remapeamento de
   coordenadas conforme a rotação, feito em `lv_port.c`.
 - **Fontes**: nenhuma fonte que acompanha a LVGL serve aqui — Montserrat e unscii cobrem

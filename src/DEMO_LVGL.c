@@ -32,7 +32,7 @@ static const char *TAG = "DEMO_LVGL";
  *      - 270: 270 degree
  *
  */
-#define LVGL_PORT_ROTATION_DEGREE (90)
+#define LVGL_PORT_ROTATION_DEGREE (0)
 
 
 void setup();

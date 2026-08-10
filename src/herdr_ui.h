@@ -1,6 +1,6 @@
 /**
  * @file
- * @brief UI do herdr-assist (LVGL 8.4, 480x320 landscape).
+ * @brief UI do herdr-assist (LVGL 8.4, 320x480 portrait).
  *
  * Telas: lista de agentes, detalhe com terminal + ações, modal de aprovação,
  * teclado para prompt. Atualiza via lv_timer observando herdr_model_generation().

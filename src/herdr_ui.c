@@ -372,6 +372,9 @@ static void build_detail_panel(void)
     lv_label_set_text(s_detail_title, "");
     lv_obj_set_style_text_font(s_detail_title, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(s_detail_title, COL_TEXT, 0);
+    /* largura fixa com reticências: "host / projeto - agente" não cabe em 320 */
+    lv_obj_set_width(s_detail_title, LV_HOR_RES - 72 - 30);
+    lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_DOT);
     lv_obj_align(s_detail_title, LV_ALIGN_LEFT_MID, 72, 0);
 
     s_detail_dot = lv_obj_create(hdr);
