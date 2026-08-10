@@ -303,14 +303,14 @@ static esp_err_t panel_axs15231b_draw_bitmap(esp_lcd_panel_t *panel, int x_start
         (x_end - 1) & 0xFF,
     }, 4);
 
-    if (0 == axs15231b->flags.use_qspi_interface) {
-        tx_param(axs15231b, io, LCD_CMD_RASET, (uint8_t[]) {
-            (y_start >> 8) & 0xFF,
-            y_start & 0xFF,
-            ((y_end - 1) >> 8) & 0xFF,
-            (y_end - 1) & 0xFF,
-        }, 4);
-    }
+    /* RASET também é necessário em QSPI: sem ele o painel nunca recebe a janela
+       vertical e todo desenho parcial cai na linha errada (esp-bsp#724). */
+    tx_param(axs15231b, io, LCD_CMD_RASET, (uint8_t[]) {
+        (y_start >> 8) & 0xFF,
+        y_start & 0xFF,
+        ((y_end - 1) >> 8) & 0xFF,
+        (y_end - 1) & 0xFF,
+    }, 4);
 
     // transfer frame buffer
     size_t len = (x_end - x_start) * (y_end - y_start) * axs15231b->fb_bits_per_pixel / 8;

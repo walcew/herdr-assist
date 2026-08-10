@@ -4,6 +4,6 @@
 #define WIFI_SSID "minha-rede"
 #define WIFI_PASS "minha-senha"
 
-// Host/porta do relay herdr-remote na LAN (IP do Mac)
-#define RELAY_HOST "192.168.0.10"
-#define RELAY_PORT 8375
+// Host/porta da ponte herdr-assist na LAN (IP do Mac)
+#define BRIDGE_HOST "192.168.0.10"
+#define BRIDGE_PORT 9375

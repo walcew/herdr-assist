@@ -238,7 +238,10 @@ lv_disp_t *lvgl_port_add_disp(const lvgl_port_display_cfg_t *disp_cfg)
 
     disp_ctx->disp_drv.draw_buf = disp_buf;
     disp_ctx->disp_drv.user_data = disp_ctx;
-    /* Force full_fresh */
+    /* Redesenho sempre da tela inteira. Tentar parcial quebra a imagem: além do
+       RASET (já corrigido no driver), o painel recebe RAMWRC — "continua a
+       escrita anterior" — para toda área com y_start != 0, o que só faz sentido
+       em varredura contínua. Ver nota em esp_lcd_axs15231b.c:draw_bitmap. */
     disp_ctx->disp_drv.full_refresh = 1;
 
 #if LVGL_PORT_HANDLE_FLUSH_READY

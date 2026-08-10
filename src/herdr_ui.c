@@ -6,7 +6,11 @@
 #include <lvgl.h>
 
 #include "herdr_model.h"
-#include "herdr_ws.h"
+#include "herdr_conn.h"
+
+/* Fonte monoespaçada gerada da JetBrainsMono Nerd (ver scripts/gen_font.sh):
+   ASCII + box-drawing + braille, os glifos que a saída dos agentes usa. */
+LV_FONT_DECLARE(lv_font_terminal_12);
 
 #define HEADER_H      36
 #define ROW_H         52
@@ -62,7 +66,7 @@ static void open_detail(const herdr_agent_t *agent)
     strlcpy(s_detail_pane, agent->pane_id, HERDR_ID_LEN);
     s_detail_open = true;
     s_poll_tick = DETAIL_POLL_TICKS;  /* força read_pane no próximo tick */
-    lv_label_set_text_fmt(s_detail_title, "%s  ·  %s", agent->project, agent->agent);
+    lv_label_set_text_fmt(s_detail_title, "%s  -  %s", agent->project, agent->agent);
     lv_obj_set_style_bg_color(s_detail_dot, status_color(agent->status), 0);
     lv_label_set_text(s_term_label, "carregando...");
     lv_obj_clear_flag(s_detail_panel, LV_OBJ_FLAG_HIDDEN);
@@ -97,7 +101,7 @@ static void action_key_cb(lv_event_t *e)
 {
     const char *key = lv_event_get_user_data(e);
     if (s_detail_pane[0]) {
-        herdr_ws_send_keys(s_detail_pane, &key, 1);
+        herdr_conn_send_keys(s_detail_pane, &key, 1);
     }
 }
 
@@ -105,7 +109,7 @@ static void action_focus_cb(lv_event_t *e)
 {
     (void)e;
     if (s_detail_pane[0]) {
-        herdr_ws_focus(s_detail_pane);
+        herdr_conn_focus(s_detail_pane);
     }
 }
 
@@ -122,9 +126,9 @@ static void kb_event_cb(lv_event_t *e)
     if (code == LV_EVENT_READY) {          /* checkmark: envia */
         const char *text = lv_textarea_get_text(s_kb_ta);
         if (s_detail_pane[0] && text[0]) {
-            herdr_ws_send_text(s_detail_pane, text);
+            herdr_conn_send_text(s_detail_pane, text);
             static const char *enter = "Enter";
-            herdr_ws_send_keys(s_detail_pane, &enter, 1);
+            herdr_conn_send_keys(s_detail_pane, &enter, 1);
         }
         lv_obj_add_flag(s_kb_overlay, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_CANCEL) {  /* teclado fechado: cancela */
@@ -136,7 +140,7 @@ static void blocked_option_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (s_ui_blocked.active && idx < s_ui_blocked.option_count) {
-        herdr_ws_respond(s_ui_blocked.pane_id, s_ui_blocked.options[idx]);
+        herdr_conn_respond(s_ui_blocked.pane_id, s_ui_blocked.options[idx]);
         herdr_model_clear_blocked(s_ui_blocked.pane_id);
         lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
     }
@@ -205,7 +209,7 @@ static void rebuild_list_rows(void)
     if (s_ui_agent_count == 0) {
         lv_obj_t *empty = lv_label_create(s_list_panel);
         lv_label_set_text(empty, herdr_model_get_conn() == HERDR_CONN_ONLINE
-                          ? "nenhum agente ativo" : "conectando ao relay...");
+                          ? "nenhum agente ativo" : "conectando a ponte...");
         lv_obj_set_style_text_color(empty, COL_MUTED, 0);
         lv_obj_set_style_text_font(empty, &lv_font_montserrat_14, 0);
         return;
@@ -233,7 +237,7 @@ static void rebuild_list_rows(void)
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 30, -8);
 
         lv_obj_t *sub = lv_label_create(row);
-        lv_label_set_text_fmt(sub, "%s · %s", a->agent, a->status);
+        lv_label_set_text_fmt(sub, "%s - %s", a->agent, a->status);
         lv_obj_set_style_text_font(sub, &lv_font_montserrat_12, 0);
         lv_obj_set_style_text_color(sub, COL_MUTED, 0);
         lv_obj_align(sub, LV_ALIGN_LEFT_MID, 30, 12);
@@ -302,7 +306,7 @@ static void build_detail_panel(void)
     lv_obj_set_width(s_term_label, LV_PCT(100));
     lv_label_set_long_mode(s_term_label, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_term_label, "");
-    lv_obj_set_style_text_font(s_term_label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_font(s_term_label, &lv_font_terminal_12, 0);
     lv_obj_set_style_text_color(s_term_label, lv_color_hex(0xc5e1a5), 0);
 
     /* barra de ações */
@@ -451,7 +455,9 @@ static void refresh_detail(void)
             break;
         }
     }
-    herdr_pane_content_t content;
+    /* static: a struct tem ~8KB e a task da LVGL só tem 4KB de stack.
+       Seguro porque esta função roda exclusivamente na task da LVGL. */
+    static herdr_pane_content_t content;
     if (herdr_model_get_pane_content(&content) &&
         strcmp(content.pane_id, s_detail_pane) == 0 &&
         strcmp(lv_label_get_text(s_term_label), content.content) != 0) {
@@ -466,7 +472,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     /* read_pane periódico com o detalhe aberto */
     if (s_detail_open && ++s_poll_tick >= DETAIL_POLL_TICKS) {
         s_poll_tick = 0;
-        herdr_ws_read_pane(s_detail_pane, 40);
+        herdr_conn_read_pane(s_detail_pane, 40);
     }
 
     uint32_t gen = herdr_model_generation();

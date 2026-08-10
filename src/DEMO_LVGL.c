@@ -7,7 +7,7 @@
 #include "net.h"
 #include "herdr_model.h"
 #include "herdr_ui.h"
-#include "herdr_ws.h"
+#include "herdr_conn.h"
 #include <esp_log.h>   // Add this line to include the header file that declares ESP_LOGI
 #include <esp_flash.h> // Add this line to include the header file that declares esp_flash_t
 #include <esp_chip_info.h>
@@ -91,6 +91,8 @@ void setup()
       .rotate = LV_DISP_ROT_NONE,
 #endif
   };
+  /* O padrão do port são 4KB, apertado para renderizar o texto do terminal */
+  cfg.lvgl_port_cfg.task_stack = 8192;
 
   bsp_display_start_with_config(&cfg);
   bsp_display_backlight_on();
@@ -115,8 +117,8 @@ void setup()
   logSection("Wi-Fi");
   net_wifi_start();
 
-  logSection("Relay");
-  herdr_ws_start();
+  logSection("Ponte");
+  herdr_conn_start();
 
   logSection("LVGL porting example end");
 }

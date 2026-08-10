@@ -75,11 +75,55 @@ void herdr_model_clear_blocked(const char *pane_id)
     unlock();
 }
 
+/**
+ * Copia texto truncando só em fronteira de caractere UTF-8.
+ *
+ * A saída do terminal é cheia de box-drawing e emoji, então um corte cego no
+ * meio de uma sequência multibyte deixa bytes de continuação órfãos — e a LVGL,
+ * configurada com LV_TXT_ENC_UTF8, trava ao decodificar isso.
+ */
+static void copy_utf8_safe(char *dst, const char *src, size_t dst_size)
+{
+    size_t len = strlen(src);
+    if (len >= dst_size) {
+        len = dst_size - 1;
+        /* Recua enquanto o corte cair sobre um byte de continuação (10xxxxxx).
+           Ao parar, src[len] é ASCII ou líder de sequência — e como ele fica de
+           fora da cópia, tudo que sobra são caracteres completos. */
+        while (len > 0 && ((unsigned char)src[len] & 0xC0) == 0x80) {
+            len--;
+        }
+    }
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+}
+
+/**
+ * Troca por '*' o U+2733 (✳), que o Claude usa nos títulos mas a JetBrainsMono
+ * Nerd não tem — sem isso vira retângulo vazio na tela. Substituição in-place:
+ * E2 9C B3 (3 bytes) vira '*' e o resto da string desliza para trás.
+ */
+static void replace_missing_glyphs(char *s)
+{
+    char *w = s;
+    for (const char *r = s; *r; ) {
+        if ((unsigned char)r[0] == 0xE2 && (unsigned char)r[1] == 0x9C &&
+            (unsigned char)r[2] == 0xB3) {
+            *w++ = '*';
+            r += 3;
+        } else {
+            *w++ = *r++;
+        }
+    }
+    *w = '\0';
+}
+
 void herdr_model_set_pane_content(const char *pane_id, const char *content)
 {
     lock();
     strlcpy(s_model.pane_content.pane_id, pane_id, HERDR_ID_LEN);
-    strlcpy(s_model.pane_content.content, content, HERDR_CONTENT_LEN);
+    copy_utf8_safe(s_model.pane_content.content, content, HERDR_CONTENT_LEN);
+    replace_missing_glyphs(s_model.pane_content.content);
     bump();
     unlock();
 }

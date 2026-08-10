@@ -20,7 +20,8 @@ extern "C" {
 #define HERDR_NAME_LEN        32
 #define HERDR_STATUS_LEN      16
 #define HERDR_PROMPT_LEN      512
-#define HERDR_CONTENT_LEN     4096
+/* 40 linhas de terminal com box-drawing/emoji passam de 5.8KB em UTF-8 */
+#define HERDR_CONTENT_LEN     8192
 #define HERDR_MAX_OPTIONS     3
 #define HERDR_OPTION_LEN      40
 
