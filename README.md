@@ -86,8 +86,7 @@ configuração se inverte: **o host manda a configuração pronta para o painel*
 1. No painel: **Configurações → Parear com um host**. A tela mostra um código de 6
    caracteres (os últimos bytes do MAC) e passa a se anunciar por broadcast UDP por 3
    minutos, aceitando configuração na porta 9376.
-2. No Herdr do host: ação **Abrir painel de administração** (ou
-   `herdr plugin pane open --plugin herdr-assist --entrypoint admin`) → tecla `p`.
+2. No Herdr do host: abra o painel de administração (`ctrl+b a`, ver abaixo) → tecla `p`.
 3. Escolha na lista o código que aparece na tela do painel.
 
 O host envia nome, endereço, porta e token; o painel grava na NVS e reinicia já
@@ -95,6 +94,26 @@ conectado. O host é registrado com o **hostname da máquina** — nada é digit
 
 A janela só abre por toque e dura 3 minutos. O código serve para você conferir que está
 pareando com o painel certo, e não com outro dispositivo que esteja anunciando.
+
+### Abrindo o painel de administração
+
+O Herdr 0.8.0 **não lista ações de plugin em menu nenhum** — os itens do menu de contexto
+são fixos, e o campo `contexts` do manifest só declara em que contextos a ação é válida.
+As vias de uso são o keybinding e a CLI, então vale ligar o atalho no `config.toml`:
+
+```toml
+[[keys.command]]
+key = "prefix+a"          # ctrl+b seguido de "a"
+type = "plugin_action"
+command = "herdr-assist.admin"
+```
+
+`herdr config check` valida e `herdr server reload-config` aplica sem reiniciar. Sem
+atalho, o equivalente é:
+
+```bash
+herdr plugin pane open --plugin herdr-assist --entrypoint admin
+```
 
 A mesma tela de administração mostra o estado da ponte, o token e os painéis conectados,
 e permite girar o token (`r`) ou reiniciar a ponte (`x`). Pela CLI, o token também sai em:

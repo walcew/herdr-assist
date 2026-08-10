@@ -28,9 +28,10 @@ command = ["python3", "admin.py"]
 # contexts é o que faz a ação aparecer nos menus do Herdr; sem ele, a ação
 # existe mas só pode ser chamada pela CLI. "global" porque nenhuma delas
 # depende do workspace/aba/pane em foco.
-# contexts nomeia os menus onde a ação aparece. A de administração vai em
-# todos os que se abrem por toque/clique (o menu do pane é o do botão direito),
-# porque é o ponto de entrada de quem acabou de instalar o plugin.
+# contexts declara em quais contextos a ação é válida e o que ela recebe em
+# HERDR_PLUGIN_* — não é menu: o Herdr 0.8.0 não lista ações de plugin em menu
+# algum (os itens do menu de contexto são fixos). Quem chama é um keybinding
+# (`type = "plugin_action"`, ver README), a CLI ou um link handler.
 # HERDR_BIN_PATH em vez de "herdr": o comando roda com o PATH do ambiente do
 # plugin, onde o binário pode não estar (é o caso de um Homebrew não exportado).
 [[actions]]
