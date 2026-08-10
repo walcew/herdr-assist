@@ -1,0 +1,21 @@
+diff --git a/relay/herdr_relay.py b/relay/herdr_relay.py
+index 1e4a862..5216673 100644
+--- a/relay/herdr_relay.py
++++ b/relay/herdr_relay.py
+@@ -527,6 +527,16 @@ async def handle_client(ws):
+                 log.info("Text from %s (%s): pane=%s text=%r", ip, device, pane_id, text)
+                 audit("send_text", ip, device, pane_id, f"text={text!r}")
+                 run_herdr("pane", "send-text", pane_id, text, remote=remote)
++            elif msg_type == "focus":
++                pane_id = msg["pane_id"]
++                if pane_id not in known_panes:
++                    await ws.send(json.dumps({"type": "error", "message": "unknown pane_id"}))
++                    continue
++                remote = pane_remote_map.get(pane_id)
++                log.info("Focus from %s (%s): pane=%s", ip, device, pane_id)
++                audit("focus", ip, device, pane_id)
++                run_herdr("agent", "focus", pane_id, remote=remote)
++                await ws.send(json.dumps({"type": "command_result", "command": "focus", "ok": True}))
+             elif msg_type == "create_tab":
+                 workspace_id = msg.get("workspace_id", "")
+                 if workspace_id:
