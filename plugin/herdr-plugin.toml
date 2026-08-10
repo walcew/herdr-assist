@@ -28,11 +28,13 @@ command = ["python3", "admin.py"]
 # contexts é o que faz a ação aparecer nos menus do Herdr; sem ele, a ação
 # existe mas só pode ser chamada pela CLI. "global" porque nenhuma delas
 # depende do workspace/aba/pane em foco.
+# HERDR_BIN_PATH em vez de "herdr": o comando roda com o PATH do ambiente do
+# plugin, onde o binário pode não estar (é o caso de um Homebrew não exportado).
 [[actions]]
 id = "admin"
 title = "Abrir painel de administração"
 contexts = ["global"]
-command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-assist", "--entrypoint", "admin"]
+command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-assist --entrypoint admin"]
 
 [[actions]]
 id = "show-token"
