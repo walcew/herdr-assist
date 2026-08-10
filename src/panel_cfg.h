@@ -23,10 +23,12 @@ extern "C" {
 #define CFG_PASS_LEN   65   /* senha WPA tem no máximo 64 */
 #define CFG_HOST_LEN   48   /* IP ou hostname da ponte */
 #define CFG_NAME_LEN   16   /* rótulo curto exibido na UI */
+#define CFG_TOKEN_LEN  33   /* token da ponte: 32 hex + NUL */
 
 typedef struct {
     char     name[CFG_NAME_LEN];
     char     host[CFG_HOST_LEN];
+    char     token[CFG_TOKEN_LEN];
     uint16_t port;
     bool     enabled;
 } panel_host_t;

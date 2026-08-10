@@ -325,6 +325,22 @@ static void conn_task(void *arg)
         s->sock = sock;
         xSemaphoreGive(s->tx_mutex);
         s->rx_used = 0;
+
+        /* A ponte exige hello com token na primeira linha; sem ele, derruba.
+           cJSON escapa o token caso o usuário digite algo fora do hex. */
+        cJSON *hello = cJSON_CreateObject();
+        cJSON_AddStringToObject(hello, "type", "hello");
+        cJSON_AddStringToObject(hello, "token", s->cfg.token);
+        if (send_json(s, hello) != ESP_OK) {
+            ESP_LOGW(TAG, "[%s] falha ao enviar hello", s->label);
+            xSemaphoreTake(s->tx_mutex, portMAX_DELAY);
+            s->sock = -1;
+            xSemaphoreGive(s->tx_mutex);
+            close(sock);
+            vTaskDelay(pdMS_TO_TICKS(RECONNECT_MS));
+            continue;
+        }
+
         herdr_model_set_conn(s->idx, HERDR_CONN_ONLINE);
         ESP_LOGI(TAG, "[%s] conectado (heap livre: %u)", s->label,
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));

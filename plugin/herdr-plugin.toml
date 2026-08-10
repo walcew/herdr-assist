@@ -1,0 +1,27 @@
+# Plugin herdr-assist: sobe a ponte TCP que o painel físico usa para falar
+# com este Herdr. Instalação num host novo:
+#   git clone git@github.com:walcew/herdr-assist.git
+#   herdr plugin link herdr-assist/plugin
+# O token de autenticação é gerado na primeira subida (ação show-token exibe).
+
+id = "herdr-assist"
+name = "herdr-assist bridge"
+version = "0.1.0"
+min_herdr_version = "0.8.0"
+description = "Ponte TCP autenticada entre o Herdr e o painel físico herdr-assist"
+platforms = ["macos", "linux"]
+
+# Roda quando o Herdr sobe a sessão; o script destaca a ponte e sai
+# (startup de plugin não é daemon — precisa terminar).
+[[startup]]
+command = ["./start.sh"]
+
+[[actions]]
+id = "show-token"
+title = "Mostrar token do painel"
+command = ["sh", "-c", "cat \"$HERDR_PLUGIN_CONFIG_DIR/token\""]
+
+[[actions]]
+id = "restart-bridge"
+title = "Reiniciar a ponte"
+command = ["./start.sh", "--restart"]

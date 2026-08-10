@@ -23,26 +23,31 @@ Pinout relevante em `src/esp_bsp.h`; esquemáticos e datasheets em `docs/`.
 ## Arquitetura
 
 O Herdr expõe sua API num unix socket local, que um dispositivo na rede não alcança.
-A ponte (`bridge/herdr_bridge.py`, stdlib pura) traduz isso para TCP e nada mais: ela
+A ponte (`plugin/herdr_bridge.py`, stdlib pura) traduz isso para TCP e nada mais: ela
 assina os eventos do Herdr, então o painel recebe as mudanças por **push**, sem polling.
+Ela é empacotada como **plugin do Herdr** (`plugin/herdr-plugin.toml`), que o Herdr
+sobe junto com a sessão — um plugin por máquina que você queira controlar pelo painel.
 
 ```
 ┌─ JC3248W535EN ─────────────┐     Wi-Fi / LAN      ┌─ Mac ───────────────────────┐
-│ herdr-assist               │ ◄── TCP + JSON ───►  │ herdr_bridge.py (:9375)     │
+│ herdr-assist               │ ◄── TCP + JSON ───►  │ plugin herdr-assist (:9375) │
 │ ESP-IDF 5.2 + LVGL 8.4     │    uma msg por       │          │ unix socket      │
 │ UI: lista, terminal, ações │    linha             │          ▼                  │
 └────────────────────────────┘                      │   herdr (events.subscribe)  │
                                                     └─────────────────────────────┘
 ```
 
+**Painel → ponte:** `hello` (token, obrigatório na 1ª linha), depois `read_pane`,
+`send_keys`, `send_text`, `respond`, `focus`, `ping`.
 **Ponte → painel:** `agents` (estado de todos), `blocked` (aprovação pendente com as
 opções já detectadas), `pane_content` (saída do terminal, limpa de spinners), `pong`.
-**Painel → ponte:** `read_pane`, `send_keys`, `send_text`, `respond`, `focus`, `ping`.
 
 A ponte é o ponto onde as decisões de segurança acontecem, porque qualquer um na LAN
-alcança essa porta: só teclas de uma allowlist passam, texto tem limite de tamanho, e
-comandos só valem para panes que existem. Ela não faz autenticação — se a sua rede não
-for confiável, restrinja `BRIDGE_BIND` e use um firewall.
+alcança essa porta. **Toda conexão exige um token** (handshake `hello` na primeira linha;
+sem ele, a ponte desconecta em 5 s). Além disso: só teclas de uma allowlist passam, texto
+tem limite de tamanho, e comandos só valem para panes que existem. O token é gerado na
+primeira subida do plugin (0600 no config-dir); a ação `Mostrar token do painel`, no
+Herdr, exibe o valor para você cadastrar no painel.
 
 ## Compilando
 
@@ -56,14 +61,27 @@ pio run -t upload --upload-port /dev/cu.usbmodem101
 
 O firmware é genérico — nenhuma credencial é compilada. No primeiro boot (ou após
 apagar a NVS) o painel abre a tela de configurações: escolha a rede Wi-Fi na lista,
-digite a senha e cadastre até 4 hosts Herdr (nome, IP ou hostname, porta da ponte).
-Tudo fica na NVS e sobrevive a reflashes do app; salvar reinicia o painel.
+digite a senha e cadastre até 4 hosts Herdr (nome, IP ou hostname, porta e **token**
+da ponte). Tudo fica na NVS e sobrevive a reflashes do app; salvar reinicia o painel.
 
-Do lado de cada máquina com Herdr, a ponte precisa estar rodando:
+### Instalando a ponte num host novo
+
+A ponte é um plugin do Herdr. Em cada máquina que você quiser controlar pelo painel:
 
 ```bash
-uv run bridge/herdr_bridge.py     # ou python3 bridge/herdr_bridge.py — sem dependências
+git clone git@github.com:walcew/herdr-assist.git
+herdr plugin link herdr-assist/firmware/plugin   # registra e habilita
 ```
+
+O Herdr sobe a ponte junto com a sessão a partir do próximo boot; para subir agora sem
+reiniciar, rode a ação `Reiniciar a ponte` do plugin. Só stdlib do Python — funciona com
+o `python3` de fábrica do macOS (3.9+), sem toolchain. Pegue o token com a ação
+`Mostrar token do painel` e cadastre-o no host correspondente na tela de configurações.
+
+> Instalar direto de repositório privado com `herdr plugin install owner/repo/subdir`
+> não funciona (ele baixa um tarball público); use o `git clone` + `herdr plugin link`
+> acima. O plugin também aceita config opcional em `<config-dir>/env` (`BRIDGE_PORT`,
+> `BRIDGE_BIND`) — o config-dir sai em `herdr plugin config-dir herdr-assist`.
 
 Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos):
 
@@ -75,7 +93,9 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 
 | Arquivo | Papel |
 |---|---|
-| `bridge/herdr_bridge.py` | Ponte no Mac: socket do Herdr ↔ TCP, allowlist, sanitização |
+| `plugin/herdr-plugin.toml` | Manifest do plugin do Herdr (startup, ações show/restart) |
+| `plugin/start.sh` | Startup do plugin: sobe a ponte destacada, idempotente, gera token |
+| `plugin/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização |
 | `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |
 | `src/panel_cfg.c` | Configuração persistente (NVS): rede Wi-Fi + até 4 hosts Herdr |
 | `src/net.c` | Wi-Fi station com reconexão automática e scan para a tela de config |

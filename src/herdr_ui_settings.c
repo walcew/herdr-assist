@@ -39,6 +39,7 @@ static lv_obj_t *s_ta_pass;
 static lv_obj_t *s_ta_name;
 static lv_obj_t *s_ta_host;
 static lv_obj_t *s_ta_port;
+static lv_obj_t *s_ta_token;
 
 static panel_cfg_t s_edit;          /* cópia em edição; vale ao salvar */
 static view_t s_view;
@@ -245,6 +246,7 @@ static void host_ok_cb(lv_event_t *e)
     bool was_empty = h->host[0] == '\0';
     strlcpy(h->name, lv_textarea_get_text(s_ta_name), CFG_NAME_LEN);
     strlcpy(h->host, lv_textarea_get_text(s_ta_host), CFG_HOST_LEN);
+    strlcpy(h->token, lv_textarea_get_text(s_ta_token), CFG_TOKEN_LEN);
     h->port = (uint16_t)atoi(lv_textarea_get_text(s_ta_port));
     if (!h->host[0] || !h->port) {
         h->enabled = false;             /* incompleto não conecta */
@@ -287,9 +289,12 @@ static void show_host(int idx)
     s_ta_name = make_ta(s_content, "nome", h->name, "ex: mac");
     s_ta_host = make_ta(s_content, "endereco", h->host, "ip ou hostname");
     s_ta_port = make_ta(s_content, "porta", port, "9375");
+    /* token da ponte deste host (acao show-token do plugin exibe no Herdr) */
+    s_ta_token = make_ta(s_content, "token", h->token, "32 hex da ponte");
     lv_obj_add_event_cb(s_ta_name, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_ta_host, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(s_ta_port, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(s_ta_token, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     lv_obj_t *bar = lv_obj_create(s_content);
     lv_obj_set_size(bar, LV_PCT(100), 48);

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # /// script
-# requires-python = ">=3.10"
+# requires-python = ">=3.9"
 # ///
 """Ponte entre o socket do Herdr e o painel herdr-assist na LAN.
 
@@ -9,23 +9,38 @@ Esta ponte traduz: fala o protocolo nativo do Herdr (JSON por linha) e serve o
 mesmo conteúdo por TCP, com push real — o Herdr avisa quando algo muda, então
 não há polling.
 
-Sem dependências externas: só a stdlib.
+Sem dependências externas: só a stdlib, compatível com o python3 de fábrica do
+macOS (3.9). Roda como plugin do Herdr (ver start.sh), que fornece as variáveis
+HERDR_SOCKET_PATH e HERDR_PLUGIN_CONFIG_DIR; para rodar avulsa:
 
-    uv run bridge/herdr_bridge.py
+    BRIDGE_TOKEN=... python3 plugin/herdr_bridge.py
 
-Variáveis: HERDR_SOCK, BRIDGE_PORT (9375), BRIDGE_BIND (0.0.0.0).
+Toda conexão exige um handshake `{"type":"hello","token":"..."}` na primeira
+linha — sem token não roda: se nenhum existir, um é gerado e salvo (0600).
+
+Variáveis: HERDR_SOCK, BRIDGE_PORT (9375), BRIDGE_BIND (0.0.0.0), BRIDGE_TOKEN.
 """
+from __future__ import annotations
+
 import asyncio
+import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import socket
 import sys
 
-SOCK = os.environ.get("HERDR_SOCK", os.path.expanduser("~/.config/herdr/herdr.sock"))
+SOCK = (os.environ.get("HERDR_SOCK")
+        or os.environ.get("HERDR_SOCKET_PATH")  # fornecida pelo plugin do Herdr
+        or os.path.expanduser("~/.config/herdr/herdr.sock"))
 PORT = int(os.environ.get("BRIDGE_PORT", "9375"))
 BIND = os.environ.get("BRIDGE_BIND", "0.0.0.0")
+TOKEN_FILE = os.path.join(
+    os.environ.get("HERDR_PLUGIN_CONFIG_DIR", os.path.expanduser("~/.config/herdr-assist")),
+    "token")
+TOKEN = ""  # carregado em main()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     datefmt="%H:%M:%S")
@@ -55,6 +70,32 @@ clients: set[asyncio.StreamWriter] = set()
 known_panes: set[str] = set()
 last_status: dict[str, str] = {}
 _req_id = 0
+
+
+def load_token() -> str:
+    """Token da ponte, nesta ordem: env, arquivo do plugin, ou gera um novo.
+
+    Fail-closed de propósito: não existe modo sem autenticação. O arquivo fica
+    no config-dir do plugin (editável pelo usuário; sobrescreva para igualar o
+    token entre máquinas).
+    """
+    tok = os.environ.get("BRIDGE_TOKEN", "").strip()
+    if tok:
+        return tok
+    try:
+        with open(TOKEN_FILE) as f:
+            tok = f.read().strip()
+        if tok:
+            return tok
+    except OSError:
+        pass
+    tok = secrets.token_hex(16)
+    os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
+    with open(TOKEN_FILE, "w") as f:
+        f.write(tok + "\n")
+    os.chmod(TOKEN_FILE, 0o600)
+    log.info("token gerado em %s — cadastre-o no painel", TOKEN_FILE)
+    return tok
 
 
 async def herdr_request(method: str, params: dict | None = None) -> dict | None:
@@ -235,6 +276,25 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     sock = writer.get_extra_info("socket")
     if sock is not None:  # detecta queda de link sem FIN (Wi-Fi some, painel desliga)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+
+    # Handshake obrigatório: a primeira linha precisa ser um hello com o token.
+    # Qualquer um na LAN alcança esta porta; sem isso, alcançar = controlar.
+    try:
+        line = await asyncio.wait_for(reader.readline(), timeout=5)
+        hello = json.loads(line) if line else {}
+    except (asyncio.TimeoutError, json.JSONDecodeError, ConnectionResetError):
+        hello = {}
+    if not (isinstance(hello, dict) and hello.get("type") == "hello" and
+            hmac.compare_digest(str(hello.get("token", "")), TOKEN)):
+        log.warning("hello inválido de %s — desconectando", peer)
+        try:
+            writer.write(b'{"type":"error","message":"token invalido"}\n')
+            await writer.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        writer.close()
+        return
+
     log.info("painel conectado: %s", peer)
     clients.add(writer)
     try:
@@ -257,9 +317,11 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
 
 async def main() -> None:
+    global TOKEN
     if not os.path.exists(SOCK):
         log.error("socket do Herdr não encontrado: %s", SOCK)
         sys.exit(1)
+    TOKEN = load_token()
     asyncio.create_task(event_loop())
     server = await asyncio.start_server(handle_client, BIND, PORT)
     log.info("ponte ouvindo em %s:%d", BIND, PORT)

@@ -45,6 +45,9 @@ esp_err_t panel_cfg_init(void)
         snprintf(key, sizeof(key), "h%dh", i);
         len = sizeof(hh->host);
         nvs_get_str(h, key, hh->host, &len);
+        snprintf(key, sizeof(key), "h%dt", i);
+        len = sizeof(hh->token);
+        nvs_get_str(h, key, hh->token, &len);
         snprintf(key, sizeof(key), "h%dp", i);
         nvs_get_u16(h, key, &hh->port);
         uint8_t en = 0;
@@ -84,6 +87,8 @@ esp_err_t panel_cfg_save(const panel_cfg_t *cfg)
         nvs_set_str(h, key, hh->name);
         snprintf(key, sizeof(key), "h%dh", i);
         nvs_set_str(h, key, hh->host);
+        snprintf(key, sizeof(key), "h%dt", i);
+        nvs_set_str(h, key, hh->token);
         snprintf(key, sizeof(key), "h%dp", i);
         nvs_set_u16(h, key, hh->port);
         snprintf(key, sizeof(key), "h%de", i);
