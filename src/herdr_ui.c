@@ -79,12 +79,15 @@ static const char *host_label(int host)
 }
 
 /** Ordem de urgência para o modo prioridade: bloqueado primeiro. */
+/* Ordem de quem pede atenção primeiro: "done" (terminou, ninguém abriu ainda)
+   vem antes de "working", que não espera nada de quem olha o painel. */
 static int status_rank(const char *status)
 {
     if (strcmp(status, "blocked") == 0) return 0;
-    if (strcmp(status, "working") == 0) return 1;
-    if (strcmp(status, "idle") == 0)    return 2;
-    return 3;
+    if (strcmp(status, "done") == 0)    return 1;
+    if (strcmp(status, "working") == 0) return 2;
+    if (strcmp(status, "idle") == 0)    return 3;
+    return 4;
 }
 
 /* ---------- navegação ---------- */
@@ -361,10 +364,12 @@ static void refresh_home(void)
 {
     int working = 0;
     int blocked = 0;
+    int done = 0;
     for (int i = 0; i < s_ui_agent_count; i++) {
         switch (status_rank(s_ui_agents[i].status)) {
         case 0: blocked++; break;
-        case 1: working++; break;
+        case 1: done++;    break;
+        case 2: working++; break;
         default: break;
         }
     }
@@ -380,6 +385,7 @@ static void refresh_home(void)
     }
     avatar_set_state(!online ? AVATAR_ST_DISCONNECTED :
                      blocked ? AVATAR_ST_BLOCKED :
+                     done    ? AVATAR_ST_DONE :
                      working ? AVATAR_ST_WORKING : AVATAR_ST_IDLE);
 
     for (int w = 0; w < s_hw_count; w++) {

@@ -26,6 +26,7 @@ extern "C" {
 typedef enum {
     AVATAR_ST_DISCONNECTED = 0,  /* nenhum host habilitado online */
     AVATAR_ST_IDLE,
+    AVATAR_ST_DONE,              /* algum agente terminou e ninguém abriu ainda */
     AVATAR_ST_WORKING,
     AVATAR_ST_BLOCKED,
 } avatar_state_t;

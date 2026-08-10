@@ -70,7 +70,8 @@ static void pet_set_state(avatar_state_t st)
     /* humor: o pior estado manda; desconectado = cara "apagada" */
     lv_color_t mood = blocked ? UI_BLOCKED :
                       off     ? UI_MUTED :
-                      st == AVATAR_ST_WORKING ? UI_WORKING : UI_IDLE;
+                      st == AVATAR_ST_WORKING ? UI_WORKING :
+                      st == AVATAR_ST_DONE    ? UI_DONE : UI_IDLE;
     lv_obj_set_style_bg_color(s_mood, mood, 0);
 
     lv_coord_t eye_h   = blocked ? 11 : off ? 8 : 17;   /* apertados = preocupado */

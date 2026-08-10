@@ -24,6 +24,7 @@ extern "C" {
 #define UI_CELL        lv_color_hex(0x1e1e22)   /* célula vazia do mapa de calor */
 #define UI_CELL_OFF    lv_color_hex(0x151518)   /* idem, host offline */
 #define UI_WORKING     lv_color_hex(0xc9a24a)   /* âmbar: em andamento */
+#define UI_DONE        lv_color_hex(0x5f9ea8)   /* teal: terminou, aguarda revisão */
 #define UI_IDLE        lv_color_hex(0x7da97d)   /* verde: ocioso / ok */
 #define UI_BLOCKED     lv_color_hex(0xc05a55)   /* vermelho: bloqueado / offline */
 #define UI_TERM_BG     lv_color_hex(0x0a0a0b)
@@ -87,7 +88,7 @@ lv_obj_t *ui_topbar(lv_obj_t *parent, const char *title, lv_obj_t **out_title);
 /** Dock flutuante de 3 abas; cb recebe a ui_tab_t em user_data. */
 lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb);
 
-/** Cor do status de um agente ("idle", "working", "blocked", ...). */
+/** Cor do status de um agente ("idle", "working", "blocked", "done", ...). */
 lv_color_t ui_status_color(const char *status);
 
 #ifdef __cplusplus

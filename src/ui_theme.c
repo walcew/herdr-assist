@@ -136,6 +136,8 @@ lv_color_t ui_status_color(const char *status)
 {
     if (strcmp(status, "blocked") == 0) return UI_BLOCKED;
     if (strcmp(status, "working") == 0) return UI_WORKING;
+    /* "done" = terminou e o pane ainda não foi aberto; vira "idle" quando for */
+    if (strcmp(status, "done") == 0)    return UI_DONE;
     if (strcmp(status, "idle") == 0)    return UI_IDLE;
     return UI_MUTED;
 }

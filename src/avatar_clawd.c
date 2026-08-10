@@ -23,6 +23,7 @@
    senão os dados duplicam em flash. */
 #include "assets/sprite_alert.h"
 #include "assets/sprite_dizzy.h"
+#include "assets/sprite_happy.h"
 #include "assets/sprite_idle.h"
 #include "assets/sprite_sleeping.h"
 #include "assets/sprite_typing.h"
@@ -46,6 +47,7 @@ enum {
     ANIM_IDLE,
     ANIM_SLEEPING,
     ANIM_TYPING,
+    ANIM_HAPPY,
     ANIM_ALERT,
     ANIM_COUNT,
 };
@@ -61,6 +63,9 @@ static const clawd_anim_t s_anims[ANIM_COUNT] = {
     [ANIM_IDLE]         = ANIM_DEF(idle,     IDLE,     167),  /* 6 fps */
     [ANIM_SLEEPING]     = ANIM_DEF(sleeping, SLEEPING, 167),  /* 6 fps */
     [ANIM_TYPING]       = ANIM_DEF(typing,   TYPING,   125),  /* 8 fps */
+    /* no clawd-tank happy e alert são one-shot; aqui os dois marcam estado que
+       dura até o usuário agir, então rodam em loop como as demais */
+    [ANIM_HAPPY]        = ANIM_DEF(happy,    HAPPY,    100),  /* 10 fps */
     [ANIM_ALERT]        = ANIM_DEF(alert,    ALERT,    100),  /* 10 fps */
 };
 
@@ -146,6 +151,7 @@ static void clawd_set_state(avatar_state_t st)
     switch (st) {
     case AVATAR_ST_DISCONNECTED: play(ANIM_DISCONNECTED); break;
     case AVATAR_ST_WORKING:      play(ANIM_TYPING);       break;
+    case AVATAR_ST_DONE:         play(ANIM_HAPPY);        break;
     case AVATAR_ST_BLOCKED:      play(ANIM_ALERT);        break;
     case AVATAR_ST_IDLE:
     default:
