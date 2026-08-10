@@ -16,12 +16,17 @@ platforms = ["macos", "linux"]
 [[startup]]
 command = ["./start.sh"]
 
+# contexts é o que faz a ação aparecer nos menus do Herdr; sem ele, a ação
+# existe mas só pode ser chamada pela CLI. "global" porque nenhuma das duas
+# depende do workspace/aba/pane em foco.
 [[actions]]
 id = "show-token"
 title = "Mostrar token do painel"
+contexts = ["global"]
 command = ["sh", "-c", "cat \"$HERDR_PLUGIN_CONFIG_DIR/token\""]
 
 [[actions]]
 id = "restart-bridge"
 title = "Reiniciar a ponte"
+contexts = ["global"]
 command = ["./start.sh", "--restart"]

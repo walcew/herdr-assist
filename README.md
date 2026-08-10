@@ -71,13 +71,22 @@ A ponte é um plugin do Herdr. Em cada máquina que você quiser controlar pelo 
 
 ```bash
 git clone git@github.com:walcew/herdr-assist.git
-herdr plugin link herdr-assist/firmware/plugin   # registra e habilita
+herdr plugin link herdr-assist/plugin   # registra e habilita
 ```
 
 O Herdr sobe a ponte junto com a sessão a partir do próximo boot; para subir agora sem
 reiniciar, rode a ação `Reiniciar a ponte` do plugin. Só stdlib do Python — funciona com
-o `python3` de fábrica do macOS (3.9+), sem toolchain. Pegue o token com a ação
-`Mostrar token do painel` e cadastre-o no host correspondente na tela de configurações.
+o `python3` de fábrica do macOS (3.9+), sem toolchain.
+
+Depois pegue o token e cadastre-o no host correspondente na tela de configurações do
+painel. Pela CLI (funciona em qualquer situação, inclusive por SSH):
+
+```bash
+cat "$(herdr plugin config-dir herdr-assist)/token"
+```
+
+O log da ponte fica em `<state-dir>/bridge.log` — o Herdr usa
+`~/.local/state/herdr/plugins/<id>/`, que é diferente do config-dir.
 
 > Instalar direto de repositório privado com `herdr plugin install owner/repo/subdir`
 > não funciona (ele baixa um tarball público); use o `git clone` + `herdr plugin link`
