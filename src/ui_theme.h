@@ -32,8 +32,9 @@ extern "C" {
 #define UI_SWITCH_OFF  lv_color_hex(0x2a2a2e)
 
 /* --- medidas --- */
-#define UI_TOPBAR_H    52
-#define UI_ICON_BTN    34
+/* 44px é o alvo de toque confortável num painel de 3,5"; a topbar acompanha */
+#define UI_TOPBAR_H    64
+#define UI_ICON_BTN    44
 #define UI_ROW_H       52
 #define UI_DOCK_SPACE  62   /* espaço a reservar embaixo para o dock flutuante */
 #define UI_PAD         8
@@ -42,8 +43,9 @@ extern "C" {
 LV_FONT_DECLARE(lv_font_ui_12);
 LV_FONT_DECLARE(lv_font_ui_14);
 LV_FONT_DECLARE(lv_font_ui_16);
-LV_FONT_DECLARE(lv_font_ui_bold_16);   /* títulos das topbars */
-LV_FONT_DECLARE(lv_font_ui_num_20);
+LV_FONT_DECLARE(lv_font_ui_20);        /* ícones das topbars e valores dos cards */
+LV_FONT_DECLARE(lv_font_ui_bold_16);
+LV_FONT_DECLARE(lv_font_ui_bold_20);   /* títulos das topbars */
 LV_FONT_DECLARE(lv_font_ui_clock_44);
 LV_FONT_DECLARE(lv_font_terminal_12);
 

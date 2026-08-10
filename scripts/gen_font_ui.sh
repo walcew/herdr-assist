@@ -42,9 +42,10 @@ FONTS = [
     ("src/lv_font_ui_12.c", mont, 12, LATIN, True),
     ("src/lv_font_ui_14.c", mont, 14, LATIN, True),
     ("src/lv_font_ui_16.c", mont, 16, LATIN, True),
-    # títulos das topbars; leva os símbolos por causa do ⚠ da aprovação
+    # 20px é a escala das topbars: ícones dos botões e títulos
+    ("src/lv_font_ui_20.c", mont, 20, LATIN, True),
     ("src/lv_font_ui_bold_16.c", bold, 16, LATIN, True),
-    ("src/lv_font_ui_num_20.c", mont, 20, ["0x30-0x39"], False),   # valores dos cards
+    ("src/lv_font_ui_bold_20.c", bold, 20, LATIN, True),
     ("src/lv_font_ui_clock_44.c", mont, 44, ["0x30-0x3A"], False), # relógio da home
 ]
 

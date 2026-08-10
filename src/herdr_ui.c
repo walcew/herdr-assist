@@ -302,7 +302,7 @@ static void build_summary_cards(lv_obj_t *parent)
 
         s_card_val[i] = lv_label_create(card);
         lv_label_set_text(s_card_val[i], "0");
-        lv_obj_set_style_text_font(s_card_val[i], &lv_font_ui_num_20, 0);
+        lv_obj_set_style_text_font(s_card_val[i], &lv_font_ui_20, 0);
         lv_obj_set_style_text_color(s_card_val[i], UI_TEXT, 0);
         lv_obj_align(s_card_val[i], LV_ALIGN_TOP_LEFT, 0, 0);
 
@@ -689,7 +689,7 @@ static void build_detail(void)
 
     s_detail_title = lv_label_create(bar);
     lv_label_set_text(s_detail_title, "");
-    lv_obj_set_style_text_font(s_detail_title, &lv_font_ui_bold_16, 0);
+    lv_obj_set_style_text_font(s_detail_title, &lv_font_ui_bold_20, 0);
     lv_obj_set_style_text_color(s_detail_title, UI_TEXT, 0);
     lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_DOT);
     lv_obj_set_flex_grow(s_detail_title, 1);
@@ -768,14 +768,17 @@ static void build_blocked_modal(void)
     lv_label_set_text(s_blocked_title, LV_SYMBOL_WARNING " Aprovação pendente");
     lv_obj_set_style_text_font(s_blocked_title, &lv_font_ui_bold_16, 0);
     lv_obj_set_style_text_color(s_blocked_title, UI_BLOCKED, 0);
-    lv_obj_align(s_blocked_title, LV_ALIGN_TOP_LEFT, 12, 16);
+    /* fica em 16: com o nome do host junto, 20px não caberia ao lado do X */
+    lv_obj_set_width(s_blocked_title, LV_HOR_RES - 12 - UI_ICON_BTN - 20);
+    lv_label_set_long_mode(s_blocked_title, LV_LABEL_LONG_DOT);
+    lv_obj_align(s_blocked_title, LV_ALIGN_TOP_LEFT, 12, 22);
 
     lv_obj_t *x = ui_icon_btn(s_blocked_modal, LV_SYMBOL_CLOSE, blocked_dismiss_cb, NULL);
     lv_obj_align(x, LV_ALIGN_TOP_RIGHT, -10, 9);
 
     lv_obj_t *box = lv_obj_create(s_blocked_modal);
     lv_obj_set_size(box, LV_HOR_RES - 24, 200);
-    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 56);
+    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 62);
     lv_obj_set_style_bg_color(box, UI_TERM_BG, 0);
     lv_obj_set_style_border_width(box, 0, 0);
     lv_obj_set_style_radius(box, 6, 0);
