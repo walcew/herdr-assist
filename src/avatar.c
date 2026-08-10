@@ -10,6 +10,7 @@
 static const avatar_driver_t *s_drivers[] = {
     &avatar_pet_driver,
     &avatar_clawd_driver,
+    &avatar_sonic_driver,   /* anexado no fim: não remapeia a seleção na NVS */
 };
 #define DRIVER_COUNT   ((int)(sizeof(s_drivers) / sizeof(s_drivers[0])))
 #define DRIVER_DEFAULT 1   /* Clawd */
