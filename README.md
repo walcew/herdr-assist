@@ -56,7 +56,8 @@ ESP-IDF é baixada sozinha na primeira build (~1 GB).
 
 ```bash
 pio run                                        # compila
-pio run -t upload --upload-port /dev/cu.usbmodem101
+pio device list                                # a porta muda conforme a entrada USB
+pio run -t upload --upload-port /dev/cu.usbmodemXXXX
 ```
 
 O firmware é genérico — nenhuma credencial é compilada. No primeiro boot (ou após
