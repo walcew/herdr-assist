@@ -1,9 +1,0 @@
-// Copie para wifi_creds.h (gitignorado) e preencha com a sua rede.
-#pragma once
-
-#define WIFI_SSID "minha-rede"
-#define WIFI_PASS "minha-senha"
-
-// Host/porta da ponte herdr-assist na LAN (IP do Mac)
-#define BRIDGE_HOST "192.168.0.10"
-#define BRIDGE_PORT 9375

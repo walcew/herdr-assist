@@ -50,14 +50,16 @@ Requer [PlatformIO](https://platformio.org/) (`pipx install platformio`). A tool
 ESP-IDF é baixada sozinha na primeira build (~1 GB).
 
 ```bash
-cp src/wifi_creds.h.example src/wifi_creds.h   # preencha SSID, senha e IP do relay
 pio run                                        # compila
 pio run -t upload --upload-port /dev/cu.usbmodem101
 ```
 
-`src/wifi_creds.h` é gitignorado — as credenciais nunca entram no versionamento.
+O firmware é genérico — nenhuma credencial é compilada. No primeiro boot (ou após
+apagar a NVS) o painel abre a tela de configurações: escolha a rede Wi-Fi na lista,
+digite a senha e cadastre até 4 hosts Herdr (nome, IP ou hostname, porta da ponte).
+Tudo fica na NVS e sobrevive a reflashes do app; salvar reinicia o painel.
 
-Do lado do Mac, a ponte precisa estar rodando:
+Do lado de cada máquina com Herdr, a ponte precisa estar rodando:
 
 ```bash
 uv run bridge/herdr_bridge.py     # ou python3 bridge/herdr_bridge.py — sem dependências
@@ -74,11 +76,13 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 | Arquivo | Papel |
 |---|---|
 | `bridge/herdr_bridge.py` | Ponte no Mac: socket do Herdr ↔ TCP, allowlist, sanitização |
-| `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, Wi-Fi, conexão e UI |
-| `src/net.c` | Wi-Fi station com reconexão automática |
-| `src/herdr_conn.c` | Conexão TCP com a ponte, parse do protocolo, ping e reconexão |
-| `src/herdr_model.c` | Estado compartilhado entre a task de rede e a da UI (mutex + geração) |
-| `src/herdr_ui.c` | UI LVGL: lista de agentes, terminal, ações, teclado |
+| `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |
+| `src/panel_cfg.c` | Configuração persistente (NVS): rede Wi-Fi + até 4 hosts Herdr |
+| `src/net.c` | Wi-Fi station com reconexão automática e scan para a tela de config |
+| `src/herdr_conn.c` | Uma conexão TCP por host, parse do protocolo, ping e reconexão |
+| `src/herdr_model.c` | Estado compartilhado entre as tasks de rede e a da UI (mutex + geração) |
+| `src/herdr_ui.c` | UI LVGL: lista de agentes por host, terminal, ações, teclado |
+| `src/herdr_ui_settings.c` | Tela de configurações: scan de Wi-Fi, senha, editor de hosts |
 | `src/lv_font_terminal_12.c` | Fonte gerada (não editar) — veja `scripts/gen_font.sh` |
 | `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | BSP do fabricante (display, touch, port LVGL) |
 

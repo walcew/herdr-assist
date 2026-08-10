@@ -6,11 +6,11 @@
 #include "freertos/semphr.h"
 
 static struct {
-    herdr_agent_t agents[HERDR_MAX_AGENTS];
-    int agent_count;
-    herdr_blocked_t blocked;
+    herdr_agent_t agents[CFG_MAX_HOSTS][HERDR_MAX_AGENTS];
+    int agent_count[CFG_MAX_HOSTS];
+    herdr_blocked_t blocked[CFG_MAX_HOSTS];
     herdr_pane_content_t pane_content;
-    herdr_conn_state_t conn;
+    herdr_conn_state_t conn[CFG_MAX_HOSTS];
     uint32_t generation;
     SemaphoreHandle_t mutex;
 } s_model;
@@ -19,34 +19,51 @@ static void lock(void)   { xSemaphoreTake(s_model.mutex, portMAX_DELAY); }
 static void unlock(void) { xSemaphoreGive(s_model.mutex); }
 static void bump(void)   { s_model.generation++; }
 
+static bool host_ok(int host)
+{
+    return host >= 0 && host < CFG_MAX_HOSTS;
+}
+
 void herdr_model_init(void)
 {
     memset(&s_model, 0, sizeof(s_model));
     s_model.mutex = xSemaphoreCreateMutex();
 }
 
-void herdr_model_set_agents(const herdr_agent_t *agents, int count)
+void herdr_model_set_agents(int host, const herdr_agent_t *agents, int count)
 {
+    if (!host_ok(host)) {
+        return;
+    }
     if (count > HERDR_MAX_AGENTS) {
         count = HERDR_MAX_AGENTS;
     }
     lock();
-    /* relay retransmite a cada 2s mesmo sem mudança; só bumpa se mudou */
-    bool changed = (count != s_model.agent_count) ||
-                   (memcmp(s_model.agents, agents, count * sizeof(herdr_agent_t)) != 0);
-    memcpy(s_model.agents, agents, count * sizeof(herdr_agent_t));
-    s_model.agent_count = count;
+    /* a ponte pode reenviar snapshot idêntico; só bumpa se mudou. O campo host
+       é carimbado aqui, então a comparação precisa carimbá-lo antes. */
+    bool changed = (count != s_model.agent_count[host]);
+    for (int i = 0; i < count && !changed; i++) {
+        herdr_agent_t tmp = agents[i];
+        tmp.host = (uint8_t)host;
+        changed = memcmp(&s_model.agents[host][i], &tmp, sizeof(tmp)) != 0;
+    }
+    memcpy(s_model.agents[host], agents, count * sizeof(herdr_agent_t));
+    s_model.agent_count[host] = count;
+    for (int i = 0; i < count; i++) {
+        s_model.agents[host][i].host = (uint8_t)host;
+    }
     /* blocked deixa de valer se o pane sumiu ou se o agente destravou */
-    if (s_model.blocked.active) {
+    herdr_blocked_t *b = &s_model.blocked[host];
+    if (b->active) {
         bool still_blocked = false;
         for (int i = 0; i < count; i++) {
-            if (strcmp(s_model.agents[i].pane_id, s_model.blocked.pane_id) == 0) {
-                still_blocked = strcmp(s_model.agents[i].status, "blocked") == 0;
+            if (strcmp(s_model.agents[host][i].pane_id, b->pane_id) == 0) {
+                still_blocked = strcmp(s_model.agents[host][i].status, "blocked") == 0;
                 break;
             }
         }
         if (!still_blocked) {
-            s_model.blocked.active = false;
+            b->active = false;
             changed = true;
         }
     }
@@ -58,18 +75,25 @@ void herdr_model_set_agents(const herdr_agent_t *agents, int count)
 
 void herdr_model_set_blocked(const herdr_blocked_t *blocked)
 {
+    if (!host_ok(blocked->host)) {
+        return;
+    }
     lock();
-    s_model.blocked = *blocked;
-    s_model.blocked.active = true;
+    s_model.blocked[blocked->host] = *blocked;
+    s_model.blocked[blocked->host].active = true;
     bump();
     unlock();
 }
 
-void herdr_model_clear_blocked(const char *pane_id)
+void herdr_model_clear_blocked(int host, const char *pane_id)
 {
+    if (!host_ok(host)) {
+        return;
+    }
     lock();
-    if (s_model.blocked.active && strcmp(s_model.blocked.pane_id, pane_id) == 0) {
-        s_model.blocked.active = false;
+    herdr_blocked_t *b = &s_model.blocked[host];
+    if (b->active && strcmp(b->pane_id, pane_id) == 0) {
+        b->active = false;
         bump();
     }
     unlock();
@@ -129,9 +153,13 @@ static void replace_missing_glyphs(char *s)
     *w = '\0';
 }
 
-void herdr_model_set_pane_content(const char *pane_id, const char *content)
+void herdr_model_set_pane_content(int host, const char *pane_id, const char *content)
 {
+    if (!host_ok(host)) {
+        return;
+    }
     lock();
+    s_model.pane_content.host = (uint8_t)host;
     strlcpy(s_model.pane_content.pane_id, pane_id, HERDR_ID_LEN);
     copy_utf8_safe(s_model.pane_content.content, content, HERDR_CONTENT_LEN);
     replace_missing_glyphs(s_model.pane_content.content);
@@ -139,19 +167,28 @@ void herdr_model_set_pane_content(const char *pane_id, const char *content)
     unlock();
 }
 
-void herdr_model_set_conn(herdr_conn_state_t state)
+void herdr_model_set_conn(int host, herdr_conn_state_t state)
 {
+    if (!host_ok(host)) {
+        return;
+    }
     lock();
-    s_model.conn = state;
-    bump();
+    if (s_model.conn[host] != state) {
+        s_model.conn[host] = state;
+        bump();
+    }
     unlock();
 }
 
 int herdr_model_get_agents(herdr_agent_t *out, int max)
 {
     lock();
-    int n = s_model.agent_count < max ? s_model.agent_count : max;
-    memcpy(out, s_model.agents, n * sizeof(herdr_agent_t));
+    int n = 0;
+    for (int h = 0; h < CFG_MAX_HOSTS && n < max; h++) {
+        for (int i = 0; i < s_model.agent_count[h] && n < max; i++) {
+            out[n++] = s_model.agents[h][i];
+        }
+    }
     unlock();
     return n;
 }
@@ -159,12 +196,16 @@ int herdr_model_get_agents(herdr_agent_t *out, int max)
 bool herdr_model_get_blocked(herdr_blocked_t *out)
 {
     lock();
-    bool active = s_model.blocked.active;
-    if (active) {
-        *out = s_model.blocked;
+    bool found = false;
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        if (s_model.blocked[h].active) {
+            *out = s_model.blocked[h];
+            found = true;
+            break;
+        }
     }
     unlock();
-    return active;
+    return found;
 }
 
 bool herdr_model_get_pane_content(herdr_pane_content_t *out)
@@ -178,10 +219,13 @@ bool herdr_model_get_pane_content(herdr_pane_content_t *out)
     return has;
 }
 
-herdr_conn_state_t herdr_model_get_conn(void)
+herdr_conn_state_t herdr_model_get_conn(int host)
 {
+    if (!host_ok(host)) {
+        return HERDR_CONN_OFFLINE;
+    }
     lock();
-    herdr_conn_state_t c = s_model.conn;
+    herdr_conn_state_t c = s_model.conn[host];
     unlock();
     return c;
 }

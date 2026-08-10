@@ -7,6 +7,8 @@
 
 #include "herdr_model.h"
 #include "herdr_conn.h"
+#include "herdr_ui_settings.h"
+#include "panel_cfg.h"
 
 /* Fonte monoespaçada gerada da JetBrainsMono Nerd (ver scripts/gen_font.sh):
    ASCII + box-drawing + braille, os glifos que a saída dos agentes usa. */
@@ -37,16 +39,18 @@ static lv_obj_t *s_detail_dot;
 static lv_obj_t *s_term_cont;
 static lv_obj_t *s_term_label;
 static lv_obj_t *s_blocked_modal;
+static lv_obj_t *s_blocked_title;
 static lv_obj_t *s_blocked_prompt;
 static lv_obj_t *s_blocked_btns[HERDR_MAX_OPTIONS];
 static lv_obj_t *s_kb_overlay;
 static lv_obj_t *s_kb_ta;
 static lv_obj_t *s_keyboard;
 
-static herdr_agent_t s_ui_agents[HERDR_MAX_AGENTS];
+static herdr_agent_t s_ui_agents[HERDR_MAX_AGENTS_TOTAL];
 static int s_ui_agent_count;
 static herdr_blocked_t s_ui_blocked;
 static char s_detail_pane[HERDR_ID_LEN];
+static int s_detail_host = -1;
 static bool s_detail_open;
 static uint32_t s_last_generation = UINT32_MAX;
 static int s_poll_tick;
@@ -59,14 +63,26 @@ static lv_color_t status_color(const char *status)
     return COL_OFFLINE;
 }
 
+/** Rótulo do host para exibição: nome configurado, ou o endereço. */
+static const char *host_label(int host)
+{
+    if (host < 0 || host >= CFG_MAX_HOSTS) {
+        return "?";
+    }
+    const panel_host_t *h = &panel_cfg_get()->hosts[host];
+    return h->name[0] ? h->name : h->host;
+}
+
 /* ---------- navegação ---------- */
 
 static void open_detail(const herdr_agent_t *agent)
 {
     strlcpy(s_detail_pane, agent->pane_id, HERDR_ID_LEN);
+    s_detail_host = agent->host;
     s_detail_open = true;
     s_poll_tick = DETAIL_POLL_TICKS;  /* força read_pane no próximo tick */
-    lv_label_set_text_fmt(s_detail_title, "%s  -  %s", agent->project, agent->agent);
+    lv_label_set_text_fmt(s_detail_title, "%s / %s  -  %s",
+                          host_label(agent->host), agent->project, agent->agent);
     lv_obj_set_style_bg_color(s_detail_dot, status_color(agent->status), 0);
     lv_label_set_text(s_term_label, "carregando...");
     lv_obj_clear_flag(s_detail_panel, LV_OBJ_FLAG_HIDDEN);
@@ -77,6 +93,7 @@ static void close_detail(void)
 {
     s_detail_open = false;
     s_detail_pane[0] = '\0';
+    s_detail_host = -1;
     lv_obj_add_flag(s_detail_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_list_panel, LV_OBJ_FLAG_HIDDEN);
 }
@@ -101,7 +118,7 @@ static void action_key_cb(lv_event_t *e)
 {
     const char *key = lv_event_get_user_data(e);
     if (s_detail_pane[0]) {
-        herdr_conn_send_keys(s_detail_pane, &key, 1);
+        herdr_conn_send_keys(s_detail_host, s_detail_pane, &key, 1);
     }
 }
 
@@ -109,7 +126,7 @@ static void action_focus_cb(lv_event_t *e)
 {
     (void)e;
     if (s_detail_pane[0]) {
-        herdr_conn_focus(s_detail_pane);
+        herdr_conn_focus(s_detail_host, s_detail_pane);
     }
 }
 
@@ -126,9 +143,9 @@ static void kb_event_cb(lv_event_t *e)
     if (code == LV_EVENT_READY) {          /* checkmark: envia */
         const char *text = lv_textarea_get_text(s_kb_ta);
         if (s_detail_pane[0] && text[0]) {
-            herdr_conn_send_text(s_detail_pane, text);
+            herdr_conn_send_text(s_detail_host, s_detail_pane, text);
             static const char *enter = "Enter";
-            herdr_conn_send_keys(s_detail_pane, &enter, 1);
+            herdr_conn_send_keys(s_detail_host, s_detail_pane, &enter, 1);
         }
         lv_obj_add_flag(s_kb_overlay, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_CANCEL) {  /* teclado fechado: cancela */
@@ -140,8 +157,8 @@ static void blocked_option_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (s_ui_blocked.active && idx < s_ui_blocked.option_count) {
-        herdr_conn_respond(s_ui_blocked.pane_id, s_ui_blocked.options[idx]);
-        herdr_model_clear_blocked(s_ui_blocked.pane_id);
+        herdr_conn_respond(s_ui_blocked.host, s_ui_blocked.pane_id, s_ui_blocked.options[idx]);
+        herdr_model_clear_blocked(s_ui_blocked.host, s_ui_blocked.pane_id);
         lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -150,8 +167,14 @@ static void blocked_dismiss_cb(lv_event_t *e)
 {
     (void)e;
     /* só esconde na UI; decisão fica para o Mac */
-    herdr_model_clear_blocked(s_ui_blocked.pane_id);
+    herdr_model_clear_blocked(s_ui_blocked.host, s_ui_blocked.pane_id);
     lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void gear_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    herdr_ui_settings_open();
 }
 
 /* ---------- construção ---------- */
@@ -183,14 +206,23 @@ static void build_header(void)
     lv_label_set_text(s_conn_label, "offline");
     lv_obj_set_style_text_font(s_conn_label, &lv_font_montserrat_12, 0);
     lv_obj_set_style_text_color(s_conn_label, COL_MUTED, 0);
-    lv_obj_align(s_conn_label, LV_ALIGN_RIGHT_MID, -28, 0);
+    lv_obj_align(s_conn_label, LV_ALIGN_RIGHT_MID, -74, 0);
 
     s_conn_dot = lv_obj_create(s_header);
     lv_obj_set_size(s_conn_dot, 12, 12);
     lv_obj_set_style_radius(s_conn_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(s_conn_dot, 0, 0);
     lv_obj_set_style_bg_color(s_conn_dot, COL_OFFLINE, 0);
-    lv_obj_align(s_conn_dot, LV_ALIGN_RIGHT_MID, -10, 0);
+    lv_obj_align(s_conn_dot, LV_ALIGN_RIGHT_MID, -56, 0);
+
+    lv_obj_t *gear = lv_btn_create(s_header);
+    lv_obj_set_size(gear, 40, HEADER_H - 8);
+    lv_obj_align(gear, LV_ALIGN_RIGHT_MID, -6, 0);
+    lv_obj_set_style_bg_color(gear, COL_BG, 0);
+    lv_obj_add_event_cb(gear, gear_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *gl = lv_label_create(gear);
+    lv_label_set_text(gl, LV_SYMBOL_SETTINGS);
+    lv_obj_center(gl);
 }
 
 static void build_list_panel(void)
@@ -203,44 +235,99 @@ static void build_list_panel(void)
     lv_obj_set_style_pad_all(s_list_panel, 8, 0);
 }
 
+static void add_agent_row(int flat_idx)
+{
+    const herdr_agent_t *a = &s_ui_agents[flat_idx];
+    lv_obj_t *row = lv_btn_create(s_list_panel);
+    lv_obj_set_size(row, LV_PCT(100), ROW_H);
+    lv_obj_set_style_bg_color(row, COL_PANEL, 0);
+    lv_obj_set_style_radius(row, 6, 0);
+    lv_obj_add_event_cb(row, row_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)flat_idx);
+
+    lv_obj_t *dot = lv_obj_create(row);
+    lv_obj_set_size(dot, 14, 14);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_set_style_bg_color(dot, status_color(a->status), 0);
+    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *name = lv_label_create(row);
+    lv_label_set_text_fmt(name, "%s", a->project);
+    lv_obj_set_style_text_font(name, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(name, COL_TEXT, 0);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 30, -8);
+
+    lv_obj_t *sub = lv_label_create(row);
+    lv_label_set_text_fmt(sub, "%s - %s", a->agent, a->status);
+    lv_obj_set_style_text_font(sub, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(sub, COL_MUTED, 0);
+    lv_obj_align(sub, LV_ALIGN_LEFT_MID, 30, 12);
+}
+
+/** Cabeçalho de seção: nome do host à esquerda, estado da conexão à direita. */
+static void add_host_section(int host)
+{
+    herdr_conn_state_t conn = herdr_model_get_conn(host);
+    lv_obj_t *sec = lv_obj_create(s_list_panel);
+    lv_obj_set_size(sec, LV_PCT(100), 22);
+    lv_obj_set_style_bg_opa(sec, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(sec, 0, 0);
+    lv_obj_set_style_pad_all(sec, 0, 0);
+    lv_obj_clear_flag(sec, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *name = lv_label_create(sec);
+    lv_label_set_text(name, host_label(host));
+    lv_obj_set_style_text_font(name, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(name, COL_MUTED, 0);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 4, 0);
+
+    lv_obj_t *st = lv_label_create(sec);
+    lv_label_set_text(st, conn == HERDR_CONN_ONLINE ? "online"
+                      : conn == HERDR_CONN_CONNECTING ? "conectando" : "offline");
+    lv_obj_set_style_text_font(st, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(st, conn == HERDR_CONN_ONLINE ? COL_IDLE
+                                : conn == HERDR_CONN_CONNECTING ? COL_WORKING : COL_OFFLINE, 0);
+    lv_obj_align(st, LV_ALIGN_RIGHT_MID, -4, 0);
+}
+
 static void rebuild_list_rows(void)
 {
     lv_obj_clean(s_list_panel);
-    if (s_ui_agent_count == 0) {
+    const panel_cfg_t *cfg = panel_cfg_get();
+
+    int enabled = 0;
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        enabled += cfg->hosts[h].enabled;
+    }
+    if (enabled == 0) {
         lv_obj_t *empty = lv_label_create(s_list_panel);
-        lv_label_set_text(empty, herdr_model_get_conn() == HERDR_CONN_ONLINE
-                          ? "nenhum agente ativo" : "conectando a ponte...");
+        lv_label_set_text(empty, "nenhum host configurado\n\n"
+                                 "toque em " LV_SYMBOL_SETTINGS " para configurar");
         lv_obj_set_style_text_color(empty, COL_MUTED, 0);
         lv_obj_set_style_text_font(empty, &lv_font_montserrat_14, 0);
         return;
     }
-    for (int i = 0; i < s_ui_agent_count; i++) {
-        const herdr_agent_t *a = &s_ui_agents[i];
-        lv_obj_t *row = lv_btn_create(s_list_panel);
-        lv_obj_set_size(row, LV_PCT(100), ROW_H);
-        lv_obj_set_style_bg_color(row, COL_PANEL, 0);
-        lv_obj_set_style_radius(row, 6, 0);
-        lv_obj_add_event_cb(row, row_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
-        lv_obj_t *dot = lv_obj_create(row);
-        lv_obj_set_size(dot, 14, 14);
-        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(dot, 0, 0);
-        lv_obj_set_style_bg_color(dot, status_color(a->status), 0);
-        lv_obj_align(dot, LV_ALIGN_LEFT_MID, 4, 0);
-        lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
-
-        lv_obj_t *name = lv_label_create(row);
-        lv_label_set_text_fmt(name, "%s", a->project);
-        lv_obj_set_style_text_font(name, &lv_font_montserrat_16, 0);
-        lv_obj_set_style_text_color(name, COL_TEXT, 0);
-        lv_obj_align(name, LV_ALIGN_LEFT_MID, 30, -8);
-
-        lv_obj_t *sub = lv_label_create(row);
-        lv_label_set_text_fmt(sub, "%s - %s", a->agent, a->status);
-        lv_obj_set_style_text_font(sub, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(sub, COL_MUTED, 0);
-        lv_obj_align(sub, LV_ALIGN_LEFT_MID, 30, 12);
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        if (!cfg->hosts[h].enabled) {
+            continue;
+        }
+        add_host_section(h);
+        int shown = 0;
+        for (int i = 0; i < s_ui_agent_count; i++) {
+            if (s_ui_agents[i].host == h) {
+                add_agent_row(i);
+                shown++;
+            }
+        }
+        if (shown == 0) {
+            lv_obj_t *empty = lv_label_create(s_list_panel);
+            lv_label_set_text(empty, herdr_model_get_conn(h) == HERDR_CONN_ONLINE
+                              ? "  nenhum agente ativo" : "  aguardando a ponte...");
+            lv_obj_set_style_text_color(empty, COL_MUTED, 0);
+            lv_obj_set_style_text_font(empty, &lv_font_montserrat_12, 0);
+        }
     }
 }
 
@@ -334,11 +421,11 @@ static void build_blocked_modal(void)
     lv_obj_set_style_bg_color(s_blocked_modal, lv_color_hex(0x201014), 0);
     lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
 
-    lv_obj_t *title = lv_label_create(s_blocked_modal);
-    lv_label_set_text(title, LV_SYMBOL_WARNING "  aprovacao pendente");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(title, COL_BLOCKED, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 12, 10);
+    s_blocked_title = lv_label_create(s_blocked_modal);
+    lv_label_set_text(s_blocked_title, LV_SYMBOL_WARNING "  aprovacao pendente");
+    lv_obj_set_style_text_font(s_blocked_title, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_blocked_title, COL_BLOCKED, 0);
+    lv_obj_align(s_blocked_title, LV_ALIGN_TOP_LEFT, 12, 10);
 
     lv_obj_t *dismiss = lv_btn_create(s_blocked_modal);
     lv_obj_set_size(dismiss, 44, 32);
@@ -405,20 +492,34 @@ static void build_keyboard_overlay(void)
 
 static void refresh_conn(void)
 {
-    herdr_conn_state_t conn = herdr_model_get_conn();
-    switch (conn) {
-    case HERDR_CONN_ONLINE:
-        lv_obj_set_style_bg_color(s_conn_dot, COL_IDLE, 0);
-        lv_label_set_text(s_conn_label, "online");
-        break;
-    case HERDR_CONN_CONNECTING:
-        lv_obj_set_style_bg_color(s_conn_dot, COL_WORKING, 0);
-        lv_label_set_text(s_conn_label, "conectando");
-        break;
-    default:
+    const panel_cfg_t *cfg = panel_cfg_get();
+    int total = 0;
+    int online = 0;
+    herdr_conn_state_t single = HERDR_CONN_OFFLINE;
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        if (!cfg->hosts[h].enabled) {
+            continue;
+        }
+        total++;
+        herdr_conn_state_t c = herdr_model_get_conn(h);
+        single = c;
+        online += (c == HERDR_CONN_ONLINE);
+    }
+
+    if (total == 0) {
         lv_obj_set_style_bg_color(s_conn_dot, COL_OFFLINE, 0);
-        lv_label_set_text(s_conn_label, "offline");
-        break;
+        lv_label_set_text(s_conn_label, "sem hosts");
+    } else if (total == 1) {
+        lv_obj_set_style_bg_color(s_conn_dot,
+            single == HERDR_CONN_ONLINE ? COL_IDLE :
+            single == HERDR_CONN_CONNECTING ? COL_WORKING : COL_OFFLINE, 0);
+        lv_label_set_text(s_conn_label,
+            single == HERDR_CONN_ONLINE ? "online" :
+            single == HERDR_CONN_CONNECTING ? "conectando" : "offline");
+    } else {
+        lv_obj_set_style_bg_color(s_conn_dot,
+            online == total ? COL_IDLE : online > 0 ? COL_WORKING : COL_OFFLINE, 0);
+        lv_label_set_text_fmt(s_conn_label, "%d/%d online", online, total);
     }
 }
 
@@ -427,6 +528,8 @@ static void refresh_blocked(void)
     bool active = herdr_model_get_blocked(&s_ui_blocked);
     s_ui_blocked.active = active;
     if (active) {
+        lv_label_set_text_fmt(s_blocked_title, LV_SYMBOL_WARNING "  aprovacao pendente - %s",
+                              host_label(s_ui_blocked.host));
         lv_label_set_text(s_blocked_prompt, s_ui_blocked.prompt);
         for (int i = 0; i < HERDR_MAX_OPTIONS; i++) {
             if (i < s_ui_blocked.option_count) {
@@ -450,7 +553,8 @@ static void refresh_detail(void)
     }
     /* status do agente no header do detalhe */
     for (int i = 0; i < s_ui_agent_count; i++) {
-        if (strcmp(s_ui_agents[i].pane_id, s_detail_pane) == 0) {
+        if (s_ui_agents[i].host == s_detail_host &&
+            strcmp(s_ui_agents[i].pane_id, s_detail_pane) == 0) {
             lv_obj_set_style_bg_color(s_detail_dot, status_color(s_ui_agents[i].status), 0);
             break;
         }
@@ -459,6 +563,7 @@ static void refresh_detail(void)
        Seguro porque esta função roda exclusivamente na task da LVGL. */
     static herdr_pane_content_t content;
     if (herdr_model_get_pane_content(&content) &&
+        content.host == s_detail_host &&
         strcmp(content.pane_id, s_detail_pane) == 0 &&
         strcmp(lv_label_get_text(s_term_label), content.content) != 0) {
         lv_label_set_text(s_term_label, content.content);
@@ -472,7 +577,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     /* read_pane periódico com o detalhe aberto */
     if (s_detail_open && ++s_poll_tick >= DETAIL_POLL_TICKS) {
         s_poll_tick = 0;
-        herdr_conn_read_pane(s_detail_pane, 40);
+        herdr_conn_read_pane(s_detail_host, s_detail_pane, 40);
     }
 
     uint32_t gen = herdr_model_generation();
@@ -481,7 +586,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     }
     s_last_generation = gen;
 
-    s_ui_agent_count = herdr_model_get_agents(s_ui_agents, HERDR_MAX_AGENTS);
+    s_ui_agent_count = herdr_model_get_agents(s_ui_agents, HERDR_MAX_AGENTS_TOTAL);
     refresh_conn();
     if (!s_detail_open) {
         rebuild_list_rows();
@@ -499,6 +604,7 @@ void herdr_ui_init(void)
     build_detail_panel();
     build_blocked_modal();
     build_keyboard_overlay();
+    herdr_ui_settings_init();
     rebuild_list_rows();
 
     lv_timer_create(ui_timer_cb, 500, NULL);

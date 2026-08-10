@@ -1,9 +1,10 @@
 /**
  * @file
- * @brief Conexão com a ponte herdr-assist (TCP + JSON por linha).
+ * @brief Conexões com as pontes herdr-assist (TCP + JSON por linha).
  *
- * A ponte entrega o estado por push, então não há polling: a task de conexão
- * fica bloqueada na leitura e só acorda quando o Herdr avisa que algo mudou.
+ * Uma task por host habilitado em panel_cfg; cada uma reconecta sozinha.
+ * As pontes entregam o estado por push, então não há polling: cada task fica
+ * bloqueada na leitura e só acorda quando o Herdr daquele host avisa mudança.
  */
 
 #pragma once
@@ -14,15 +15,16 @@
 extern "C" {
 #endif
 
-/** Sobe a task de conexão (reconecta sozinha). Chamar depois de ter IP. */
+/** Sobe uma task de conexão por host habilitado (esperam o Wi-Fi sozinhas). */
 esp_err_t herdr_conn_start(void);
 
-/* Comandos painel→ponte. Retornam ESP_FAIL se não houver conexão. */
-esp_err_t herdr_conn_read_pane(const char *pane_id, int lines);
-esp_err_t herdr_conn_send_keys(const char *pane_id, const char *const *keys, int key_count);
-esp_err_t herdr_conn_send_text(const char *pane_id, const char *text);
-esp_err_t herdr_conn_respond(const char *pane_id, const char *text);
-esp_err_t herdr_conn_focus(const char *pane_id);
+/* Comandos painel→ponte, roteados pelo índice do host em panel_cfg.
+   Retornam ESP_FAIL se o host não estiver conectado. */
+esp_err_t herdr_conn_read_pane(int host, const char *pane_id, int lines);
+esp_err_t herdr_conn_send_keys(int host, const char *pane_id, const char *const *keys, int key_count);
+esp_err_t herdr_conn_send_text(int host, const char *pane_id, const char *text);
+esp_err_t herdr_conn_respond(int host, const char *pane_id, const char *text);
+esp_err_t herdr_conn_focus(int host, const char *pane_id);
 
 #ifdef __cplusplus
 }

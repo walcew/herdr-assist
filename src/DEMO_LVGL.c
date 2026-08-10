@@ -5,8 +5,10 @@
 #include "esp_bsp.h"
 #include "lv_port.h"
 #include "net.h"
+#include "panel_cfg.h"
 #include "herdr_model.h"
 #include "herdr_ui.h"
+#include "herdr_ui_settings.h"
 #include "herdr_conn.h"
 #include <esp_log.h>   // Add this line to include the header file that declares ESP_LOGI
 #include <esp_flash.h> // Add this line to include the header file that declares esp_flash_t
@@ -76,6 +78,10 @@ void setup()
   ESP_LOGI(TAG, "Minimum free heap size: %" PRIu32 " bytes", esp_get_minimum_free_heap_size());
   size_t freePsram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
   ESP_LOGI(TAG, "Free PSRAM: %d bytes", freePsram);
+
+  logSection("Config");
+  panel_cfg_init();
+
   logSection("Initialize panel device");
   // ESP_LOGI(TAG, "Initialize panel device");
   bsp_display_cfg_t cfg = {
@@ -115,9 +121,22 @@ void setup()
   bsp_display_unlock();
 
   logSection("Wi-Fi");
-  net_wifi_start();
+  net_wifi_init();
+  if (panel_cfg_wifi_ok())
+  {
+    const panel_cfg_t *cfg = panel_cfg_get();
+    net_wifi_connect(cfg->wifi_ssid, cfg->wifi_pass);
+  }
+  else
+  {
+    /* primeiro boot: sem rede salva, abre direto as configuracoes */
+    ESP_LOGI(TAG, "sem Wi-Fi configurado, abrindo tela de configuracoes");
+    bsp_display_lock(0);
+    herdr_ui_settings_open();
+    bsp_display_unlock();
+  }
 
-  logSection("Ponte");
+  logSection("Pontes");
   herdr_conn_start();
 
   logSection("LVGL porting example end");
