@@ -78,8 +78,26 @@ O Herdr sobe a ponte junto com a sessão a partir do próximo boot; para subir a
 reiniciar, rode a ação `Reiniciar a ponte` do plugin. Só stdlib do Python — funciona com
 o `python3` de fábrica do macOS (3.9+), sem toolchain.
 
-Depois pegue o token e cadastre-o no host correspondente na tela de configurações do
-painel. Pela CLI (funciona em qualquer situação, inclusive por SSH):
+### Pareando o painel
+
+Digitar 32 caracteres hexadecimais num touch de 3,5" é inviável, então o sentido da
+configuração se inverte: **o host manda a configuração pronta para o painel**.
+
+1. No painel: **Configurações → Parear com um host**. A tela mostra um código de 6
+   caracteres (os últimos bytes do MAC) e passa a se anunciar por broadcast UDP por 3
+   minutos, aceitando configuração na porta 9376.
+2. No Herdr do host: ação **Abrir painel de administração** (ou
+   `herdr plugin pane open --plugin herdr-assist --entrypoint admin`) → tecla `p`.
+3. Escolha na lista o código que aparece na tela do painel.
+
+O host envia nome, endereço, porta e token; o painel grava na NVS e reinicia já
+conectado. O host é registrado com o **hostname da máquina** — nada é digitado no touch.
+
+A janela só abre por toque e dura 3 minutos. O código serve para você conferir que está
+pareando com o painel certo, e não com outro dispositivo que esteja anunciando.
+
+A mesma tela de administração mostra o estado da ponte, o token e os painéis conectados,
+e permite girar o token (`r`) ou reiniciar a ponte (`x`). Pela CLI, o token também sai em:
 
 ```bash
 cat "$(herdr plugin config-dir herdr-assist)/token"
@@ -103,9 +121,11 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 
 | Arquivo | Papel |
 |---|---|
-| `plugin/herdr-plugin.toml` | Manifest do plugin do Herdr (startup, ações show/restart) |
+| `plugin/herdr-plugin.toml` | Manifest do plugin do Herdr (startup, pane de administração, ações) |
 | `plugin/start.sh` | Startup do plugin: sobe a ponte destacada, idempotente, gera token |
 | `plugin/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização |
+| `plugin/admin.py` | Tela de administração no Herdr: status, token, pareamento, girar token |
+| `src/pairing.c` | Modo de pareamento do painel: anúncio por broadcast + recepção da config |
 | `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |
 | `src/panel_cfg.c` | Configuração persistente (NVS): rede Wi-Fi + até 4 hosts Herdr |
 | `src/net.c` | Wi-Fi station com reconexão automática e scan para a tela de config |

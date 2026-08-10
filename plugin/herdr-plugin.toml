@@ -16,9 +16,24 @@ platforms = ["macos", "linux"]
 [[startup]]
 command = ["./start.sh"]
 
+# Tela de administração: status, token, pareamento e reinício num lugar só.
+# É a superfície principal — as ações abaixo são atalhos para casos pontuais.
+[[panes]]
+id = "admin"
+title = "herdr-assist"
+description = "Ponte do painel: status, token e pareamento"
+placement = "overlay"
+command = ["python3", "admin.py"]
+
 # contexts é o que faz a ação aparecer nos menus do Herdr; sem ele, a ação
-# existe mas só pode ser chamada pela CLI. "global" porque nenhuma das duas
+# existe mas só pode ser chamada pela CLI. "global" porque nenhuma delas
 # depende do workspace/aba/pane em foco.
+[[actions]]
+id = "admin"
+title = "Abrir painel de administração"
+contexts = ["global"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "herdr-assist", "--entrypoint", "admin"]
+
 [[actions]]
 id = "show-token"
 title = "Mostrar token do painel"

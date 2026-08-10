@@ -9,6 +9,7 @@
 #include "esp_system.h"
 
 #include "net.h"
+#include "pairing.h"
 #include "panel_cfg.h"
 #include "ui_theme.h"
 
@@ -20,6 +21,7 @@ typedef enum {
     VIEW_SCAN,
     VIEW_PASS,
     VIEW_HOST,
+    VIEW_PAIR,
 } view_t;
 
 static lv_obj_t *s_panel;
@@ -33,6 +35,8 @@ static lv_obj_t *s_ta_name;
 static lv_obj_t *s_ta_host;
 static lv_obj_t *s_ta_port;
 static lv_obj_t *s_ta_token;
+static lv_obj_t *s_pair_status;
+static lv_timer_t *s_pair_timer;
 
 static panel_cfg_t s_edit;          /* cópia em edição; só vale ao salvar */
 static view_t s_view;
@@ -45,6 +49,7 @@ static void show_main(void);
 static void show_scan(void);
 static void show_pass(const char *ssid);
 static void show_host(int idx);
+static void show_pair(void);
 static void update_toast(void);
 
 /* ---------- teclado ---------- */
@@ -348,7 +353,148 @@ static void show_host(int idx)
     lv_obj_center(rl);
 }
 
+/* ---------- view: pareamento ---------- */
+
+static void pair_leave(void)
+{
+    if (s_pair_timer) {
+        lv_timer_del(s_pair_timer);
+        s_pair_timer = NULL;
+    }
+    pairing_stop();
+}
+
+static void back_from_pair_cb(lv_event_t *e)
+{
+    (void)e;
+    pair_leave();
+    show_main();
+}
+
+/**
+ * Grava o host recebido e reinicia.
+ *
+ * A gravação acontece aqui, na task da LVGL, e não na task de pareamento:
+ * assim a NVS tem um único escritor, como no resto da tela. Parte da config
+ * salva (não de s_edit) porque o pareamento é uma ação completa em si — o que
+ * estiver pendente de salvar continua pendente, sem virar efeito colateral.
+ */
+static void pair_apply(const panel_host_t *h)
+{
+    panel_cfg_t cfg = *panel_cfg_get();
+    int slot = -1;
+    for (int i = 0; i < CFG_MAX_HOSTS; i++) {
+        /* reparear o mesmo endereço atualiza o slot em vez de duplicar */
+        if (strcmp(cfg.hosts[i].host, h->host) == 0 && cfg.hosts[i].host[0]) {
+            slot = i;
+            break;
+        }
+        if (slot < 0 && cfg.hosts[i].host[0] == '\0') {
+            slot = i;
+        }
+    }
+    if (slot < 0) {
+        lv_label_set_text(s_pair_status, "Sem espaço: remova um host antes de parear.");
+        lv_obj_set_style_text_color(s_pair_status, UI_BLOCKED, 0);
+        return;
+    }
+    cfg.hosts[slot] = *h;
+    panel_cfg_save(&cfg);
+    lv_label_set_text_fmt(s_pair_status, "Pareado com %s.\nReiniciando...", h->name);
+    lv_obj_set_style_text_color(s_pair_status, UI_IDLE, 0);
+    lv_refr_now(NULL);            /* pinta o aviso antes de sumir a tela */
+    esp_restart();
+}
+
+static void pair_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    panel_host_t h;
+    switch (pairing_state()) {
+    case PAIRING_DONE:
+        if (pairing_result(&h)) {
+            pair_leave();
+            pair_apply(&h);
+        }
+        break;
+    case PAIRING_WAITING:
+        lv_label_set_text_fmt(s_pair_status, "Aguardando um host... (%ds)",
+                              pairing_seconds_left());
+        break;
+    default:
+        lv_label_set_text(s_pair_status, "Janela encerrada. Volte e tente de novo.");
+        lv_obj_set_style_text_color(s_pair_status, UI_MUTED, 0);
+        pair_leave();
+        break;
+    }
+}
+
+static void show_pair(void)
+{
+    s_view = VIEW_PAIR;
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
+    build_bar("Parear", back_from_pair_cb, NULL);
+    hide_kb();
+    lv_obj_clean(s_content);
+
+    lv_obj_t *card = ui_card(s_content, 8);
+    lv_obj_set_size(card, LV_PCT(100), 150);
+    lv_obj_set_style_pad_all(card, 12, 0);
+
+    lv_obj_t *cap = lv_label_create(card);
+    lv_label_set_text(cap, "Este painel");
+    lv_obj_set_style_text_font(cap, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(cap, UI_MUTED, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_MID, 0, 0);
+
+    lv_obj_t *id = lv_label_create(card);
+    lv_label_set_text(id, pairing_device_id());
+    lv_obj_set_style_text_font(id, &lv_font_ui_clock_44, 0);
+    lv_obj_set_style_text_color(id, UI_TEXT, 0);
+    lv_obj_align(id, LV_ALIGN_TOP_MID, 0, 22);
+
+    lv_obj_t *hint = lv_label_create(card);
+    lv_label_set_text(hint, "Escolha este código no host");
+    lv_obj_set_style_text_font(hint, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(hint, UI_MUTED, 0);
+    lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    s_pair_status = lv_label_create(s_content);
+    lv_label_set_text(s_pair_status, "Iniciando...");
+    lv_obj_set_style_text_font(s_pair_status, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(s_pair_status, UI_WORKING, 0);
+    lv_obj_set_width(s_pair_status, LV_PCT(100));
+    lv_label_set_long_mode(s_pair_status, LV_LABEL_LONG_WRAP);
+
+    lv_obj_t *steps = lv_label_create(s_content);
+    lv_label_set_text(steps,
+        "No host, com o Herdr aberto:\n\n"
+        "1. Abra o painel do plugin herdr-assist\n"
+        "2. Escolha \"Parear painel\"\n"
+        "3. Selecione o código acima\n\n"
+        "O host envia nome, endereço e token —\n"
+        "nada precisa ser digitado aqui.");
+    lv_obj_set_style_text_font(steps, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(steps, UI_MUTED, 0);
+    lv_obj_set_width(steps, LV_PCT(100));
+    lv_label_set_long_mode(steps, LV_LABEL_LONG_WRAP);
+
+    if (pairing_start() != ESP_OK) {
+        lv_label_set_text(s_pair_status, "Não foi possível abrir a porta de pareamento.");
+        lv_obj_set_style_text_color(s_pair_status, UI_BLOCKED, 0);
+        return;
+    }
+    s_pair_timer = lv_timer_create(pair_tick_cb, 500, NULL);
+}
+
 /* ---------- view: principal ---------- */
+
+static void pair_open_cb(lv_event_t *e)
+{
+    (void)e;
+    show_pair();
+}
 
 static void wifi_change_cb(lv_event_t *e)
 {
@@ -470,11 +616,20 @@ static void show_main(void)
         lv_obj_add_event_cb(sw, host_switch_cb, LV_EVENT_VALUE_CHANGED, (void *)(intptr_t)i);
     }
     if (has_free) {
+        /* caminho principal: o host manda a config pronta, sem digitação */
+        lv_obj_t *pair = make_row(pair_open_cb, NULL, 44);
+        lv_obj_set_style_bg_color(pair, UI_IDLE, 0);
+        lv_obj_t *pl = lv_label_create(pair);
+        lv_label_set_text(pl, LV_SYMBOL_WIFI "  Parear com um host");
+        lv_obj_set_style_text_font(pl, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(pl, UI_TERM_BG, 0);
+        lv_obj_center(pl);
+
         lv_obj_t *add = make_row(add_host_cb, NULL, 44);
         lv_obj_t *al = lv_label_create(add);
-        lv_label_set_text(al, LV_SYMBOL_PLUS "  Adicionar host");
+        lv_label_set_text(al, LV_SYMBOL_PLUS "  Adicionar manualmente");
         lv_obj_set_style_text_font(al, &lv_font_ui_14, 0);
-        lv_obj_set_style_text_color(al, UI_TEXT, 0);
+        lv_obj_set_style_text_color(al, UI_MUTED, 0);
         lv_obj_center(al);
     }
     update_toast();
