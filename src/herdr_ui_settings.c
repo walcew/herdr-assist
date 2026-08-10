@@ -608,6 +608,11 @@ static void show_main(void)
 
         lv_obj_t *sw = lv_switch_create(row);
         lv_obj_set_size(sw, 48, 26);
+        /* 26 px de altura é alvo pequeno demais para o dedo: o toque que erra o
+           switch cai na linha e abre a edição. A área estendida cobre a altura
+           inteira da row, e o hit test só desce aos filhos dentro das coords da
+           row — então nada é roubado das linhas vizinhas. */
+        lv_obj_set_ext_click_area(sw, 12);
         lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
         lv_obj_set_style_bg_color(sw, UI_SWITCH_OFF, 0);
         if (h->enabled) {
