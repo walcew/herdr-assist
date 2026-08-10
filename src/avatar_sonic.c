@@ -50,7 +50,7 @@ enum {
     ANIM_IDLE,        /* espera do jogo: parado -> impaciente batendo o pé */
     ANIM_DUCK,        /* agachado, cochilando */
     ANIM_RUN,         /* correndo (trabalhando) */
-    ANIM_CHEER,       /* comemorando de frente (terminou) */
+    ANIM_CHEER,       /* levanta a mão e balança o dedo (terminou) */
     ANIM_PUSH,        /* empurrando parede invisível (bloqueado) */
     ANIM_COUNT,
 };
@@ -67,7 +67,7 @@ static const sonic_anim_t s_anims[ANIM_COUNT] = {
     [ANIM_IDLE]  = ANIM_DEF(idle,  IDLE,  100),
     [ANIM_DUCK]  = ANIM_DEF(duck,  DUCK,  500),
     [ANIM_RUN]   = ANIM_DEF(run,   RUN,   60),
-    [ANIM_CHEER] = ANIM_DEF(cheer, CHEER, 150),
+    [ANIM_CHEER] = ANIM_DEF(cheer, CHEER, 133),
     [ANIM_PUSH]  = ANIM_DEF(push,  PUSH,  200),
 };
 

@@ -6,10 +6,10 @@
 
 #include <stdint.h>
 
-#define SONIC_CHEER_SEQ_LEN  2
-#define SONIC_CHEER_SEQ_LOOP 0
-static const uint8_t sonic_cheer_seq[2] = {
-    0, 1,
+#define SONIC_CHEER_SEQ_LEN  11
+#define SONIC_CHEER_SEQ_LOOP 7
+static const uint8_t sonic_cheer_seq[11] = {
+    0, 1, 1, 1, 1, 1, 1, 2, 1, 3, 1,
 };
 
 #define SONIC_DUCK_SEQ_LEN  2

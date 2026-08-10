@@ -26,18 +26,20 @@ PNG2RGB = REPO / "clawd-tank" / "tools" / "png2rgb565.py"
 ASSETS = REPO / "firmware" / "src" / "assets"
 FRAMES_DIR = Path(__file__).resolve().parent / "sonic_frames"
 
-# Animações exportadas: nome -> frames únicos (ids de mapping) + sequência.
-# "idle" é extraída na íntegra da animação de espera do jogo (AniSonic05).
-# ko = caído de costas (D7/D8), cheer = comemorando de frente (D5/D6),
-# push = empurrando (anim $22), duck = agachado (anim $07, dorme no frame 1).
+# Animações montadas à mão: nome -> frames únicos (ids de mapping) + sequência.
+# ko = caído de costas (D7/D8), push = empurrando (anim $22),
+# duck = agachado (anim $07, dorme no frame 1).
 ANIMS = {
-    "run":   {"frames": [0x21, 0x22, 0x23, 0x24], "seq": [0, 1, 2, 3], "loop": 0},
-    "push":  {"frames": [0x90, 0x91, 0x92],       "seq": [0, 1, 2, 1], "loop": 0},
-    "cheer": {"frames": [0xD5, 0xD6],             "seq": [0, 1],       "loop": 0},
-    "ko":    {"frames": [0xD7, 0xD8],             "seq": [0, 1],       "loop": 0},
-    "duck":  {"frames": [0xC3, 0xC4],             "seq": [0, 1],       "loop": 1},
+    "run":  {"frames": [0x21, 0x22, 0x23, 0x24], "seq": [0, 1, 2, 3], "loop": 0},
+    "push": {"frames": [0x90, 0x91, 0x92],       "seq": [0, 1, 2, 1], "loop": 0},
+    "ko":   {"frames": [0xD7, 0xD8],             "seq": [0, 1],       "loop": 0},
+    "duck": {"frames": [0xC3, 0xC4],             "seq": [0, 1],       "loop": 1},
 }
-IDLE_ANIM_ID = 0x05
+
+# Animações copiadas na íntegra do jogo — frames, ordem e ponto de loop saem do
+# próprio script de animação. $05 = espera (fica parado, depois bate o pé);
+# $13 = levanta a mão e fica balançando o dedo.
+GAME_ANIMS = {"idle": 0x05, "cheer": 0x13}
 
 LABEL_RE = re.compile(r"^(\w+):")
 DC_RE = re.compile(r"dc\.(b|w)\s+(.*)")
@@ -157,9 +159,9 @@ def render_frame(map_bytes, vram):
     return img, (x0, y0)
 
 
-def idle_from_game(anim_blocks, anim_order):
-    """Extrai a animação de espera (frames únicos + sequência + ponto de loop)."""
-    data = bytes(anim_blocks[anim_order[IDLE_ANIM_ID]])
+def anim_from_game(anim_blocks, anim_order, anim_id):
+    """Extrai uma animação do jogo (frames únicos + sequência + ponto de loop)."""
+    data = bytes(anim_blocks[anim_order[anim_id]])
     entries = []
     loop = 0
     i = 1
@@ -188,7 +190,8 @@ def main():
     anim_order, anim_blocks = parse_asm(SONIC / "Anim - Sonic.asm")
 
     anims = dict(ANIMS)
-    anims["idle"] = idle_from_game(anim_blocks, anim_order)
+    for name, anim_id in GAME_ANIMS.items():
+        anims[name] = anim_from_game(anim_blocks, anim_order, anim_id)
 
     ASSETS.mkdir(exist_ok=True)
     seq_lines = [
