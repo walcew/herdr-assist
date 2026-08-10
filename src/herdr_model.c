@@ -99,18 +99,29 @@ static void copy_utf8_safe(char *dst, const char *src, size_t dst_size)
 }
 
 /**
- * Troca por '*' o U+2733 (✳), que o Claude usa nos títulos mas a JetBrainsMono
- * Nerd não tem — sem isso vira retângulo vazio na tela. Substituição in-place:
- * E2 9C B3 (3 bytes) vira '*' e o resto da string desliza para trás.
+ * Substitui o que a fonte do terminal não desenha, evitando retângulos vazios.
+ *
+ * A fonte traz a JetBrainsMono Nerd inteira, então sobra pouco: o ⎿ (U+23BF) da
+ * árvore de tool calls, que a fonte não tem e vira └ (mesmo sentido, mesmos 3
+ * bytes), e os emojis, que nenhuma fonte monoespaçada cobre.
+ *
+ * Emoji e ícone Nerd são ambos 4 bytes em UTF-8 e só se distinguem pelo primeiro:
+ * 0xF0 abre os planos 1–3 (onde vivem os emojis) e 0xF3 abre a área privada
+ * U+F0000+ (ícones Material Design, que a fonte tem). Só os primeiros são trocados.
  */
 static void replace_missing_glyphs(char *s)
 {
-    char *w = s;
-    for (const char *r = s; *r; ) {
-        if ((unsigned char)r[0] == 0xE2 && (unsigned char)r[1] == 0x9C &&
-            (unsigned char)r[2] == 0xB3) {
-            *w++ = '*';
+    unsigned char *w = (unsigned char *)s;
+    const unsigned char *r = (const unsigned char *)s;
+    while (*r) {
+        if (r[0] == 0xE2 && r[1] == 0x8E && r[2] == 0xBF) {
+            *w++ = 0xE2;            /* ⎿ -> └ */
+            *w++ = 0x94;
+            *w++ = 0x94;
             r += 3;
+        } else if (r[0] == 0xF0 && r[1] == 0x9F && r[2] && r[3]) {
+            *w++ = '*';             /* emoji -> marcador de uma coluna */
+            r += 4;
         } else {
             *w++ = *r++;
         }
