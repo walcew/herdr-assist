@@ -42,6 +42,7 @@ extern "C" {
 LV_FONT_DECLARE(lv_font_ui_12);
 LV_FONT_DECLARE(lv_font_ui_14);
 LV_FONT_DECLARE(lv_font_ui_16);
+LV_FONT_DECLARE(lv_font_ui_bold_16);   /* títulos das topbars */
 LV_FONT_DECLARE(lv_font_ui_num_20);
 LV_FONT_DECLARE(lv_font_ui_clock_44);
 LV_FONT_DECLARE(lv_font_terminal_12);

@@ -80,7 +80,7 @@ lv_obj_t *ui_topbar(lv_obj_t *parent, const char *title, lv_obj_t **out_title)
     if (title) {
         lv_obj_t *t = lv_label_create(bar);
         lv_label_set_text(t, title);
-        lv_obj_set_style_text_font(t, &lv_font_ui_16, 0);
+        lv_obj_set_style_text_font(t, &lv_font_ui_bold_16, 0);
         lv_obj_set_style_text_color(t, UI_TEXT, 0);
         lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
         lv_obj_set_flex_grow(t, 1);

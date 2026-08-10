@@ -677,7 +677,7 @@ static void build_detail(void)
 
     s_detail_title = lv_label_create(bar);
     lv_label_set_text(s_detail_title, "");
-    lv_obj_set_style_text_font(s_detail_title, &lv_font_ui_16, 0);
+    lv_obj_set_style_text_font(s_detail_title, &lv_font_ui_bold_16, 0);
     lv_obj_set_style_text_color(s_detail_title, UI_TEXT, 0);
     lv_label_set_long_mode(s_detail_title, LV_LABEL_LONG_DOT);
     lv_obj_set_flex_grow(s_detail_title, 1);
@@ -754,7 +754,7 @@ static void build_blocked_modal(void)
 
     s_blocked_title = lv_label_create(s_blocked_modal);
     lv_label_set_text(s_blocked_title, LV_SYMBOL_WARNING " Aprovação pendente");
-    lv_obj_set_style_text_font(s_blocked_title, &lv_font_ui_16, 0);
+    lv_obj_set_style_text_font(s_blocked_title, &lv_font_ui_bold_16, 0);
     lv_obj_set_style_text_color(s_blocked_title, UI_BLOCKED, 0);
     lv_obj_align(s_blocked_title, LV_ALIGN_TOP_LEFT, 12, 16);
 
