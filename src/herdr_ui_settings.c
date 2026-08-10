@@ -26,6 +26,7 @@ static lv_obj_t *s_panel;
 static lv_obj_t *s_bar;
 static lv_obj_t *s_content;
 static lv_obj_t *s_dock;
+static lv_obj_t *s_toast;
 static lv_obj_t *s_kb;
 static lv_obj_t *s_ta_pass;
 static lv_obj_t *s_ta_name;
@@ -44,6 +45,7 @@ static void show_main(void);
 static void show_scan(void);
 static void show_pass(const char *ssid);
 static void show_host(int idx);
+static void update_toast(void);
 
 /* ---------- teclado ---------- */
 
@@ -178,6 +180,7 @@ static void show_pass(const char *ssid)
     s_view = VIEW_PASS;
     strlcpy(s_sel_ssid, ssid, CFG_SSID_LEN);
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
     build_bar("Senha", back_to_scan_cb, NULL);
     lv_obj_clean(s_content);
 
@@ -268,6 +271,7 @@ static void show_scan(void)
 {
     s_view = VIEW_SCAN;
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
     build_bar("Redes Wi-Fi", back_to_main_cb, NULL);
     hide_kb();
     lv_obj_clean(s_content);
@@ -314,6 +318,7 @@ static void show_host(int idx)
     s_view = VIEW_HOST;
     s_edit_host = idx;
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
     build_bar("Editar host", back_to_main_cb, host_apply_cb);
     hide_kb();
     lv_obj_clean(s_content);
@@ -361,6 +366,7 @@ static void host_switch_cb(lv_event_t *e)
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     lv_obj_t *sw = lv_event_get_target(e);
     s_edit.hosts[idx].enabled = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    update_toast();   /* único caminho de edição que não reconstrói a tela */
 }
 
 static void add_host_cb(lv_event_t *e)
@@ -374,6 +380,18 @@ static void add_host_cb(lv_event_t *e)
     }
 }
 
+/**
+ * true se a cópia em edição já difere do que está gravado.
+ *
+ * memcmp basta aqui: os dois lados nascem da mesma struct zerada em
+ * panel_cfg_init(), e as edições só usam strlcpy/memset — então os bytes
+ * depois do terminador acompanham, sem lixo capaz de gerar falso positivo.
+ */
+static bool cfg_dirty(void)
+{
+    return memcmp(&s_edit, panel_cfg_get(), sizeof(s_edit)) != 0;
+}
+
 static void save_cb(lv_event_t *e)
 {
     (void)e;
@@ -385,6 +403,17 @@ static void save_cb(lv_event_t *e)
     lv_obj_set_style_text_color(l, UI_TEXT, 0);
     /* reinício limpa Wi-Fi e conexões; mais simples e confiável que teardown */
     esp_restart();
+}
+
+/** O aviso de pendência só existe na tela principal, e só quando há mudança. */
+static void update_toast(void)
+{
+    if (s_view == VIEW_MAIN && cfg_dirty()) {
+        lv_obj_clear_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_toast);
+    } else {
+        lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 static void show_main(void)
@@ -448,6 +477,7 @@ static void show_main(void)
         lv_obj_set_style_text_color(al, UI_TEXT, 0);
         lv_obj_center(al);
     }
+    update_toast();
 }
 
 /* ---------- init/show ---------- */
@@ -470,6 +500,39 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     lv_obj_set_scroll_dir(s_content, LV_DIR_VER);
 
     s_dock = ui_dock(s_panel, UI_TAB_SETTINGS, dock_cb);
+
+    /* Flutua logo acima do dock: a edição fica só em memória até salvar, e sem
+       este aviso não há como perceber que falta aplicar. Tocar salva e reinicia. */
+    s_toast = lv_btn_create(s_panel);
+    lv_obj_set_size(s_toast, LV_HOR_RES - 24, 56);
+    lv_obj_align(s_toast, LV_ALIGN_BOTTOM_MID, 0, -68);
+    lv_obj_set_style_bg_color(s_toast, UI_PANEL, 0);
+    lv_obj_set_style_border_width(s_toast, 1, 0);
+    lv_obj_set_style_border_color(s_toast, UI_WORKING, 0);
+    lv_obj_set_style_radius(s_toast, 8, 0);
+    lv_obj_set_style_shadow_width(s_toast, 20, 0);
+    lv_obj_set_style_shadow_color(s_toast, lv_color_black(), 0);
+    lv_obj_set_style_shadow_ofs_y(s_toast, 6, 0);
+    lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_toast, save_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *ticon = lv_label_create(s_toast);
+    lv_label_set_text(ticon, LV_SYMBOL_SAVE);
+    lv_obj_set_style_text_font(ticon, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(ticon, UI_WORKING, 0);
+    lv_obj_align(ticon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    lv_obj_t *t1 = lv_label_create(s_toast);
+    lv_label_set_text(t1, "Configurações pendentes");
+    lv_obj_set_style_text_font(t1, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(t1, UI_TEXT, 0);
+    lv_obj_align(t1, LV_ALIGN_LEFT_MID, 32, -9);
+
+    lv_obj_t *t2 = lv_label_create(s_toast);
+    lv_label_set_text(t2, "Toque para aplicar e reiniciar");
+    lv_obj_set_style_text_font(t2, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(t2, UI_MUTED, 0);
+    lv_obj_align(t2, LV_ALIGN_LEFT_MID, 32, 10);
 
     s_kb = lv_keyboard_create(s_panel);
     lv_obj_set_size(s_kb, LV_HOR_RES, KB_H);
