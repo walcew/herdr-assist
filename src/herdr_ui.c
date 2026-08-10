@@ -90,6 +90,8 @@ static int status_rank(const char *status)
 
 /* ---------- navegação ---------- */
 
+static void rebuild_session_rows(void);
+
 static void show_tab(ui_tab_t tab)
 {
     s_tab = tab;
@@ -98,6 +100,9 @@ static void show_tab(ui_tab_t tab)
     herdr_ui_settings_hide();
     switch (tab) {
     case UI_TAB_SESSIONS:
+        /* a lista só se reconstrói com a aba aberta, então o que chegou
+           enquanto ela estava escondida precisa ser montado agora */
+        rebuild_session_rows();
         lv_obj_clear_flag(s_sessions, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_sessions);
         break;
@@ -216,8 +221,6 @@ static void blocked_dismiss_cb(lv_event_t *e)
     herdr_model_clear_blocked(s_ui_blocked.host, s_ui_blocked.pane_id);
     lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
 }
-
-static void rebuild_session_rows(void);
 
 static void toggle_group_cb(lv_event_t *e)
 {

@@ -97,6 +97,9 @@ lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
 
     lv_obj_t *dock = lv_obj_create(parent);
     lv_obj_set_size(dock, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    /* o dock flutua: sem isto, numa tela com flex (a home) ele entraria no
+       fluxo da coluna e o alinhamento central seria ignorado */
+    lv_obj_add_flag(dock, LV_OBJ_FLAG_IGNORE_LAYOUT);
     lv_obj_align(dock, LV_ALIGN_BOTTOM_MID, 0, -10);
     lv_obj_set_style_bg_color(dock, UI_PANEL, 0);
     lv_obj_set_style_border_width(dock, 1, 0);
