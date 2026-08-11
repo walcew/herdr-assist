@@ -35,7 +35,6 @@ extern "C" {
 #define UI_TERM_TEXT_HEX 0xaebfa0
 #define UI_TERM_BG     lv_color_hex(UI_TERM_BG_HEX)
 #define UI_TERM_TEXT   lv_color_hex(UI_TERM_TEXT_HEX)
-#define UI_MODAL_BG    lv_color_hex(0x181114)
 #define UI_SWITCH_OFF  lv_color_hex(0x2a2a2e)
 
 /* --- medidas --- */

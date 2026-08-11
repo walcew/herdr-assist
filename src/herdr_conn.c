@@ -45,7 +45,6 @@ typedef struct {
     char *rx;
     size_t rx_used;
     herdr_agent_t parse_agents[HERDR_MAX_AGENTS];
-    herdr_blocked_t parse_blocked;
     herdr_limits_t parse_limits[HERDR_MAX_PROVIDERS];
     bool used;
 } conn_slot_t;
@@ -159,41 +158,6 @@ static void handle_limits(conn_slot_t *s, const cJSON *root)
     herdr_model_set_limits(s->idx, s->parse_limits, n);
 }
 
-static void handle_blocked(conn_slot_t *s, const cJSON *root)
-{
-    const cJSON *pane = cJSON_GetObjectItem(root, "pane_id");
-    if (!cJSON_IsString(pane)) {
-        return;
-    }
-    herdr_blocked_t *b = &s->parse_blocked;
-    memset(b, 0, sizeof(*b));
-    b->host = (uint8_t)s->idx;
-    strlcpy(b->pane_id, pane->valuestring, HERDR_ID_LEN);
-    const cJSON *prompt = cJSON_GetObjectItem(root, "prompt");
-    if (cJSON_IsString(prompt)) {
-        strlcpy(b->prompt, prompt->valuestring, HERDR_PROMPT_LEN);
-    }
-    const cJSON *opts = cJSON_GetObjectItem(root, "options");
-    if (cJSON_IsArray(opts)) {
-        const cJSON *o;
-        cJSON_ArrayForEach(o, opts) {
-            if (b->option_count >= HERDR_MAX_OPTIONS) {
-                break;
-            }
-            const cJSON *label = cJSON_GetObjectItem(o, "label");
-            const cJSON *num = cJSON_GetObjectItem(o, "n");
-            if (!cJSON_IsString(label) || !cJSON_IsNumber(num)) {
-                continue;
-            }
-            herdr_option_t *opt = &b->options[b->option_count++];
-            strlcpy(opt->label, label->valuestring, HERDR_OPTION_LEN);
-            opt->num = (uint8_t)num->valueint;
-            opt->input = cJSON_IsTrue(cJSON_GetObjectItem(o, "input"));
-        }
-    }
-    herdr_model_set_blocked(b);
-}
-
 static void handle_line(conn_slot_t *s, char *line, size_t len)
 {
     cJSON *root = cJSON_ParseWithLength(line, len);
@@ -206,8 +170,6 @@ static void handle_line(conn_slot_t *s, char *line, size_t len)
         const char *t = type->valuestring;
         if (strcmp(t, "agents") == 0) {
             handle_agents(s, root);
-        } else if (strcmp(t, "blocked") == 0) {
-            handle_blocked(s, root);
         } else if (strcmp(t, "pane_content") == 0) {
             const cJSON *pane = cJSON_GetObjectItem(root, "pane_id");
             cJSON *content = cJSON_GetObjectItem(root, "content");
@@ -359,22 +321,6 @@ static esp_err_t send_with_text(int host, const char *type, const char *pane_id,
 esp_err_t herdr_conn_send_text(int host, const char *pane_id, const char *text)
 {
     return send_with_text(host, "send_text", pane_id, text);
-}
-
-/** Responde pelo número da opção; o rótulo vai junto para a ponte conferir se
- *  a tela ainda é a mesma antes de confirmar a escolha. */
-esp_err_t herdr_conn_respond(int host, const char *pane_id, int choice, const char *label)
-{
-    conn_slot_t *s = slot_for(host);
-    if (!s) {
-        return ESP_FAIL;
-    }
-    cJSON *root = cJSON_CreateObject();
-    cJSON_AddStringToObject(root, "type", "respond");
-    cJSON_AddStringToObject(root, "pane_id", pane_id);
-    cJSON_AddNumberToObject(root, "choice", choice);
-    cJSON_AddStringToObject(root, "label", label);
-    return send_json(s, root);
 }
 
 esp_err_t herdr_conn_focus(int host, const char *pane_id)

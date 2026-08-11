@@ -11,7 +11,6 @@
 static struct {
     herdr_agent_t agents[CFG_MAX_HOSTS][HERDR_MAX_AGENTS];
     int agent_count[CFG_MAX_HOSTS];
-    herdr_blocked_t blocked[CFG_MAX_HOSTS];
     struct {
         char     pane_id[HERDR_ID_LEN];
         uint8_t  host;
@@ -70,48 +69,7 @@ void herdr_model_set_agents(int host, const herdr_agent_t *agents, int count)
     for (int i = 0; i < count; i++) {
         s_model.agents[host][i].host = (uint8_t)host;
     }
-    /* blocked deixa de valer se o pane sumiu ou se o agente destravou */
-    herdr_blocked_t *b = &s_model.blocked[host];
-    if (b->active) {
-        bool still_blocked = false;
-        for (int i = 0; i < count; i++) {
-            if (strcmp(s_model.agents[host][i].pane_id, b->pane_id) == 0) {
-                still_blocked = strcmp(s_model.agents[host][i].status, "blocked") == 0;
-                break;
-            }
-        }
-        if (!still_blocked) {
-            b->active = false;
-            changed = true;
-        }
-    }
     if (changed) {
-        bump();
-    }
-    unlock();
-}
-
-void herdr_model_set_blocked(const herdr_blocked_t *blocked)
-{
-    if (!host_ok(blocked->host)) {
-        return;
-    }
-    lock();
-    s_model.blocked[blocked->host] = *blocked;
-    s_model.blocked[blocked->host].active = true;
-    bump();
-    unlock();
-}
-
-void herdr_model_clear_blocked(int host, const char *pane_id)
-{
-    if (!host_ok(host)) {
-        return;
-    }
-    lock();
-    herdr_blocked_t *b = &s_model.blocked[host];
-    if (b->active && strcmp(b->pane_id, pane_id) == 0) {
-        b->active = false;
         bump();
     }
     unlock();
@@ -298,21 +256,6 @@ int herdr_model_get_limits(herdr_limits_t *out, int max)
     }
     unlock();
     return n;
-}
-
-bool herdr_model_get_blocked(herdr_blocked_t *out)
-{
-    lock();
-    bool found = false;
-    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
-        if (s_model.blocked[h].active) {
-            *out = s_model.blocked[h];
-            found = true;
-            break;
-        }
-    }
-    unlock();
-    return found;
 }
 
 bool herdr_model_get_pane_content(char *pane_id, size_t id_size, int *host,

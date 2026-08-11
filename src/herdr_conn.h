@@ -32,7 +32,6 @@ esp_err_t herdr_conn_scroll_pane(int host, const char *pane_id, int lines, bool 
                                  int col, int row);
 esp_err_t herdr_conn_send_keys(int host, const char *pane_id, const char *const *keys, int key_count);
 esp_err_t herdr_conn_send_text(int host, const char *pane_id, const char *text);
-esp_err_t herdr_conn_respond(int host, const char *pane_id, int choice, const char *label);
 esp_err_t herdr_conn_focus(int host, const char *pane_id);
 
 #ifdef __cplusplus

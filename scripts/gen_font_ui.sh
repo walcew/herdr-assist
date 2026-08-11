@@ -35,21 +35,22 @@ import subprocess, sys
 mont, bold, fa, dejavu = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 # ASCII imprimível + Latin-1 Supplement (acentos do português e o · dos
-# rótulos) + pontuação tipográfica que os agentes escrevem e chega aos alertas
+# rótulos) + pontuação tipográfica que aparece em texto vindo dos agentes
 # (aspas curvas, travessões, bullet e a elipse que o clip() da ponte anexa;
 # 0x2010-0x2027 cobre tudo isso) + setas (Montserrat tem as quatro)
 LATIN = ["0x20-0x7E", "0xA0-0xFF", "0x2010-0x2027", "0x2190-0x2193"]
 
 # Símbolos de texto que a Montserrat não tem, tirados da DejaVu Sans (livre):
-# ✓ ✗ ⚠ ● — aparecem em prompts/opções extraídos do terminal pelos alertas.
+# ✓ ✗ ⚠ ● — usados em rótulos de status e em texto vindo do terminal.
 DEJAVU_EXTRA = [0x2713, 0x2717, 0x25CF, 0x26A0]
 
 # Símbolos usados pela UI e pelos widgets da LVGL (teclado, textarea).
-# Os cinco últimos não têm LV_SYMBOL_: os dois pares de ícones de agrupar e
-# ordenar da tela de sessões e o velocímetro da aba Dash, todos em ui_theme.h.
+# Os cinco sem LV_SYMBOL_ estão em ui_theme.h: os dois pares de ícones de
+# agrupar e ordenar da tela de sessões e o velocímetro da aba Dash. O 0xF0F3
+# (bell) é o beacon de decisão pendente da home.
 SYMBOLS = [0xF00B, 0xF00C, 0xF00D, 0xF013, 0xF015, 0xF053, 0xF054, 0xF067,
-           0xF06E, 0xF071, 0xF077, 0xF078, 0xF0C7, 0xF11C, 0xF1EB, 0xF2ED,
-           0xF55A, 0xF8A2, 0xF5FD, 0xF0C9, 0xF0DC, 0xF160, 0xF3FD]
+           0xF06E, 0xF071, 0xF077, 0xF078, 0xF0C7, 0xF0F3, 0xF11C, 0xF1EB,
+           0xF2ED, 0xF55A, 0xF8A2, 0xF5FD, 0xF0C9, 0xF0DC, 0xF160, 0xF3FD]
 
 # (arquivo, peso, tamanho, ranges do texto, inclui símbolos)
 FONTS = [

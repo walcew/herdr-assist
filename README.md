@@ -3,8 +3,8 @@
 Painel físico dedicado para monitorar e controlar sessões do [Herdr](https://herdr.dev) —
 o multiplexador de terminal para agentes de código. Roda num kit ESP32-S3 com display
 touch de 3.5", ficando na mesa ao lado do teclado: os agentes aparecem com o estado em
-cores, e as aprovações que travam o trabalho podem ser respondidas com um toque, sem
-precisar procurar a janela certa no terminal.
+cores, e quando um deles para para pedir uma decisão o painel toca um sino que abre a
+sessão certa com um toque, sem precisar procurar a janela no terminal.
 
 ## Hardware
 
@@ -38,10 +38,10 @@ sobe junto com a sessão — um plugin por máquina que você queira controlar p
 ```
 
 **Painel → ponte:** `hello` (token, obrigatório na 1ª linha), depois `read_pane`
-(leva também a geometria da tela do painel), `send_keys`, `send_text`, `respond`, `focus`,
+(leva também a geometria da tela do painel), `send_keys`, `send_text`, `focus`,
 `scroll_pane`, `release_pane`, `ping`.
-**Ponte → painel:** `agents` (estado de todos), `blocked` (aprovação pendente com as
-opções já detectadas), `pane_content` (tela do terminal **com SGR/cores**, fiel ao host —
+**Ponte → painel:** `agents` (estado de todos, incluindo quem está `blocked`),
+`pane_content` (tela do terminal **com SGR/cores**, fiel ao host —
 só linhas em branco do fim são removidas; quem emula é o motor do Ghostty embutido no
 Herdr, via `pane.read format:"ansi"`, e o painel só parseia SGR e pinta), `limits`
 (uso de limites dos provedores de IA para a aba Dash — coletado dos endpoints de uso
@@ -238,6 +238,18 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
   a uma linha. O eixo vertical do LVGL só é liberado quando o conteúdo não cabe
   (`term_view_set_ansi` alterna `LV_DIR_HOR`/`LV_DIR_ALL`), caso em que a trava de resolução
   falhou e rolar localmente é o certo.
+- **Decisão pendente é um beacon, não um formulário reconstruído.** Quando algum agente
+  entra em `blocked`, um sino vermelho aparece na home — na linha do relógio, do lado
+  oposto — balançando até alguém agir; o toque abre a sessão que está esperando (com o
+  número de sessões no rótulo quando é mais de uma). Antes disso, a ponte tentava
+  reconhecer o formulário por regex, mandava a pergunta e as opções detectadas, e o
+  painel montava um modal com um botão por opção; responder fazia a ponte navegar o
+  cursor por setas e confirmar. Isso saiu inteiro: com o terminal do painel já rodando na
+  resolução da tela e com rolagem, ver a pergunta como ela é e responder com ↑/↓/Enter é
+  mais fiel do que adivinhá-la — e some a classe de erro em que o botão não correspondia
+  ao que estava na tela. O que sustenta o beacon é o `agent_status` que o `agents` já
+  trazia. Consequência assumida: o alerta só existe na home (o modal aparecia sobre
+  qualquer tela).
 - **O relógio da home depende de SNTP** (`net.c`), com fuso fixo em UTC-3. Sem sincronizar,
   a home mostra `--:--` em vez de uma hora inventada.
 - **Detecção de conexão morta** (`herdr_conn.c`): com push, silêncio é o estado normal, então
@@ -256,8 +268,8 @@ O BSP, os drivers de display/touch e o port da LVGL vêm do
 que empacota o material original do fabricante (Shenzhen Jingcai / Guition). A LVGL 8.4
 está vendorizada em `libraries/lvgl`, podada dos demos e exemplos que não entram no build.
 
-O desenho do protocolo (os tipos `agents` / `blocked` / `pane_content` e a ideia de detectar
-as opções de aprovação para virar botões) veio do relay do
+O desenho do protocolo (os tipos `agents` / `pane_content`, e o `blocked` com as opções de
+aprovação detectadas, que existiu aqui até o beacon substituí-lo) veio do relay do
 [herdr-remote](https://github.com/dcolinmorgan/herdr-remote), usado como referência antes de
 trocarmos por uma ponte própria falando o socket nativo do Herdr.
 

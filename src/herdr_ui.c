@@ -29,12 +29,13 @@ static lv_obj_t *s_home;
 static lv_obj_t *s_sessions;
 static lv_obj_t *s_dash;
 static lv_obj_t *s_detail;
-static lv_obj_t *s_blocked_modal;
 static lv_obj_t *s_kb_overlay;
 
 /* --- home --- */
 static lv_obj_t *s_clock;
 static lv_obj_t *s_date;
+static lv_obj_t *s_beacon;      /* sino: alguma sessão espera decisão */
+static lv_obj_t *s_beacon_lbl;
 static lv_obj_t *s_host_area;
 
 typedef struct {
@@ -75,10 +76,7 @@ static lv_obj_t *s_detail_dot;
 static lv_obj_t *s_term_cont;
 static lv_obj_t *s_term_view;
 
-/* --- aprovação e teclado --- */
-static lv_obj_t *s_blocked_title;
-static lv_obj_t *s_blocked_prompt;
-static lv_obj_t *s_blocked_btns[HERDR_MAX_OPTIONS];
+/* --- teclado --- */
 static lv_obj_t *s_kb_ta;
 static lv_obj_t *s_keyboard;
 
@@ -86,11 +84,10 @@ static lv_obj_t *s_keyboard;
 static ui_tab_t s_tab = UI_TAB_HOME;
 static herdr_agent_t s_ui_agents[HERDR_MAX_AGENTS_TOTAL];
 static int s_ui_agent_count;
-static herdr_blocked_t s_ui_blocked;
 static char s_detail_pane[HERDR_ID_LEN];
 static int s_detail_host = -1;
 static bool s_detail_open;
-/* alvo do teclado: vem do detalhe ou da aprovação, que não compartilham estado */
+/* alvo do teclado; guardado à parte porque o detalhe pode fechar antes do envio */
 static char s_kb_pane[HERDR_ID_LEN];
 static int s_kb_host = -1;
 static uint32_t s_last_generation = UINT32_MAX;
@@ -202,6 +199,19 @@ static void back_clicked_cb(lv_event_t *e)
     close_detail();
 }
 
+/* Sino da home: abre a primeira sessão que está esperando decisão. Resolvida
+   ela, o status muda e o beacon passa a apontar para a seguinte. */
+static void beacon_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    for (int i = 0; i < s_ui_agent_count; i++) {
+        if (strcmp(s_ui_agents[i].status, "blocked") == 0) {
+            open_detail(&s_ui_agents[i]);
+            return;
+        }
+    }
+}
+
 /* Arraste vertical no terminal: rola a sessão no host (o app decide o que
    fazer com a roda) e antecipa a próxima leitura para o gesto ter resposta. */
 static void term_scrolled_cb(int lines, int col, int row)
@@ -265,31 +275,6 @@ static void kb_event_cb(lv_event_t *e)
     }
 }
 
-static void blocked_option_cb(lv_event_t *e)
-{
-    int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (!s_ui_blocked.active || idx >= s_ui_blocked.option_count) {
-        return;
-    }
-    const herdr_option_t *opt = &s_ui_blocked.options[idx];
-    herdr_conn_respond(s_ui_blocked.host, s_ui_blocked.pane_id, opt->num, opt->label);
-    lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
-    /* opção que pede texto: o agente fica esperando digitação, então já abre o
-     * teclado em vez de exigir uma volta pela tela de detalhe */
-    if (opt->input) {
-        open_keyboard(s_ui_blocked.host, s_ui_blocked.pane_id);
-    }
-    herdr_model_clear_blocked(s_ui_blocked.host, s_ui_blocked.pane_id);
-}
-
-static void blocked_dismiss_cb(lv_event_t *e)
-{
-    (void)e;
-    /* só esconde na UI; a decisão continua pendente no host */
-    herdr_model_clear_blocked(s_ui_blocked.host, s_ui_blocked.pane_id);
-    lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
-}
-
 /** O ícone de cada botão mostra o modo em vigor, não o que o toque faria. */
 static void update_toolbar_icons(void)
 {
@@ -314,6 +299,50 @@ static void toggle_sort_cb(lv_event_t *e)
 }
 
 /* ---------- home ---------- */
+
+#define BEACON_SWING_PX 4
+
+/**
+ * Balanço do sino.
+ *
+ * A fase percorre dois períodos de seno por rajada, então o repouso cai
+ * exatamente em zero — com uma rampa simples de -4 a 4, a pausa entre as
+ * rajadas deixaria o ícone parado torto.
+ */
+static void beacon_swing_cb(void *obj, int32_t phase)
+{
+    lv_obj_set_style_translate_x(
+        obj, lv_trigo_sin((int16_t)phase) * BEACON_SWING_PX / LV_TRIGO_SIN_MAX, 0);
+}
+
+/** Mostra o sino enquanto houver sessão esperando decisão; `n` vai no rótulo. */
+static void update_beacon(int n)
+{
+    if (n == 0) {
+        lv_anim_del(s_beacon, beacon_swing_cb);
+        lv_obj_set_style_translate_x(s_beacon, 0, 0);
+        lv_obj_add_flag(s_beacon, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    if (n > 1) {
+        lv_label_set_text_fmt(s_beacon_lbl, LV_SYMBOL_BELL " %d", n);
+    } else {
+        lv_label_set_text(s_beacon_lbl, LV_SYMBOL_BELL);
+    }
+    if (!lv_obj_has_flag(s_beacon, LV_OBJ_FLAG_HIDDEN)) {
+        return;   /* já tocando: só o rótulo podia ter mudado */
+    }
+    lv_obj_clear_flag(s_beacon, LV_OBJ_FLAG_HIDDEN);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_beacon);
+    lv_anim_set_exec_cb(&a, beacon_swing_cb);
+    lv_anim_set_values(&a, 0, 720);
+    lv_anim_set_time(&a, 700);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_repeat_delay(&a, 800);   /* toca, pausa, toca */
+    lv_anim_start(&a);
+}
 
 static void build_host_cards(lv_obj_t *parent)
 {
@@ -395,6 +424,13 @@ static void build_home(void)
     lv_obj_set_style_text_color(s_date, UI_MUTED, 0);
     lv_obj_align(s_date, LV_ALIGN_LEFT_MID, 2, 20);
 
+    /* do lado oposto ao relógio: é o alerta de decisão pendente */
+    s_beacon = ui_icon_btn(hero, LV_SYMBOL_BELL, beacon_clicked_cb, NULL);
+    lv_obj_align(s_beacon, LV_ALIGN_RIGHT_MID, 0, -8);
+    s_beacon_lbl = lv_obj_get_child(s_beacon, 0);
+    lv_obj_set_style_text_color(s_beacon_lbl, UI_BLOCKED, 0);
+    lv_obj_add_flag(s_beacon, LV_OBJ_FLAG_HIDDEN);
+
     lv_obj_t *avatar_slot = ui_plain(s_home);
     lv_obj_set_size(avatar_slot, AVATAR_SLOT_W, AVATAR_SLOT_H);
     avatar_create(avatar_slot);
@@ -455,6 +491,7 @@ static void refresh_home(void)
                      blocked ? AVATAR_ST_BLOCKED :
                      done    ? AVATAR_ST_DONE :
                      working ? AVATAR_ST_WORKING : AVATAR_ST_IDLE);
+    update_beacon(blocked);
 
     for (int w = 0; w < s_hw_count; w++) {
         host_widget_t *hw = &s_hw[w];
@@ -1031,95 +1068,7 @@ static void refresh_detail(void)
     }
 }
 
-/* ---------- aprovação e teclado ---------- */
-
-static void build_blocked_modal(void)
-{
-    s_blocked_modal = ui_screen();
-    lv_obj_set_style_bg_color(s_blocked_modal, UI_MODAL_BG, 0);
-
-    s_blocked_title = lv_label_create(s_blocked_modal);
-    lv_label_set_text(s_blocked_title, LV_SYMBOL_WARNING " Aprovação pendente");
-    lv_obj_set_style_text_font(s_blocked_title, &lv_font_ui_bold_16, 0);
-    lv_obj_set_style_text_color(s_blocked_title, UI_BLOCKED, 0);
-    /* fica em 16: com o nome do host junto, 20px não caberia ao lado do X */
-    lv_obj_set_width(s_blocked_title, LV_HOR_RES - 12 - UI_ICON_BTN - 20);
-    lv_label_set_long_mode(s_blocked_title, LV_LABEL_LONG_DOT);
-    lv_obj_align(s_blocked_title, LV_ALIGN_TOP_LEFT, 12, 22);
-
-    lv_obj_t *x = ui_icon_btn(s_blocked_modal, LV_SYMBOL_CLOSE, blocked_dismiss_cb, NULL);
-    lv_obj_align(x, LV_ALIGN_TOP_RIGHT, -10, 9);
-
-    lv_obj_t *box = lv_obj_create(s_blocked_modal);
-    lv_obj_set_size(box, LV_HOR_RES - 24, 110);
-    lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 62);
-    lv_obj_set_style_bg_color(box, UI_TERM_BG, 0);
-    lv_obj_set_style_border_width(box, 0, 0);
-    lv_obj_set_style_radius(box, 6, 0);
-    lv_obj_set_style_pad_all(box, 8, 0);
-
-    s_blocked_prompt = lv_label_create(box);
-    lv_obj_set_width(s_blocked_prompt, LV_PCT(100));
-    lv_label_set_long_mode(s_blocked_prompt, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(s_blocked_prompt, &lv_font_ui_12, 0);
-    lv_obj_set_style_text_color(s_blocked_prompt, UI_TEXT, 0);
-
-    /* a lista é rolável: o agente decide quantas opções oferece, e as de
-     * escolha aberta passam das quatro que cabem sem rolar */
-    lv_obj_t *opts = ui_plain(s_blocked_modal);
-    lv_obj_set_size(opts, LV_HOR_RES - 24, LV_VER_RES - 190);
-    lv_obj_align(opts, LV_ALIGN_BOTTOM_MID, 0, -8);
-    lv_obj_set_flex_flow(opts, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(opts, 6, 0);
-    lv_obj_set_scroll_dir(opts, LV_DIR_VER);
-    lv_obj_set_scrollbar_mode(opts, LV_SCROLLBAR_MODE_AUTO);
-
-    for (int i = 0; i < HERDR_MAX_OPTIONS; i++) {
-        lv_obj_t *btn = lv_btn_create(opts);
-        lv_obj_set_width(btn, LV_PCT(100));
-        lv_obj_set_height(btn, LV_SIZE_CONTENT);  /* rótulo longo quebra em 2 linhas */
-        lv_obj_set_style_min_height(btn, 40, 0);
-        lv_obj_set_style_bg_color(btn, UI_PANEL, 0);
-        lv_obj_set_style_radius(btn, 6, 0);
-        lv_obj_set_style_shadow_width(btn, 0, 0);
-        lv_obj_set_style_pad_hor(btn, 10, 0);
-        lv_obj_set_style_pad_ver(btn, 8, 0);
-        lv_obj_add_event_cb(btn, blocked_option_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        lv_obj_t *l = lv_label_create(btn);
-        lv_obj_set_width(l, LV_PCT(100));
-        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-        lv_label_set_text(l, "");
-        lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
-        lv_obj_set_style_text_color(l, UI_TEXT, 0);
-        lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
-        s_blocked_btns[i] = btn;
-    }
-}
-
-static void refresh_blocked(void)
-{
-    bool active = herdr_model_get_blocked(&s_ui_blocked);
-    s_ui_blocked.active = active;
-    if (active) {
-        lv_label_set_text_fmt(s_blocked_title, LV_SYMBOL_WARNING " Aprovação pendente \xC2\xB7 %s",
-                              host_label(s_ui_blocked.host));
-        lv_label_set_text(s_blocked_prompt, s_ui_blocked.prompt);
-        for (int i = 0; i < HERDR_MAX_OPTIONS; i++) {
-            if (i < s_ui_blocked.option_count) {
-                /* o número é o mesmo da tela do agente, não a posição na lista */
-                lv_label_set_text_fmt(lv_obj_get_child(s_blocked_btns[i], 0), "%u  %s",
-                                      s_ui_blocked.options[i].num, s_ui_blocked.options[i].label);
-                lv_obj_clear_flag(s_blocked_btns[i], LV_OBJ_FLAG_HIDDEN);
-            } else {
-                lv_obj_add_flag(s_blocked_btns[i], LV_OBJ_FLAG_HIDDEN);
-            }
-        }
-        lv_obj_clear_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_blocked_modal);
-    } else {
-        lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
-    }
-}
+/* ---------- teclado ---------- */
 
 static void build_keyboard_overlay(void)
 {
@@ -1175,7 +1124,6 @@ static void ui_timer_cb(lv_timer_t *timer)
         rebuild_dash_cards();
     }
     refresh_detail();
-    refresh_blocked();
 }
 
 void herdr_ui_init(void)
@@ -1186,7 +1134,6 @@ void herdr_ui_init(void)
     build_sessions();
     build_dash();
     build_detail();
-    build_blocked_modal();
     build_keyboard_overlay();
     herdr_ui_settings_init(dock_cb);
 

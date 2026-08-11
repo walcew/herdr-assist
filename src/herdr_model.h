@@ -23,14 +23,9 @@ extern "C" {
 #define HERDR_ID_LEN          24
 #define HERDR_NAME_LEN        32
 #define HERDR_STATUS_LEN      16
-#define HERDR_PROMPT_LEN      512
 /* 40 linhas de terminal com SGR (cores) e box-drawing: ~6KB típicos na
  * amostra real; a ponte capa em 12000 antes de enviar. Buffer em PSRAM. */
 #define HERDR_CONTENT_LEN     12288
-/* O agente monta a lista de opções livremente: as de permissão têm 3, as de
- * escolha aberta passam de 5. A ponte corta o rótulo em 68 bytes. */
-#define HERDR_MAX_OPTIONS     8
-#define HERDR_OPTION_LEN      72
 #define HERDR_MAX_PROVIDERS   4    /* provedores de IA por host (aba Dash) */
 #define HERDR_MAX_LIMIT_ROWS  4    /* janelas de limite por provedor */
 
@@ -45,21 +40,6 @@ typedef struct {
      * status. A API do Herdr não expõe tempo algum, então quem carimba é ela. */
     uint32_t since;
 } herdr_agent_t;
-
-typedef struct {
-    char    label[HERDR_OPTION_LEN];
-    uint8_t num;    /* número que o agente mostra na tela; é o que se responde */
-    bool    input;  /* abre campo de texto em vez de decidir na hora */
-} herdr_option_t;
-
-typedef struct {
-    char           pane_id[HERDR_ID_LEN];
-    char           prompt[HERDR_PROMPT_LEN];
-    herdr_option_t options[HERDR_MAX_OPTIONS];
-    int            option_count;
-    bool           active;
-    uint8_t        host;
-} herdr_blocked_t;
 
 /* Uma janela de limite de uso ("5h", "7d", "7d Fable"...). Os 20 bytes do
  * label acomodam o pior caso da ponte: 16 de texto + elipse de 3 + NUL. */
@@ -91,8 +71,6 @@ void herdr_model_init(void);
 
 /* --- Escrita (tasks de conexão; host = índice do slot) --- */
 void herdr_model_set_agents(int host, const herdr_agent_t *agents, int count);
-void herdr_model_set_blocked(const herdr_blocked_t *blocked);
-void herdr_model_clear_blocked(int host, const char *pane_id);
 /* content é sanitizado in-place (glifos sem cobertura na fonte) antes de copiar */
 void herdr_model_set_pane_content(int host, const char *pane_id, char *content);
 void herdr_model_set_conn(int host, herdr_conn_state_t state);
@@ -103,8 +81,6 @@ void herdr_model_set_limits(int host, const herdr_limits_t *limits, int count);
 int herdr_model_get_agents(herdr_agent_t *out, int max);
 /** Copia os limites de todos os hosts (agrupados por host); retorna o total. */
 int herdr_model_get_limits(herdr_limits_t *out, int max);
-/** Copia o bloqueio ativo de menor host; false se nenhum. */
-bool herdr_model_get_blocked(herdr_blocked_t *out);
 /**
  * Copia o conteúdo de pane só se a sequência mudou desde *seq_inout (dedup:
  * snapshot repetido não repinta — com full_refresh, cada repintura custa um
