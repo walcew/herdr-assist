@@ -1,0 +1,92 @@
+# Builds the firmware on a version tag and publishes it as a GitHub release,
+# so nobody needs a PlatformIO toolchain just to flash a panel.
+#
+# Two binaries go out, and the difference matters: the install image spans
+# 0x0-0x10000, which covers the NVS partition (0x9000-0xF000) and therefore
+# wipes Wi-Fi, hosts, tokens and language. The update image is the app alone at
+# 0x10000, leaving the config untouched. Publishing only the merged image would
+# make every upgrade a factory reset.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:      # lets you dry-run the build without cutting a tag
+
+permissions:
+  contents: write         # required to create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # The ESP-IDF toolchain is ~1 GB; without this the first step of every
+      # run re-downloads it. Keyed on platformio.ini so a platform bump busts it.
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build
+        run: pio run
+
+      # Offsets are not guesswork: they were verified byte-for-byte against the
+      # flash of a real JC3248W535EN. Bootloader at 0x0 (ESP32-S3, not 0x1000),
+      # partition table at 0x8000, app at 0x10000 per partitions.csv.
+      - name: Merge install image
+        run: |
+          BUILD=.pio/build/LVGL-320-480
+          mkdir -p dist
+          pio pkg exec -p tool-esptoolpy -- esptool.py --chip esp32s3 merge_bin \
+            -o "dist/herdr-assist-${GITHUB_REF_NAME}-install.bin" \
+            --flash_mode dio --flash_freq 80m --flash_size 16MB \
+            0x0     "$BUILD/bootloader.bin" \
+            0x8000  "$BUILD/partitions.bin" \
+            0x10000 "$BUILD/firmware.bin"
+          cp "$BUILD/firmware.bin" "dist/herdr-assist-${GITHUB_REF_NAME}-update.bin"
+          cd dist && sha256sum *.bin > SHA256SUMS && cat SHA256SUMS
+
+      # gh is preinstalled on the runner — no third-party action needed to publish.
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Flashing
+
+          No toolchain needed — download a binary below and write it with esptool.
+
+          **First install** (wipes the panel config, including Wi-Fi and paired hosts):
+
+          ```sh
+          esptool.py --chip esp32s3 write_flash 0x0 herdr-assist-VERSION-install.bin
+          ```
+
+          **Upgrade** (keeps Wi-Fi, hosts, tokens and language):
+
+          ```sh
+          esptool.py --chip esp32s3 write_flash 0x10000 herdr-assist-VERSION-update.bin
+          ```
+
+          Full step-by-step, including the Herdr plugin, in the [README](https://github.com/walcew/herdr-assist#readme).
+          EOF
+          sed -i "s/VERSION/${GITHUB_REF_NAME}/g" notes.md
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --generate-notes \
+            dist/*.bin dist/SHA256SUMS

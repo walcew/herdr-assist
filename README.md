@@ -1,276 +1,360 @@
 # herdr-assist
 
-Painel físico dedicado para monitorar e controlar sessões do [Herdr](https://herdr.dev) —
-o multiplexador de terminal para agentes de código. Roda num kit ESP32-S3 com display
-touch de 3.5", ficando na mesa ao lado do teclado: os agentes aparecem com o estado em
-cores, e quando um deles para para pedir uma decisão o painel toca um sino que abre a
-sessão certa com um toque, sem precisar procurar a janela no terminal.
+> 🇧🇷 **Este documento também existe em português:** [README.pt-BR.md](README.pt-BR.md)
+
+A dedicated physical panel for monitoring and controlling [Herdr](https://herdr.dev)
+sessions — the terminal multiplexer for coding agents. It runs on an ESP32-S3 kit with a
+3.5" touch display and sits on your desk next to the keyboard: agents show up with their
+state in color, and when one of them stops to ask for a decision the panel rings a bell
+that opens the right session with a single tap, with no hunting for the window in your
+terminal.
+
+| Home | Sessions | Dashboards |
+|:---:|:---:|:---:|
+| ![Home screen: clock, mascot and per-host heatmap](docs/images/panel-home.jpg) | ![Sessions list grouped by host](docs/images/panel-sessions.jpg) | ![Provider usage limits](docs/images/panel-dash.jpg) |
+| Clock, mascot and a heatmap per host | Sessions with state, grouped by host | Claude and Codex usage limits |
+
+## Quick start
+
+Three steps: flash the panel, install the bridge on the machine you want to control, and
+pair the two. **No toolchain and no compiling** — the release ships prebuilt binaries.
+
+### 1. Flash the panel
+
+Download the latest binaries from the
+[releases page](https://github.com/walcew/herdr-assist/releases/latest), plug the board
+into USB, and write the image:
+
+```sh
+# esptool is the only requirement
+pipx install esptool          # or: brew install esptool
+
+# find the port — it changes with the USB socket you used
+esptool.py chip_id            # macOS: /dev/cu.usbmodemXXXX, Linux: /dev/ttyACM0
+
+esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX \
+    write_flash 0x0 herdr-assist-v0.1.0-install.bin
+```
+
+The panel reboots into the settings screen: pick your Wi-Fi network from the list and
+type the password. Leave the hosts alone for now — step 3 fills them in for you.
+
+> **Installing vs. upgrading.** The `-install.bin` image spans `0x0`–`0x10000`, which
+> covers the NVS partition, so it **erases the panel config** (Wi-Fi, hosts, tokens,
+> language). That is what you want on a fresh board. To upgrade a panel you already
+> configured, flash the app alone and keep everything:
+>
+> ```sh
+> esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX \
+>     write_flash 0x10000 herdr-assist-v0.1.0-update.bin
+> ```
+
+### 2. Install the bridge on the host
+
+The bridge is a Herdr plugin. Run this on every machine you want to reach from the panel:
+
+```sh
+git clone https://github.com/walcew/herdr-assist.git
+herdr plugin link herdr-assist/plugin   # registers and enables it
+```
+
+Herdr starts the bridge with the session from the next boot on. To start it right now
+without restarting, run the plugin's `Restart the bridge` action. It is pure Python
+stdlib — it works with the `python3` macOS ships (3.9+), with no toolchain.
+
+### 3. Pair the panel
+
+Typing 32 hex characters on a 3.5" touchscreen is not viable, so the direction is
+reversed: **the host sends the finished config to the panel.**
+
+1. On the panel: **Settings → Pair with a host**. It shows a 6-character code and starts
+   announcing itself over UDP broadcast for 3 minutes.
+2. On the host, inside any Herdr pane, open the admin screen and press `p`:
+   ```sh
+   herdr plugin pane open --plugin herdr-assist --entrypoint admin
+   ```
+3. Pick the code shown on the panel screen from the list.
+
+The host sends name, address, port and token; the panel writes them to NVS and reboots
+already connected. Nothing is typed on the touchscreen.
+
+That's it — the panel now lists your sessions. The rest of this document is reference.
+
+## Language
+
+The interface speaks **English and Portuguese**, and the firmware is the same for both:
+the language comes from NVS (**Settings → Device → Language**, which toggles on tap) and
+takes effect on the next reboot, together with the rest of the config. A factory-fresh
+panel boots in English. The admin screen on the host follows the machine locale (`LANG`
+and friends, or `HERDR_ASSIST_LANG` to force it).
 
 ## Hardware
 
-**JC3248W535EN** (Guition/Sunton), ~R$ 120 no AliExpress:
+**JC3248W535EN** (Guition/Sunton), around US$ 25 on AliExpress:
 
-| Componente | Especificação |
+| Component | Spec |
 |---|---|
 | MCU | ESP32-S3-WROOM-1 (240 MHz, 2 cores) |
-| Memória | 8 MB PSRAM (OPI) + 16 MB flash |
-| Display | 3.5" IPS 320×480, controlador AXS15231B via QSPI |
-| Touch | Capacitivo, mesmo AXS15231B, via I2C (SCL 8 / SDA 4) |
-| Rede | Wi-Fi 2.4 GHz + BLE |
+| Memory | 8 MB PSRAM (OPI) + 16 MB flash |
+| Display | 3.5" IPS 320×480, AXS15231B controller over QSPI |
+| Touch | Capacitive, same AXS15231B, over I2C (SCL 8 / SDA 4) |
+| Network | Wi-Fi 2.4 GHz + BLE |
 
-Pinout relevante em `src/esp_bsp.h`; esquemáticos e datasheets em `docs/`.
+Relevant pinout in `src/esp_bsp.h`; schematics and datasheets in `docs/`.
 
-## Arquitetura
+## Architecture
 
-O Herdr expõe sua API num unix socket local, que um dispositivo na rede não alcança.
-A ponte (`plugin/herdr_bridge.py`, stdlib pura) traduz isso para TCP e nada mais: ela
-assina os eventos do Herdr, então o painel recebe as mudanças por **push**, sem polling.
-Ela é empacotada como **plugin do Herdr** (`plugin/herdr-plugin.toml`), que o Herdr
-sobe junto com a sessão — um plugin por máquina que você queira controlar pelo painel.
+Herdr exposes its API on a local unix socket, which a device on the network cannot reach.
+The bridge (`plugin/herdr_bridge.py`, pure stdlib) translates that to TCP and nothing
+else: it subscribes to Herdr's events, so the panel receives changes by **push**, with no
+polling. It is packaged as a **Herdr plugin** (`plugin/herdr-plugin.toml`), which Herdr
+starts along with the session — one plugin per machine you want to drive from the panel.
 
 ```
 ┌─ JC3248W535EN ─────────────┐     Wi-Fi / LAN      ┌─ Mac ───────────────────────┐
-│ herdr-assist               │ ◄── TCP + JSON ───►  │ plugin herdr-assist (:9375) │
-│ ESP-IDF 5.2 + LVGL 8.4     │    uma msg por       │          │ unix socket      │
-│ UI: lista, terminal, ações │    linha             │          ▼                  │
+│ herdr-assist               │ ◄── TCP + JSON ───►  │ herdr-assist plugin (:9375) │
+│ ESP-IDF 5.2 + LVGL 8.4     │    one message       │          │ unix socket      │
+│ UI: list, terminal, actions│    per line          │          ▼                  │
 └────────────────────────────┘                      │   herdr (events.subscribe)  │
                                                     └─────────────────────────────┘
 ```
 
-**Painel → ponte:** `hello` (token, obrigatório na 1ª linha), depois `read_pane`
-(leva também a geometria da tela do painel), `send_keys`, `send_text`, `focus`,
-`scroll_pane`, `release_pane`, `ping`.
-**Ponte → painel:** `agents` (estado de todos, incluindo quem está `blocked`),
-`pane_content` (tela do terminal **com SGR/cores**, fiel ao host —
-só linhas em branco do fim são removidas; quem emula é o motor do Ghostty embutido no
-Herdr, via `pane.read format:"ansi"`, e o painel só parseia SGR e pinta), `limits`
-(uso de limites dos provedores de IA para a aba Dash — coletado dos endpoints de uso
-do Claude Code e do Codex com as credenciais que os próprios CLIs mantêm renovadas em
-`~/.claude/.credentials.json` e `~/.codex/auth.json`; nenhum token sai do Mac, só
-percentuais), `pong`.
+**Panel → bridge:** `hello` (token, mandatory on the 1st line), then `read_pane` (which
+also carries the panel screen geometry), `send_keys`, `send_text`, `focus`, `scroll_pane`,
+`release_pane`, `ping`.
+**Bridge → panel:** `agents` (state of all of them, including whoever is `blocked`),
+`pane_content` (the terminal screen **with SGR/colors**, faithful to the host — only
+trailing blank lines are stripped; the emulation is done by the Ghostty engine embedded in
+Herdr, via `pane.read format:"ansi"`, and the panel only parses SGR and paints), `limits`
+(AI provider usage limits for the Dash tab — collected from the Claude Code and Codex
+usage endpoints using the credentials those CLIs keep refreshed in
+`~/.claude/.credentials.json` and `~/.codex/auth.json`; no token leaves the Mac, only
+percentages), `pong`.
 
-A ponte é o ponto onde as decisões de segurança acontecem, porque qualquer um na LAN
-alcança essa porta. **Toda conexão exige um token** (handshake `hello` na primeira linha;
-sem ele, a ponte desconecta em 5 s). Além disso: só teclas de uma allowlist passam, texto
-tem limite de tamanho, e comandos só valem para panes que existem. O token é gerado na
-primeira subida do plugin (0600 no config-dir); a ação `Mostrar token do painel`, no
-Herdr, exibe o valor para você cadastrar no painel.
+The bridge is where the security decisions happen, because anyone on the LAN can reach
+that port. **Every connection requires a token** (`hello` handshake on the first line;
+without it the bridge disconnects in 5 s). On top of that: only keys from an allowlist get
+through, text has a size cap, and commands only apply to panes that exist. The token is
+generated on the plugin's first start (0600 in the config dir); the `Show panel token`
+action in Herdr displays the value.
 
-## Compilando
+## Using the admin screen
 
-Requer [PlatformIO](https://platformio.org/) (`pipx install platformio`). A toolchain
-ESP-IDF é baixada sozinha na primeira build (~1 GB).
+From the command line, inside any Herdr pane:
 
-```bash
-pio run                                        # compila
-pio device list                                # a porta muda conforme a entrada USB
-pio run -t upload --upload-port /dev/cu.usbmodemXXXX
+```sh
+herdr plugin pane open --plugin herdr-assist --entrypoint admin   # open
+herdr plugin pane close --plugin herdr-assist --entrypoint admin  # or press "q"
 ```
 
-O firmware é genérico — nenhuma credencial é compilada. No primeiro boot (ou após
-apagar a NVS) o painel abre a tela de configurações: escolha a rede Wi-Fi na lista,
-digite a senha e cadastre até 4 hosts Herdr (nome, IP ou hostname, porta e **token**
-da ponte). Tudo fica na NVS e sobrevive a reflashes do app; salvar reinicia o painel.
+The screen opens as an overlay on top of the active pane. Inside it: `p` pairs a panel,
+`r` rotates the token, `x` restarts the bridge, `q` closes.
 
-### Instalando a ponte num host novo
+> Over SSH, `herdr` may not be on the PATH (a non-interactive session does not load the
+> Homebrew environment): use the full path, usually `/opt/homebrew/bin/herdr`.
 
-A ponte é um plugin do Herdr. Em cada máquina que você quiser controlar pelo painel:
-
-```bash
-git clone git@github.com:walcew/herdr-assist.git
-herdr plugin link herdr-assist/plugin   # registra e habilita
-```
-
-O Herdr sobe a ponte junto com a sessão a partir do próximo boot; para subir agora sem
-reiniciar, rode a ação `Reiniciar a ponte` do plugin. Só stdlib do Python — funciona com
-o `python3` de fábrica do macOS (3.9+), sem toolchain.
-
-### Pareando o painel
-
-Digitar 32 caracteres hexadecimais num touch de 3,5" é inviável, então o sentido da
-configuração se inverte: **o host manda a configuração pronta para o painel**.
-
-1. No painel: **Configurações → Parear com um host**. A tela mostra um código de 6
-   caracteres (os últimos bytes do MAC) e passa a se anunciar por broadcast UDP por 3
-   minutos, aceitando configuração na porta 9376.
-2. No Herdr do host: abra o painel de administração (`ctrl+b a`, ver abaixo) → tecla `p`.
-3. Escolha na lista o código que aparece na tela do painel.
-
-O host envia nome, endereço, porta e token; o painel grava na NVS e reinicia já
-conectado. O host é registrado com o **hostname da máquina** — nada é digitado no touch.
-
-A janela só abre por toque e dura 3 minutos. O código serve para você conferir que está
-pareando com o painel certo, e não com outro dispositivo que esteja anunciando.
-
-### Abrindo o painel de administração
-
-Pela linha de comando, de dentro de qualquer pane do Herdr:
-
-```bash
-herdr plugin pane open --plugin herdr-assist --entrypoint admin   # abre
-herdr plugin pane close --plugin herdr-assist --entrypoint admin  # ou tecle "q"
-```
-
-A tela abre em overlay sobre o pane ativo. Dentro dela: `p` pareia um painel, `r` gira o
-token, `x` reinicia a ponte, `q` fecha.
-
-> Por SSH o `herdr` pode não estar no PATH (uma sessão não-interativa não carrega o
-> ambiente do Homebrew): use o caminho completo, normalmente `/opt/homebrew/bin/herdr`.
-
-Vale ligar um atalho, porque o Herdr 0.8.0 **não lista ações de plugin em menu nenhum** —
-os itens do menu de contexto são fixos, e o campo `contexts` do manifest só declara em que
-contextos a ação é válida. Keybinding e CLI são as vias de uso:
+A keybinding is worth setting up, because Herdr 0.8.0 **does not list plugin actions in
+any menu** — the context menu items are fixed, and the manifest's `contexts` field only
+declares in which contexts the action is valid. Keybinding and CLI are the ways to use it:
 
 ```toml
 [[keys.command]]
-key = "prefix+a"          # ctrl+b seguido de "a"
+key = "prefix+a"          # ctrl+b then "a"
 type = "plugin_action"
 command = "herdr-assist.admin"
 ```
 
-`herdr config check` valida e `herdr server reload-config` aplica sem reiniciar.
+`herdr config check` validates and `herdr server reload-config` applies without a restart.
 
-A mesma tela de administração mostra o estado da ponte, o token e os painéis conectados.
-Pela CLI, o token também sai em:
+The same admin screen shows the bridge state, the token and the connected panels. From the
+CLI, the token also comes out of:
 
-```bash
+```sh
 cat "$(herdr plugin config-dir herdr-assist)/token"
 ```
 
-O log da ponte fica em `<state-dir>/bridge.log` — o Herdr usa
-`~/.local/state/herdr/plugins/<id>/`, que é diferente do config-dir.
+The bridge log lives in `<state-dir>/bridge.log` — Herdr uses
+`~/.local/state/herdr/plugins/<id>/`, which is not the config dir.
 
-> Instalar direto de repositório privado com `herdr plugin install owner/repo/subdir`
-> não funciona (ele baixa um tarball público); use o `git clone` + `herdr plugin link`
-> acima. O plugin também aceita config opcional em `<config-dir>/env` (`BRIDGE_PORT`,
-> `BRIDGE_BIND`) — o config-dir sai em `herdr plugin config-dir herdr-assist`.
+> The plugin also accepts optional config in `<config-dir>/env` (`BRIDGE_PORT`,
+> `BRIDGE_BIND`) — the config dir comes out of `herdr plugin config-dir herdr-assist`.
 
-Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos):
+## Building from source
 
-```bash
+Only needed if you are changing the firmware — to just use the panel, see
+[Quick start](#quick-start).
+
+Requires [PlatformIO](https://platformio.org/) (`pipx install platformio`). The ESP-IDF
+toolchain downloads itself on the first build (~1 GB).
+
+```sh
+pio run                                        # build
+pio device list                                # the port changes with the USB socket
+pio run -t upload --upload-port /dev/cu.usbmodemXXXX
+```
+
+The firmware is generic — no credentials are compiled in. On first boot (or after erasing
+NVS) the panel opens the settings screen: pick the Wi-Fi network from the list, type the
+password, and register up to 4 Herdr hosts (name, IP or hostname, port and bridge
+**token**). Everything lives in NVS and survives app reflashes; saving reboots the panel.
+
+To regenerate the terminal font (only needed when changing glyph ranges):
+
+```sh
 ./scripts/gen_font.sh
 ```
 
-## Estrutura
+### Cutting a release
 
-| Arquivo | Papel |
+Push a `v*` tag and [the workflow](.github/workflows/release.yml) builds, merges the
+install image and publishes the release with both binaries and their checksums:
+
+```sh
+git tag -a v0.1.0 -m "v0.1.0"
+git push origin v0.1.0
+```
+
+## Structure
+
+| File | Role |
 |---|---|
-| `plugin/herdr-plugin.toml` | Manifest do plugin do Herdr (startup, pane de administração, ações) |
-| `plugin/start.sh` | Startup do plugin: sobe a ponte destacada, idempotente, gera token |
-| `plugin/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização, coleta de uso de limites (Claude/Codex) |
-| `plugin/admin.py` | Tela de administração no Herdr: status, token, pareamento, girar token |
-| `src/pairing.c` | Modo de pareamento do painel: anúncio por broadcast + recepção da config |
-| `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |
-| `src/panel_cfg.c` | Configuração persistente (NVS): rede Wi-Fi + até 4 hosts Herdr |
-| `src/net.c` | Wi-Fi station com reconexão automática e scan para a tela de config |
-| `src/herdr_conn.c` | Uma conexão TCP por host, parse do protocolo, ping e reconexão |
-| `src/herdr_model.c` | Estado compartilhado entre as tasks de rede e a da UI (mutex + geração) |
-| `src/term_parse.c` | Parser SGR puro (sem LVGL/ESP): snapshot ANSI → grid de runs coloridos; testável no Mac (`scripts/term_parse_test.c`) |
-| `src/term_view.c` | Widget custom da tela de terminal: desenha o grid com cor/estilo por run, pan horizontal fiel |
-| `src/ui_theme.c` | Paleta, fontes, topbar e dock compartilhados pelas telas |
-| `src/herdr_ui.c` | UI LVGL: home (relógio, mascote, resumo, mapa de calor), sessões, dash de limites, terminal, ações, teclado |
-| `src/herdr_ui_settings.c` | Aba de configurações: scan de Wi-Fi, senha, editor de hosts |
-| `src/lv_font_terminal_12.c` | Fonte gerada (não editar) — veja `scripts/gen_font.sh` |
-| `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | BSP do fabricante (display, touch, port LVGL) |
+| `plugin/herdr-plugin.toml` | Herdr plugin manifest (startup, admin pane, actions) |
+| `plugin/start.sh` | Plugin startup: starts the bridge detached, idempotent, generates the token |
+| `plugin/herdr_bridge.py` | Bridge: Herdr socket ↔ TCP, token handshake, allowlist, sanitizing, usage-limit collection (Claude/Codex) |
+| `plugin/admin.py` | Admin screen in Herdr: status, token, pairing, token rotation |
+| `plugin/i18n.py` | Admin screen strings (en/pt), language taken from the host locale |
+| `src/pairing.c` | Panel pairing mode: broadcast announcement + config reception |
+| `src/DEMO_LVGL.c` | Entry point: brings up panel, config, Wi-Fi, connections and UI |
+| `src/panel_cfg.c` | Persistent config (NVS): Wi-Fi network + up to 4 Herdr hosts + language |
+| `src/net.c` | Wi-Fi station with automatic reconnection and scanning for the config screen |
+| `src/herdr_conn.c` | One TCP connection per host, protocol parsing, ping and reconnection |
+| `src/herdr_model.c` | State shared between the network tasks and the UI task (mutex + generation) |
+| `src/term_parse.c` | Pure SGR parser (no LVGL/ESP): ANSI snapshot → grid of colored runs; testable on a Mac (`scripts/term_parse_test.c`) |
+| `src/term_view.c` | Custom widget for the terminal screen: draws the grid with per-run color/style, faithful horizontal pan |
+| `src/i18n.c` | Interface strings (en/pt) in a single list that generates both enum and table |
+| `src/ui_theme.c` | Palette, fonts, topbar and dock shared by the screens |
+| `src/herdr_ui.c` | LVGL UI: home (clock, mascot, summary, heatmap), sessions, limits dash, terminal, actions, keyboard |
+| `src/herdr_ui_settings.c` | Settings tab: Wi-Fi scan, password, host editor, language |
+| `src/lv_font_terminal_12.c` | Generated font (do not edit) — see `scripts/gen_font.sh` |
+| `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | Vendor BSP (display, touch, LVGL port) |
 
-### Notas de implementação
+### Implementation notes
 
-- **`full_refresh = 1`** (`lv_port.c`) não é escolha estética, e sai caro: são 307 KB por
-  quadro no barramento QSPI mesmo quando muda uma linha de texto. Duas coisas impedem a
-  renderização parcial neste painel. A primeira é conhecida: o driver pulava o RASET (0x2B)
-  em QSPI ([esp-bsp#724](https://github.com/espressif/esp-bsp/issues/724)) — já corrigido
-  aqui. A segunda não está no issue e foi encontrada na marra: `draw_bitmap` usa **RAMWRC**
-  (0x3C, "continua a escrita anterior") sempre que `y_start != 0`, ignorando a janela que
-  acabou de definir. Funciona para varredura sequencial, que é o padrão do refresh completo;
-  com áreas arbitrárias, cada região vai parar no lugar errado e a tela embaralha. Habilitar
-  parcial exige também trocar esse RAMWRC por RAMWR — não testado.
-- **Rotação é sempre por software.** O painel ignora MADCTL, então rotação em runtime não
-  funciona em nenhuma stack; `LVGL_PORT_ROTATION_DEGREE` em `DEMO_LVGL.c` resolve em tempo
-  de compilação. O app usa 0° (portrait nativo 320×480), que dispensa a cópia de rotação
-  no flush — se a imagem ficar de cabeça para baixo na sua base, use 180°.
-- **O touch é capacitivo e não precisa de calibração** — o que importa é o remapeamento de
-  coordenadas conforme a rotação, feito em `lv_port.c`.
-- **Fontes**: nenhuma fonte que acompanha a LVGL serve aqui — Montserrat e unscii cobrem
-  apenas ASCII 0x20–0x7F, então box-drawing e spinners viram retângulos vazios, e rótulos
-  como "Sessões" e "Endereço" perdem os acentos. São duas famílias geradas: o terminal usa
-  a JetBrainsMono Nerd inteira (`scripts/gen_font.sh`) e a interface usa a Montserrat com o
-  Latin-1 completo, mesclada com a FontAwesome da própria LVGL para os `LV_SYMBOL_*`
-  continuarem valendo (`scripts/gen_font_ui.sh`), mais pontuação tipográfica/setas da
-  própria Montserrat e `✓ ✗ ⚠ ●` da DejaVu Sans — símbolos que chegam aos alertas em
-  texto vindo do terminal. A Nerd Font, mesmo inteira, não cobre tudo que o Claude Code
-  desenha (spinner `✢✳✻✽`, `⏺ ⏵ ⏸ ⏳`, `◑ ◼ ✅ ✔ ⧉ ※` — auditado contra o cmap):
-  esses viram vizinhos visuais que a fonte tem (`⏺→●`, `✳→✶`, `✅→✓`...) na tabela
-  `GLYPH_SWAPS` de `replace_missing_glyphs()` — trocar por outra fonte quebraria o
-  grid de 7 px do term_view, que assume avanço uniforme.
-- **A interface segue o projeto "herdr-assist" no Claude Design** — paleta neutra (cor só
-  em status), topbar sem barra sólida e dock flutuante de quatro abas. Ao mexer no visual,
-  atualize lá também: `src/ui_theme.h` é a tradução direta daquelas telas.
-- **A tela de terminal renderiza a formatação real** (`term_parse.c` + `term_view.c`): a
-  ponte pede `pane.read` com `format:"ansi"` — o emulador interno do Herdr é o libghostty,
-  que re-emite a tela como linhas com SGR (só SGR: sem cursor/OSC, confirmado em amostra
-  real) — e o painel parseia isso num grid de runs e desenha com `lv_draw_rect`/`lv_draw_label`
-  em célula de 7×19 px (métricas da `lv_font_terminal_12`). Sem re-wrap: o grid fica na
-  largura real do pane no host, com âncora vertical no fim e pan preservado entre refreshes —
-  o pan horizontal continua existindo como rede para quando a trava de resolução (abaixo) não
-  pega. Caps: 220 colunas × 48 linhas × 12 KB (`HERDR_CONTENT_LEN`,
-  casado com o cap de 12000 da ponte). Limitações assumidas: itálico não tem efeito visual
-  (fonte bpp1 única), bold vira cor clareada (bright na paleta indexada, +30% branco em
-  truecolor), e emoji vira `"* "` (2 células, preservando alinhamento). Snapshot idêntico
-  não repinta: o dedup por `seq` no model evita o full refresh de 307 KB à toa.
-- **Sessão aberta no painel roda na resolução da tela do painel.** Herdar as ~135 colunas do
-  host obrigava a arrastar a tela para o lado para ler qualquer coisa, então o `read_pane`
-  leva junto a geometria que cabe (`term_view_fit()`: 42 × 18) e a ponte trava o pane nesse
-  tamanho enquanto o painel estiver lendo. A API JSON do Herdr não tem tamanho de terminal
-  (`pane.resize` é proporção de split), então quem faz isso é a CLI
-  `herdr terminal session control <pane_id> --cols N --rows M`, que redimensiona o pty de
-  verdade (TIOCSWINSZ) e mantém o tamanho travado enquanto o processo viver. A soltura tem
-  três caminhos independentes: `release_pane` ao fechar o detalhe, desconexão do painel, e
-  morte da ponte — neste último o filho vê EOF no stdin e se desanexa sozinho, e é por isso
-  que o stdin dele é um pipe. Consequência aceita: enquanto travado, esse pane também
-  aparece estreito no Herdr do Mac, e cada abertura/fechamento faz o agente reflowar.
-- **A rolagem do terminal é a do host, não a do widget.** Arrastar na vertical vira
-  `scroll_pane` → `terminal.scroll` com `source:"wheel"` no controller, e daí quem decide é
-  o Herdr: app com mouse tracking (Claude Code) recebe o evento e rola o próprio conteúdo,
-  senão anda o scrollback do emulador. Por isso o `pane.read` usa `source:"visible"` — é o
-  viewport que a rolagem move; com `"recent"` o painel ficaria preso no fim. Duas coisas que
-  custaram medição: a **posição** do ponteiro vai junto (célula sob o dedo — com a roda fora
-  da área de transcript o Claude Code simplesmente ignora), e uma célula arrastada equivale
-  a uma linha. O eixo vertical do LVGL só é liberado quando o conteúdo não cabe
-  (`term_view_set_ansi` alterna `LV_DIR_HOR`/`LV_DIR_ALL`), caso em que a trava de resolução
-  falhou e rolar localmente é o certo.
-- **Decisão pendente é um beacon, não um formulário reconstruído.** Quando algum agente
-  entra em `blocked`, um sino vermelho aparece na home — na linha do relógio, do lado
-  oposto — balançando até alguém agir; o toque abre a sessão que está esperando (com o
-  número de sessões no rótulo quando é mais de uma). Antes disso, a ponte tentava
-  reconhecer o formulário por regex, mandava a pergunta e as opções detectadas, e o
-  painel montava um modal com um botão por opção; responder fazia a ponte navegar o
-  cursor por setas e confirmar. Isso saiu inteiro: com o terminal do painel já rodando na
-  resolução da tela e com rolagem, ver a pergunta como ela é e responder com ↑/↓/Enter é
-  mais fiel do que adivinhá-la — e some a classe de erro em que o botão não correspondia
-  ao que estava na tela. O que sustenta o beacon é o `agent_status` que o `agents` já
-  trazia. Consequência assumida: o alerta só existe na home (o modal aparecia sobre
-  qualquer tela).
-- **O relógio da home depende de SNTP** (`net.c`), com fuso fixo em UTC-3. Sem sincronizar,
-  a home mostra `--:--` em vez de uma hora inventada.
-- **Detecção de conexão morta** (`herdr_conn.c`): com push, silêncio é o estado normal, então
-  não dá para inferir queda pela ausência de dados. O painel manda `ping` a cada 20 s e
-  desiste da conexão após 50 s sem resposta — isso cobre o caso em que o TCP fica aberto mas
-  para de receber (Wi-Fi que some, Mac que dorme), que de outra forma trava o painel para
-  sempre em "conectando".
-- **Buffers grandes ficam em memória estática, nunca na pilha**: a task da LVGL tem 8 KB e a
-  de rede 6 KB, enquanto uma leitura de terminal sozinha passa de 8 KB. Declarar essas
-  structs como variável local estoura a pilha e derruba o device com backtrace corrompido.
+- **`full_refresh = 1`** (`lv_port.c`) is not an aesthetic choice, and it is expensive:
+  307 KB per frame on the QSPI bus even when a single line of text changes. Two things
+  prevent partial rendering on this panel. The first is known: the driver skipped RASET
+  (0x2B) on QSPI ([esp-bsp#724](https://github.com/espressif/esp-bsp/issues/724)) — already
+  fixed here. The second is not in the issue and was found the hard way: `draw_bitmap` uses
+  **RAMWRC** (0x3C, "continue the previous write") whenever `y_start != 0`, ignoring the
+  window it just defined. That works for sequential scanning, which is what full refresh
+  does; with arbitrary areas, each region lands in the wrong place and the screen
+  scrambles. Enabling partial also requires swapping that RAMWRC for RAMWR — untested.
+- **Rotation is always done in software.** The panel ignores MADCTL, so runtime rotation
+  does not work on any stack; `LVGL_PORT_ROTATION_DEGREE` in `DEMO_LVGL.c` settles it at
+  compile time. The app uses 0° (native 320×480 portrait), which avoids the rotation copy
+  in the flush — if the image comes out upside down on your stand, use 180°.
+- **Touch is capacitive and needs no calibration** — what matters is remapping the
+  coordinates according to rotation, done in `lv_port.c`.
+- **Fonts**: none of the fonts shipping with LVGL work here — Montserrat and unscii cover
+  only ASCII 0x20–0x7F, so box-drawing and spinners turn into empty rectangles, and labels
+  like "Sessões" and "Endereço" lose their accents. Two families are generated: the
+  terminal uses the whole JetBrainsMono Nerd (`scripts/gen_font.sh`) and the interface uses
+  Montserrat with the full Latin-1, merged with LVGL's own FontAwesome so the `LV_SYMBOL_*`
+  keep working (`scripts/gen_font_ui.sh`), plus typographic punctuation/arrows from
+  Montserrat itself and `✓ ✗ ⚠ ●` from DejaVu Sans — symbols that reach the alerts in text
+  coming from the terminal. The Nerd Font, even whole, does not cover everything Claude
+  Code draws (spinner `✢✳✻✽`, `⏺ ⏵ ⏸ ⏳`, `◑ ◼ ✅ ✔ ⧉ ※` — audited against the cmap): those
+  become visual neighbors the font does have (`⏺→●`, `✳→✶`, `✅→✓`...) in the `GLYPH_SWAPS`
+  table of `replace_missing_glyphs()` — swapping in another font would break term_view's
+  7 px grid, which assumes uniform advance.
+- **The language is decided at boot and does not change at runtime.** The LVGL screens are
+  built once in `herdr_ui_init()` and stay alive hidden — retranslating would mean
+  destroying and rebuilding all of them, or storing the key of every label. Since changing
+  network or hosts already reboots the panel, the language took the same path: the settings
+  screen edits the copy, the toast warns that it is pending, and the reboot settles it.
+  `i18n.h` holds a single X-macro list (`I18N_STRINGS`) from which both the key enum and
+  the translation table are generated, so there is no case of adding a string in one
+  language and forgetting the other — both translations live on the same line. The tables
+  are `const char *const`: they live in flash (3.2 KB of rodata for both languages
+  together, measured on the `.o`), and the only RAM cost is the `uint8_t` of the active
+  language. pt_BR and en_US fit in the Latin-1 the UI fonts already cover, so nothing had
+  to be regenerated. Left out of the bilingual scope, in fixed English: `herdr-plugin.toml`
+  (the manifest is read by Herdr with no per-language field) and the two `start.sh`
+  messages the admin screen echoes when restarting the bridge — a shell script cannot
+  follow the locale without carrying a table just for that, and English is the same
+  criterion as the manifest.
+- **The interface follows the "herdr-assist" project in Claude Design** — neutral palette
+  (color only in status), topbar with no solid bar, and a floating four-tab dock. When
+  changing the visuals, update it there too: `src/ui_theme.h` is the direct translation of
+  those screens.
+- **The terminal screen renders the real formatting** (`term_parse.c` + `term_view.c`): the
+  bridge asks `pane.read` with `format:"ansi"` — Herdr's internal emulator is libghostty,
+  which re-emits the screen as lines with SGR (SGR only: no cursor/OSC, confirmed on a real
+  sample) — and the panel parses that into a grid of runs and draws it with
+  `lv_draw_rect`/`lv_draw_label` on a 7×19 px cell (metrics from `lv_font_terminal_12`). No
+  re-wrap: the grid stays at the pane's real width on the host, anchored vertically at the
+  end with pan preserved between refreshes — horizontal pan still exists as a safety net
+  for when the resolution lock (below) does not take. Caps: 220 columns × 48 lines × 12 KB
+  (`HERDR_CONTENT_LEN`, matched to the bridge's cap of 12000). Accepted limitations: italic
+  has no visual effect (single bpp1 font), bold becomes a lightened color (bright in the
+  indexed palette, +30% white in truecolor), and emoji become `"* "` (2 cells, preserving
+  alignment). An identical snapshot does not repaint: dedup by `seq` in the model avoids the
+  307 KB full refresh for nothing.
+- **A session opened on the panel runs at the panel screen's resolution.** Inheriting the
+  host's ~135 columns forced you to drag the screen sideways to read anything, so
+  `read_pane` carries the geometry that fits (`term_view_fit()`: 42 × 18) and the bridge
+  locks the pane at that size while the panel is reading. Herdr's JSON API has no terminal
+  size (`pane.resize` is a split ratio), so what does it is the
+  `herdr terminal session control <pane_id> --cols N --rows M` CLI, which resizes the pty
+  for real (TIOCSWINSZ) and keeps the size locked as long as the process lives. Releasing
+  has three independent paths: `release_pane` when closing the detail, panel disconnection,
+  and bridge death — in the last one the child sees EOF on stdin and detaches by itself,
+  which is why its stdin is a pipe. Accepted consequence: while locked, that pane also
+  shows up narrow in Herdr on the Mac, and every open/close makes the agent reflow.
+- **Terminal scrolling is the host's, not the widget's.** Dragging vertically becomes
+  `scroll_pane` → `terminal.scroll` with `source:"wheel"` on the controller, and from there
+  Herdr decides: an app with mouse tracking (Claude Code) receives the event and scrolls its
+  own content, otherwise the emulator scrollback moves. That is why `pane.read` uses
+  `source:"visible"` — the viewport is what scrolling moves; with `"recent"` the panel would
+  be stuck at the end. Two things that cost measurement: the pointer **position** goes along
+  (the cell under your finger — with the wheel outside the transcript area Claude Code
+  simply ignores it), and one dragged cell equals one line. LVGL's vertical axis is only
+  released when the content does not fit (`term_view_set_ansi` toggles
+  `LV_DIR_HOR`/`LV_DIR_ALL`), in which case the resolution lock failed and scrolling locally
+  is the right thing.
+- **A pending decision is a beacon, not a rebuilt form.** When an agent enters `blocked`, a
+  red bell shows up on the home screen — on the clock line, on the opposite side — swinging
+  until someone acts; tapping it opens the session that is waiting (with the session count
+  in the label when there is more than one). Before this, the bridge tried to recognize the
+  form with regex, sent the question and the detected options, and the panel built a modal
+  with one button per option; answering made the bridge navigate the cursor with arrows and
+  confirm. That came out whole: with the panel terminal already running at screen resolution
+  and with scrolling, seeing the question as it is and answering with ↑/↓/Enter is more
+  faithful than guessing it — and the class of error where the button did not match what was
+  on screen disappears. What backs the beacon is the `agent_status` that `agents` already
+  carried. Accepted consequence: the alert only exists on the home screen (the modal
+  appeared over any screen).
+- **The home clock depends on SNTP** (`net.c`), with the timezone fixed at UTC-3. Without
+  syncing, the home shows `--:--` instead of an invented time.
+- **Dead-connection detection** (`herdr_conn.c`): with push, silence is the normal state, so
+  a drop cannot be inferred from the absence of data. The panel sends `ping` every 20 s and
+  gives up on the connection after 50 s without an answer — this covers the case where TCP
+  stays open but stops receiving (Wi-Fi that goes away, a Mac that sleeps), which would
+  otherwise leave the panel stuck at "connecting" forever.
+- **Large buffers live in static memory, never on the stack**: the LVGL task has 8 KB and
+  the network one 6 KB, while a single terminal read is over 8 KB. Declaring those structs
+  as local variables blows the stack and takes the device down with a corrupted backtrace.
 
-## Créditos e licença
+## Credits and license
 
-O BSP, os drivers de display/touch e o port da LVGL vêm do
-[port PlatformIO de NorthernMan54](https://github.com/NorthernMan54/JC3248W535EN),
-que empacota o material original do fabricante (Shenzhen Jingcai / Guition). A LVGL 8.4
-está vendorizada em `libraries/lvgl`, podada dos demos e exemplos que não entram no build.
+The BSP, the display/touch drivers and the LVGL port come from
+[NorthernMan54's PlatformIO port](https://github.com/NorthernMan54/JC3248W535EN), which
+packages the original vendor material (Shenzhen Jingcai / Guition). LVGL 8.4 is vendored in
+`libraries/lvgl`, pruned of the demos and examples that do not enter the build.
 
-O desenho do protocolo (os tipos `agents` / `pane_content`, e o `blocked` com as opções de
-aprovação detectadas, que existiu aqui até o beacon substituí-lo) veio do relay do
-[herdr-remote](https://github.com/dcolinmorgan/herdr-remote), usado como referência antes de
-trocarmos por uma ponte própria falando o socket nativo do Herdr.
+The protocol design (the `agents` / `pane_content` types, and the `blocked` with detected
+approval options, which existed here until the beacon replaced it) came from the
+[herdr-remote](https://github.com/dcolinmorgan/herdr-remote) relay, used as a reference
+before we swapped it for our own bridge speaking Herdr's native socket.
 
-MIT — veja `LICENSE`.
+MIT — see `LICENSE`.
