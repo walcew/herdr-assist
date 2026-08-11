@@ -27,6 +27,7 @@ Variáveis: HERDR_SOCK, BRIDGE_PORT (9375), BRIDGE_BIND (0.0.0.0), BRIDGE_TOKEN.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import hmac
 import json
@@ -34,6 +35,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import socket
 import sys
 import time
@@ -68,6 +70,13 @@ PANE_LINES = 40
 CONTENT_MAX_B = 12000
 WIRE_MAX_B = 20000
 SGR_RE = re.compile(r"\x1b\[[0-9;:]*m")
+
+# Enquanto a sessão está aberta no painel, o pane é travado na resolução da tela
+# do dispositivo (ver ctl_acquire). A API JSON do Herdr não tem tamanho de
+# terminal — pane.resize é proporção de split —, então quem faz isso é a CLI.
+HERDR_BIN = (os.environ.get("HERDR_BIN") or shutil.which("herdr")
+             or "/opt/homebrew/bin/herdr")
+CTL_SETTLE_S = 0.4       # tempo para a TUI reflowar antes da primeira leitura
 
 # Ruído de terminal que não ajuda em nada numa tela de 3.5": spinners, barras,
 # dicas de atalho. Some para sobrar espaço ao que importa.
@@ -127,6 +136,9 @@ last_limits_snapshot = ""  # último {"type":"limits"} serializado que foi ao ar
 # um stale_since que andasse a cada falha quebraria o dedup do snapshot.
 limits_last_good: dict[str, dict] = {}
 limits_ok: dict[str, bool] = {}  # só para logar transições, não cada ciclo
+# Controller de resolução: no máximo um pane travado por vez (o painel só abre
+# uma sessão de cada vez). proc é o `herdr terminal session control` vivo.
+ctl: dict = {"pane": None, "size": None, "proc": None}
 _req_id = 0
 
 
@@ -298,13 +310,86 @@ async def read_pane_ansi(pane_id: str, lines: int = PANE_LINES) -> str:
     grid já emulado com os estilos por célula. O caminho de texto puro
     (read_pane/clean_output) continua existindo para o respond/blocked, que
     fazem match por regex sobre o texto.
+
+    source "visible" (e não "recent") porque é o viewport: é ele que a rolagem
+    move, seja o app rolando o próprio conteúdo ou o Herdr rolando o scrollback.
+    Com "recent" o painel ficaria preso no fim, sem enxergar o que o usuário
+    rolou. Nesse modo o Herdr ignora `lines` — quem manda é o tamanho do pane.
     """
     result = await herdr_request("pane.read", {"pane_id": pane_id, "lines": lines,
-                                               "source": "recent", "format": "ansi",
+                                               "source": "visible", "format": "ansi",
                                                "strip_ansi": False})
     if not result:
         return ""
     return result.get("read", {}).get("text", "")
+
+
+async def ctl_release() -> None:
+    """Solta a trava de resolução: o pane volta ao tamanho da UI do Herdr."""
+    proc = ctl["proc"]
+    pane = ctl["pane"]
+    ctl.update(pane=None, size=None, proc=None)
+    if not proc or proc.returncode is not None:
+        return
+    try:
+        proc.stdin.write(b'{"type":"terminal.release"}\n')
+        await proc.stdin.drain()
+        await asyncio.wait_for(proc.wait(), 2)
+    except (OSError, asyncio.TimeoutError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    log.info("pane %s solto", pane)
+
+
+async def ctl_acquire(pane_id: str, cols: int, rows: int) -> bool:
+    """Trava o pane em cols x rows. True se o controller acabou de subir.
+
+    O Herdr redimensiona o pty de verdade (TIOCSWINSZ) e trava o tamanho
+    enquanto este cliente viver, devolvendo tudo quando ele cai. O stdin em pipe
+    é o cinto de segurança: se esta ponte morrer de qualquer jeito, o filho vê
+    EOF, manda `Detach` sozinho e a sessão volta ao normal.
+    """
+    if (ctl["pane"] == pane_id and ctl["size"] == (cols, rows)
+            and ctl["proc"] and ctl["proc"].returncode is None):
+        return False
+    await ctl_release()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            HERDR_BIN, "terminal", "session", "control", pane_id,
+            "--cols", str(cols), "--rows", str(rows),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,   # os frames do controller não servem aqui
+            stderr=asyncio.subprocess.DEVNULL)
+    except OSError as err:
+        log.warning("resolução não travada em %s: %s", pane_id, err)
+        return False
+    ctl.update(pane=pane_id, size=(cols, rows), proc=proc)
+    log.info("pane %s travado em %dx%d", pane_id, cols, rows)
+    return True
+
+
+async def ctl_scroll(pane_id: str, up: bool, lines: int, col: int, row: int) -> bool:
+    """Rolagem nativa: manda uma roda de mouse ao pane travado.
+
+    Quem decide o destino é o Herdr (server/headless.rs): app com mouse
+    tracking (é o caso do Claude Code) recebe o evento e rola o próprio
+    conteúdo; senão o scrollback do emulador é que anda. A posição não é
+    detalhe: com o ponteiro fora da área de transcript o Claude Code ignora a
+    roda (medido), por isso vem a célula sob o dedo, não o centro da tela.
+    """
+    proc = ctl["proc"]
+    if ctl["pane"] != pane_id or not proc or proc.returncode is not None:
+        return False
+    cols, rows = ctl["size"]
+    cmd = {"type": "terminal.scroll", "direction": "up" if up else "down",
+           "lines": lines, "source": "wheel",
+           "column": max(0, min(col, cols - 1)), "row": max(0, min(row, rows - 1))}
+    try:
+        proc.stdin.write((json.dumps(cmd) + "\n").encode())
+        await proc.stdin.drain()
+    except OSError:
+        return False
+    return True
 
 
 def trim_ansi(raw: str, keep: int) -> str:
@@ -659,12 +744,18 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         writer.write((json.dumps({"type": "error", "message": reason}) + "\n").encode())
         await writer.drain()
 
-    if kind in ("read_pane", "send_keys", "send_text", "respond", "focus"):
+    if kind in ("read_pane", "send_keys", "send_text", "respond", "focus",
+                "release_pane", "scroll_pane"):
         if pane_id not in known_panes:
             return await deny("pane desconhecido")
 
     if kind == "read_pane":
         lines = max(1, min(int(msg.get("lines", PANE_LINES)), 60))
+        # O painel manda a geometria da própria tela: enquanto ele estiver lendo
+        # este pane, a sessão fica nesse tamanho e o conteúdo cabe sem arrastar.
+        cols, rows = int(msg.get("cols", 0)), int(msg.get("rows", 0))
+        if 4 <= cols <= 400 and 2 <= rows <= 200 and await ctl_acquire(pane_id, cols, rows):
+            await asyncio.sleep(CTL_SETTLE_S)
         content = trim_ansi(await read_pane_ansi(pane_id, lines), lines)
 
         def encode_payload(c: str) -> bytes:
@@ -705,6 +796,15 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
     elif kind == "focus":
         log.info("focus pane=%s", pane_id)
         await herdr_request("pane.focus", {"pane_id": pane_id})
+
+    elif kind == "scroll_pane":
+        lines = max(1, min(int(msg.get("lines", 1)), 20))
+        await ctl_scroll(pane_id, msg.get("dir") != "down", lines,
+                         int(msg.get("col", 0)), int(msg.get("row", 0)))
+
+    elif kind == "release_pane":
+        if ctl["pane"] == pane_id:
+            await ctl_release()
 
     elif kind == "ping":
         # Com push, ficar em silêncio é normal — o painel usa isto para saber
@@ -771,6 +871,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     finally:
         clients.discard(writer)
         writer.close()
+        if not clients:   # ninguém mais olhando: devolve a sessão ao tamanho normal
+            await ctl_release()
         log.info("painel desconectado: %s", peer)
 
 

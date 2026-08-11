@@ -20,6 +20,7 @@
 #include "ui_theme.h"
 
 #define DETAIL_POLL_TICKS 20   /* 20 x 150ms = 3s entre read_pane */
+#define SCROLL_POLL_TICKS 2    /* rolando, a tela nova vem em 300ms */
 #define HEAT_CELLS        12   /* células do mapa de calor por host */
 #define ACTION_BAR_H      48
 
@@ -178,6 +179,7 @@ static void open_detail(const herdr_agent_t *agent)
 
 static void close_detail(void)
 {
+    herdr_conn_release_pane(s_detail_host, s_detail_pane);  /* devolve a resolução */
     s_detail_open = false;
     s_detail_pane[0] = '\0';
     s_detail_host = -1;
@@ -198,6 +200,20 @@ static void back_clicked_cb(lv_event_t *e)
 {
     (void)e;
     close_detail();
+}
+
+/* Arraste vertical no terminal: rola a sessão no host (o app decide o que
+   fazer com a roda) e antecipa a próxima leitura para o gesto ter resposta. */
+static void term_scrolled_cb(int lines, int col, int row)
+{
+    if (!s_detail_open) {
+        return;
+    }
+    herdr_conn_scroll_pane(s_detail_host, s_detail_pane,
+                           lines > 0 ? lines : -lines, lines > 0, col, row);
+    if (s_poll_tick < DETAIL_POLL_TICKS - SCROLL_POLL_TICKS) {
+        s_poll_tick = DETAIL_POLL_TICKS - SCROLL_POLL_TICKS;
+    }
 }
 
 static void action_key_cb(lv_event_t *e)
@@ -959,6 +975,7 @@ static void build_detail(void)
     lv_obj_set_style_pad_all(s_term_cont, 8, 0);
 
     s_term_view = term_view_create(s_term_cont);
+    term_view_set_scroll_cb(s_term_view, term_scrolled_cb);
 
     lv_obj_t *actions = ui_plain(s_detail);
     lv_obj_set_size(actions, LV_HOR_RES, ACTION_BAR_H);
@@ -1136,7 +1153,11 @@ static void ui_timer_cb(lv_timer_t *timer)
 
     if (s_detail_open && ++s_poll_tick >= DETAIL_POLL_TICKS) {
         s_poll_tick = 0;
-        herdr_conn_read_pane(s_detail_host, s_detail_pane, 40);
+        /* a geometria vai junto: a ponte trava a sessão no tamanho da tela, e
+           as 40 linhas lidas dão o histórico rolável acima dela */
+        int cols, rows;
+        term_view_fit(s_term_view, &cols, &rows);
+        herdr_conn_read_pane(s_detail_host, s_detail_pane, 40, cols, rows);
     }
 
     uint32_t gen = herdr_model_generation();

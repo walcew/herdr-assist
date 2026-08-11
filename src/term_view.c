@@ -19,6 +19,9 @@ static const char *TAG = "term_view";
 typedef struct {
     term_grid_t *grid;
     lv_obj_t    *cont;   /* container scrollável (pai) */
+    lv_obj_t    *tv;
+    void       (*scroll_cb)(int lines, int col, int row);
+    lv_coord_t   drag_acc;   /* pixels de arraste ainda não convertidos em linha */
 } term_view_ctx_t;
 
 static void draw_cb(lv_event_t *e)
@@ -88,6 +91,42 @@ static void delete_cb(lv_event_t *e)
     free(ctx);
 }
 
+/* Arraste vertical no container: vira rolagem do terminal no host quando não
+   há o que rolar localmente (o normal, já que a sessão roda no tamanho da
+   tela). Uma célula arrastada = uma linha, como numa roda de mouse. */
+static void drag_cb(lv_event_t *e)
+{
+    term_view_ctx_t *ctx = lv_event_get_user_data(e);
+    if (lv_event_get_code(e) == LV_EVENT_PRESSED) {
+        ctx->drag_acc = 0;
+        return;
+    }
+    if (!ctx->scroll_cb || (lv_obj_get_scroll_dir(ctx->cont) & LV_DIR_VER)) {
+        return;
+    }
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) return;
+    lv_point_t v;
+    lv_indev_get_vect(indev, &v);
+    ctx->drag_acc += v.y;
+    int lines = ctx->drag_acc / TERM_CELL_H;
+    if (lines == 0) return;
+    ctx->drag_acc -= (lv_coord_t)lines * TERM_CELL_H;
+
+    /* célula sob o dedo, do jeito que o host a numera */
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    lv_area_t a;
+    lv_obj_get_coords(ctx->tv, &a);
+    int col = (p.x - (a.x1 + TERM_PAD)) / TERM_CELL_W;
+    int row = (p.y - (a.y1 + TERM_PAD)) / TERM_CELL_H;
+    if (col < 0) col = 0;
+    if (row < 0) row = 0;
+    if (ctx->grid->max_cols && col >= ctx->grid->max_cols) col = ctx->grid->max_cols - 1;
+    if (ctx->grid->line_count && row >= ctx->grid->line_count) row = ctx->grid->line_count - 1;
+    ctx->scroll_cb(lines, col, row);
+}
+
 lv_obj_t *term_view_create(lv_obj_t *scroll_parent)
 {
     term_view_ctx_t *ctx = calloc(1, sizeof(*ctx));
@@ -115,7 +154,16 @@ lv_obj_t *term_view_create(lv_obj_t *scroll_parent)
     lv_obj_set_user_data(tv, ctx);
     lv_obj_add_event_cb(tv, draw_cb, LV_EVENT_DRAW_MAIN, ctx);
     lv_obj_add_event_cb(tv, delete_cb, LV_EVENT_DELETE, ctx);
+    lv_obj_add_event_cb(scroll_parent, drag_cb, LV_EVENT_PRESSED, ctx);
+    lv_obj_add_event_cb(scroll_parent, drag_cb, LV_EVENT_PRESSING, ctx);
+    ctx->tv = tv;
     return tv;
+}
+
+void term_view_set_scroll_cb(lv_obj_t *tv, void (*cb)(int lines, int col, int row))
+{
+    term_view_ctx_t *ctx = lv_obj_get_user_data(tv);
+    ctx->scroll_cb = cb;
 }
 
 void term_view_set_ansi(lv_obj_t *tv, const char *ansi)
@@ -135,6 +183,11 @@ void term_view_set_ansi(lv_obj_t *tv, const char *ansi)
     lv_obj_set_size(tv, w, h);
     lv_obj_invalidate(tv);   /* set_size sozinho não invalida quando nada muda */
 
+    /* Conteúdo que cabe libera o eixo vertical para a rolagem nativa (drag_cb);
+       sobrando linhas — trava de resolução que não pegou — o LVGL rola aqui. */
+    lv_obj_set_scroll_dir(ctx->cont,
+                          h > lv_obj_get_content_height(ctx->cont) ? LV_DIR_ALL : LV_DIR_HOR);
+
     /* âncora no fim (vertical) preservando o pan do usuário (horizontal) */
     lv_obj_update_layout(ctx->cont);
     lv_obj_scroll_to_y(ctx->cont, LV_COORD_MAX, LV_ANIM_OFF);
@@ -146,4 +199,13 @@ void term_view_clear(lv_obj_t *tv, const char *placeholder)
     term_view_ctx_t *ctx = lv_obj_get_user_data(tv);
     term_view_set_ansi(tv, placeholder ? placeholder : "");
     lv_obj_scroll_to(ctx->cont, 0, 0, LV_ANIM_OFF);
+}
+
+void term_view_fit(lv_obj_t *tv, int *cols, int *rows)
+{
+    term_view_ctx_t *ctx = lv_obj_get_user_data(tv);
+    *cols = (lv_obj_get_content_width(ctx->cont) - 2 * TERM_PAD) / TERM_CELL_W;
+    *rows = (lv_obj_get_content_height(ctx->cont) - 2 * TERM_PAD) / TERM_CELL_H;
+    if (*cols < 1) *cols = 1;
+    if (*rows < 1) *rows = 1;
 }

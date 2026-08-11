@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -20,7 +22,14 @@ esp_err_t herdr_conn_start(void);
 
 /* Comandos painel→ponte, roteados pelo índice do host em panel_cfg.
    Retornam ESP_FAIL se o host não estiver conectado. */
-esp_err_t herdr_conn_read_pane(int host, const char *pane_id, int lines);
+/* cols/rows são a geometria da tela do painel: enquanto ele estiver lendo este
+   pane, a ponte trava a sessão nesse tamanho (release_pane devolve). */
+esp_err_t herdr_conn_read_pane(int host, const char *pane_id, int lines, int cols, int rows);
+esp_err_t herdr_conn_release_pane(int host, const char *pane_id);
+/* Rolagem nativa: uma roda de mouse no pane, na célula col/row (up = para trás
+   no tempo). A posição importa: TUI só rola a região sob o ponteiro. */
+esp_err_t herdr_conn_scroll_pane(int host, const char *pane_id, int lines, bool up,
+                                 int col, int row);
 esp_err_t herdr_conn_send_keys(int host, const char *pane_id, const char *const *keys, int key_count);
 esp_err_t herdr_conn_send_text(int host, const char *pane_id, const char *text);
 esp_err_t herdr_conn_respond(int host, const char *pane_id, int choice, const char *label);

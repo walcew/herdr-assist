@@ -290,7 +290,7 @@ static esp_err_t send_simple(int host, const char *type, const char *pane_id)
     return send_json(s, root);
 }
 
-esp_err_t herdr_conn_read_pane(int host, const char *pane_id, int lines)
+esp_err_t herdr_conn_read_pane(int host, const char *pane_id, int lines, int cols, int rows)
 {
     conn_slot_t *s = slot_for(host);
     if (!s) {
@@ -300,6 +300,30 @@ esp_err_t herdr_conn_read_pane(int host, const char *pane_id, int lines)
     cJSON_AddStringToObject(root, "type", "read_pane");
     cJSON_AddStringToObject(root, "pane_id", pane_id);
     cJSON_AddNumberToObject(root, "lines", lines);
+    cJSON_AddNumberToObject(root, "cols", cols);
+    cJSON_AddNumberToObject(root, "rows", rows);
+    return send_json(s, root);
+}
+
+esp_err_t herdr_conn_release_pane(int host, const char *pane_id)
+{
+    return send_simple(host, "release_pane", pane_id);
+}
+
+esp_err_t herdr_conn_scroll_pane(int host, const char *pane_id, int lines, bool up,
+                                 int col, int row)
+{
+    conn_slot_t *s = slot_for(host);
+    if (!s) {
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "scroll_pane");
+    cJSON_AddStringToObject(root, "pane_id", pane_id);
+    cJSON_AddStringToObject(root, "dir", up ? "up" : "down");
+    cJSON_AddNumberToObject(root, "lines", lines);
+    cJSON_AddNumberToObject(root, "col", col);
+    cJSON_AddNumberToObject(root, "row", row);
     return send_json(s, root);
 }
 

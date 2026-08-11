@@ -37,8 +37,9 @@ sobe junto com a sessão — um plugin por máquina que você queira controlar p
                                                     └─────────────────────────────┘
 ```
 
-**Painel → ponte:** `hello` (token, obrigatório na 1ª linha), depois `read_pane`,
-`send_keys`, `send_text`, `respond`, `focus`, `ping`.
+**Painel → ponte:** `hello` (token, obrigatório na 1ª linha), depois `read_pane`
+(leva também a geometria da tela do painel), `send_keys`, `send_text`, `respond`, `focus`,
+`scroll_pane`, `release_pane`, `ping`.
 **Ponte → painel:** `agents` (estado de todos), `blocked` (aprovação pendente com as
 opções já detectadas), `pane_content` (tela do terminal **com SGR/cores**, fiel ao host —
 só linhas em branco do fim são removidas; quem emula é o motor do Ghostty embutido no
@@ -208,13 +209,35 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
   ponte pede `pane.read` com `format:"ansi"` — o emulador interno do Herdr é o libghostty,
   que re-emite a tela como linhas com SGR (só SGR: sem cursor/OSC, confirmado em amostra
   real) — e o painel parseia isso num grid de runs e desenha com `lv_draw_rect`/`lv_draw_label`
-  em célula de 7×19 px (métricas da `lv_font_terminal_12`). Sem re-wrap: o conteúdo fica na
-  largura real do pane do host e o container permite pan horizontal, com âncora vertical no
-  fim e pan preservado entre refreshes. Caps: 220 colunas × 48 linhas × 12 KB (`HERDR_CONTENT_LEN`,
+  em célula de 7×19 px (métricas da `lv_font_terminal_12`). Sem re-wrap: o grid fica na
+  largura real do pane no host, com âncora vertical no fim e pan preservado entre refreshes —
+  o pan horizontal continua existindo como rede para quando a trava de resolução (abaixo) não
+  pega. Caps: 220 colunas × 48 linhas × 12 KB (`HERDR_CONTENT_LEN`,
   casado com o cap de 12000 da ponte). Limitações assumidas: itálico não tem efeito visual
   (fonte bpp1 única), bold vira cor clareada (bright na paleta indexada, +30% branco em
   truecolor), e emoji vira `"* "` (2 células, preservando alinhamento). Snapshot idêntico
   não repinta: o dedup por `seq` no model evita o full refresh de 307 KB à toa.
+- **Sessão aberta no painel roda na resolução da tela do painel.** Herdar as ~135 colunas do
+  host obrigava a arrastar a tela para o lado para ler qualquer coisa, então o `read_pane`
+  leva junto a geometria que cabe (`term_view_fit()`: 42 × 18) e a ponte trava o pane nesse
+  tamanho enquanto o painel estiver lendo. A API JSON do Herdr não tem tamanho de terminal
+  (`pane.resize` é proporção de split), então quem faz isso é a CLI
+  `herdr terminal session control <pane_id> --cols N --rows M`, que redimensiona o pty de
+  verdade (TIOCSWINSZ) e mantém o tamanho travado enquanto o processo viver. A soltura tem
+  três caminhos independentes: `release_pane` ao fechar o detalhe, desconexão do painel, e
+  morte da ponte — neste último o filho vê EOF no stdin e se desanexa sozinho, e é por isso
+  que o stdin dele é um pipe. Consequência aceita: enquanto travado, esse pane também
+  aparece estreito no Herdr do Mac, e cada abertura/fechamento faz o agente reflowar.
+- **A rolagem do terminal é a do host, não a do widget.** Arrastar na vertical vira
+  `scroll_pane` → `terminal.scroll` com `source:"wheel"` no controller, e daí quem decide é
+  o Herdr: app com mouse tracking (Claude Code) recebe o evento e rola o próprio conteúdo,
+  senão anda o scrollback do emulador. Por isso o `pane.read` usa `source:"visible"` — é o
+  viewport que a rolagem move; com `"recent"` o painel ficaria preso no fim. Duas coisas que
+  custaram medição: a **posição** do ponteiro vai junto (célula sob o dedo — com a roda fora
+  da área de transcript o Claude Code simplesmente ignora), e uma célula arrastada equivale
+  a uma linha. O eixo vertical do LVGL só é liberado quando o conteúdo não cabe
+  (`term_view_set_ansi` alterna `LV_DIR_HOR`/`LV_DIR_ALL`), caso em que a trava de resolução
+  falhou e rolar localmente é o certo.
 - **O relógio da home depende de SNTP** (`net.c`), com fuso fixo em UTC-3. Sem sincronizar,
   a home mostra `--:--` em vez de uma hora inventada.
 - **Detecção de conexão morta** (`herdr_conn.c`): com push, silêncio é o estado normal, então
