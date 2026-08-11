@@ -48,7 +48,6 @@ typedef struct {
     void (*tick)(uint32_t now);
 } avatar_driver_t;
 
-extern const avatar_driver_t avatar_pet_driver;    /* avatar_pet.c */
 extern const avatar_driver_t avatar_clawd_driver;  /* avatar_clawd.c */
 extern const avatar_driver_t avatar_sonic_driver;  /* avatar_sonic.c */
 

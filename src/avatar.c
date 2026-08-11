@@ -8,15 +8,17 @@
 #include "nvs.h"
 
 static const avatar_driver_t *s_drivers[] = {
-    &avatar_pet_driver,
     &avatar_clawd_driver,
-    &avatar_sonic_driver,   /* anexado no fim: não remapeia a seleção na NVS */
+    &avatar_sonic_driver,
 };
 #define DRIVER_COUNT   ((int)(sizeof(s_drivers) / sizeof(s_drivers[0])))
-#define DRIVER_DEFAULT 1   /* Clawd */
+#define DRIVER_DEFAULT 0   /* Clawd */
 
 #define NVS_NS  "avatar"
-#define NVS_KEY "sel"
+/* "sel" guardava índices de quando existia o pet primitivo antes do Clawd, e
+   apontariam para o avatar errado agora. Chave nova: quem atualiza volta ao
+   padrão e um toque troca. */
+#define NVS_KEY "sel2"
 
 static lv_obj_t      *s_slot;
 static int            s_cur = DRIVER_DEFAULT;
