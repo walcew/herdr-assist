@@ -25,8 +25,10 @@ extern "C" {
 #define HERDR_PROMPT_LEN      512
 /* 40 linhas de terminal com box-drawing/emoji passam de 5.8KB em UTF-8 */
 #define HERDR_CONTENT_LEN     8192
-#define HERDR_MAX_OPTIONS     3
-#define HERDR_OPTION_LEN      40
+/* O agente monta a lista de opções livremente: as de permissão têm 3, as de
+ * escolha aberta passam de 5. A ponte corta o rótulo em 68 bytes. */
+#define HERDR_MAX_OPTIONS     8
+#define HERDR_OPTION_LEN      72
 
 typedef struct {
     char    pane_id[HERDR_ID_LEN];
@@ -38,12 +40,18 @@ typedef struct {
 } herdr_agent_t;
 
 typedef struct {
-    char    pane_id[HERDR_ID_LEN];
-    char    prompt[HERDR_PROMPT_LEN];
-    char    options[HERDR_MAX_OPTIONS][HERDR_OPTION_LEN];
-    int     option_count;
-    bool    active;
-    uint8_t host;
+    char    label[HERDR_OPTION_LEN];
+    uint8_t num;    /* número que o agente mostra na tela; é o que se responde */
+    bool    input;  /* abre campo de texto em vez de decidir na hora */
+} herdr_option_t;
+
+typedef struct {
+    char           pane_id[HERDR_ID_LEN];
+    char           prompt[HERDR_PROMPT_LEN];
+    herdr_option_t options[HERDR_MAX_OPTIONS];
+    int            option_count;
+    bool           active;
+    uint8_t        host;
 } herdr_blocked_t;
 
 /* Conteúdo de pane pedido via read_pane */

@@ -65,6 +65,9 @@ static herdr_blocked_t s_ui_blocked;
 static char s_detail_pane[HERDR_ID_LEN];
 static int s_detail_host = -1;
 static bool s_detail_open;
+/* alvo do teclado: vem do detalhe ou da aprovação, que não compartilham estado */
+static char s_kb_pane[HERDR_ID_LEN];
+static int s_kb_host = -1;
 static uint32_t s_last_generation = UINT32_MAX;
 static int s_poll_tick;
 static int s_last_minute = -1;
@@ -182,12 +185,21 @@ static void action_focus_cb(lv_event_t *e)
     }
 }
 
-static void action_prompt_cb(lv_event_t *e)
+static void open_keyboard(int host, const char *pane_id)
 {
-    (void)e;
+    s_kb_host = host;
+    strlcpy(s_kb_pane, pane_id, HERDR_ID_LEN);
     lv_textarea_set_text(s_kb_ta, "");
     lv_obj_clear_flag(s_kb_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_kb_overlay);
+}
+
+static void action_prompt_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_detail_pane[0]) {
+        open_keyboard(s_detail_host, s_detail_pane);
+    }
 }
 
 static void kb_event_cb(lv_event_t *e)
@@ -195,10 +207,10 @@ static void kb_event_cb(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_READY) {          /* checkmark: envia */
         const char *text = lv_textarea_get_text(s_kb_ta);
-        if (s_detail_pane[0] && text[0]) {
-            herdr_conn_send_text(s_detail_host, s_detail_pane, text);
+        if (s_kb_pane[0] && text[0]) {
+            herdr_conn_send_text(s_kb_host, s_kb_pane, text);
             static const char *enter = "Enter";
-            herdr_conn_send_keys(s_detail_host, s_detail_pane, &enter, 1);
+            herdr_conn_send_keys(s_kb_host, s_kb_pane, &enter, 1);
         }
         lv_obj_add_flag(s_kb_overlay, LV_OBJ_FLAG_HIDDEN);
     } else if (code == LV_EVENT_CANCEL) {  /* teclado fechado: cancela */
@@ -209,11 +221,18 @@ static void kb_event_cb(lv_event_t *e)
 static void blocked_option_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (s_ui_blocked.active && idx < s_ui_blocked.option_count) {
-        herdr_conn_respond(s_ui_blocked.host, s_ui_blocked.pane_id, s_ui_blocked.options[idx]);
-        herdr_model_clear_blocked(s_ui_blocked.host, s_ui_blocked.pane_id);
-        lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
+    if (!s_ui_blocked.active || idx >= s_ui_blocked.option_count) {
+        return;
     }
+    const herdr_option_t *opt = &s_ui_blocked.options[idx];
+    herdr_conn_respond(s_ui_blocked.host, s_ui_blocked.pane_id, opt->num, opt->label);
+    lv_obj_add_flag(s_blocked_modal, LV_OBJ_FLAG_HIDDEN);
+    /* opção que pede texto: o agente fica esperando digitação, então já abre o
+     * teclado em vez de exigir uma volta pela tela de detalhe */
+    if (opt->input) {
+        open_keyboard(s_ui_blocked.host, s_ui_blocked.pane_id);
+    }
+    herdr_model_clear_blocked(s_ui_blocked.host, s_ui_blocked.pane_id);
 }
 
 static void blocked_dismiss_cb(lv_event_t *e)
@@ -700,7 +719,7 @@ static void build_blocked_modal(void)
     lv_obj_align(x, LV_ALIGN_TOP_RIGHT, -10, 9);
 
     lv_obj_t *box = lv_obj_create(s_blocked_modal);
-    lv_obj_set_size(box, LV_HOR_RES - 24, 200);
+    lv_obj_set_size(box, LV_HOR_RES - 24, 110);
     lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 62);
     lv_obj_set_style_bg_color(box, UI_TERM_BG, 0);
     lv_obj_set_style_border_width(box, 0, 0);
@@ -713,24 +732,34 @@ static void build_blocked_modal(void)
     lv_obj_set_style_text_font(s_blocked_prompt, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(s_blocked_prompt, UI_TEXT, 0);
 
+    /* a lista é rolável: o agente decide quantas opções oferece, e as de
+     * escolha aberta passam das quatro que cabem sem rolar */
     lv_obj_t *opts = ui_plain(s_blocked_modal);
-    lv_obj_set_size(opts, LV_HOR_RES - 24, 140);
+    lv_obj_set_size(opts, LV_HOR_RES - 24, LV_VER_RES - 190);
     lv_obj_align(opts, LV_ALIGN_BOTTOM_MID, 0, -8);
     lv_obj_set_flex_flow(opts, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(opts, 6, 0);
+    lv_obj_set_scroll_dir(opts, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(opts, LV_SCROLLBAR_MODE_AUTO);
 
     for (int i = 0; i < HERDR_MAX_OPTIONS; i++) {
         lv_obj_t *btn = lv_btn_create(opts);
-        lv_obj_set_size(btn, LV_PCT(100), 40);
+        lv_obj_set_width(btn, LV_PCT(100));
+        lv_obj_set_height(btn, LV_SIZE_CONTENT);  /* rótulo longo quebra em 2 linhas */
+        lv_obj_set_style_min_height(btn, 40, 0);
         lv_obj_set_style_bg_color(btn, UI_PANEL, 0);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_set_style_shadow_width(btn, 0, 0);
+        lv_obj_set_style_pad_hor(btn, 10, 0);
+        lv_obj_set_style_pad_ver(btn, 8, 0);
         lv_obj_add_event_cb(btn, blocked_option_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
         lv_obj_t *l = lv_label_create(btn);
+        lv_obj_set_width(l, LV_PCT(100));
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
         lv_label_set_text(l, "");
         lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
         lv_obj_set_style_text_color(l, UI_TEXT, 0);
-        lv_obj_center(l);
+        lv_obj_align(l, LV_ALIGN_LEFT_MID, 0, 0);
         s_blocked_btns[i] = btn;
     }
 }
@@ -745,7 +774,9 @@ static void refresh_blocked(void)
         lv_label_set_text(s_blocked_prompt, s_ui_blocked.prompt);
         for (int i = 0; i < HERDR_MAX_OPTIONS; i++) {
             if (i < s_ui_blocked.option_count) {
-                lv_label_set_text(lv_obj_get_child(s_blocked_btns[i], 0), s_ui_blocked.options[i]);
+                /* o número é o mesmo da tela do agente, não a posição na lista */
+                lv_label_set_text_fmt(lv_obj_get_child(s_blocked_btns[i], 0), "%u  %s",
+                                      s_ui_blocked.options[i].num, s_ui_blocked.options[i].label);
                 lv_obj_clear_flag(s_blocked_btns[i], LV_OBJ_FLAG_HIDDEN);
             } else {
                 lv_obj_add_flag(s_blocked_btns[i], LV_OBJ_FLAG_HIDDEN);

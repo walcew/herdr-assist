@@ -23,7 +23,7 @@ esp_err_t herdr_conn_start(void);
 esp_err_t herdr_conn_read_pane(int host, const char *pane_id, int lines);
 esp_err_t herdr_conn_send_keys(int host, const char *pane_id, const char *const *keys, int key_count);
 esp_err_t herdr_conn_send_text(int host, const char *pane_id, const char *text);
-esp_err_t herdr_conn_respond(int host, const char *pane_id, const char *text);
+esp_err_t herdr_conn_respond(int host, const char *pane_id, int choice, const char *label);
 esp_err_t herdr_conn_focus(int host, const char *pane_id);
 
 #ifdef __cplusplus

@@ -118,9 +118,15 @@ static void handle_blocked(conn_slot_t *s, const cJSON *root)
             if (b->option_count >= HERDR_MAX_OPTIONS) {
                 break;
             }
-            if (cJSON_IsString(o)) {
-                strlcpy(b->options[b->option_count++], o->valuestring, HERDR_OPTION_LEN);
+            const cJSON *label = cJSON_GetObjectItem(o, "label");
+            const cJSON *num = cJSON_GetObjectItem(o, "n");
+            if (!cJSON_IsString(label) || !cJSON_IsNumber(num)) {
+                continue;
             }
+            herdr_option_t *opt = &b->options[b->option_count++];
+            strlcpy(opt->label, label->valuestring, HERDR_OPTION_LEN);
+            opt->num = (uint8_t)num->valueint;
+            opt->input = cJSON_IsTrue(cJSON_GetObjectItem(o, "input"));
         }
     }
     herdr_model_set_blocked(b);
@@ -266,9 +272,20 @@ esp_err_t herdr_conn_send_text(int host, const char *pane_id, const char *text)
     return send_with_text(host, "send_text", pane_id, text);
 }
 
-esp_err_t herdr_conn_respond(int host, const char *pane_id, const char *text)
+/** Responde pelo número da opção; o rótulo vai junto para a ponte conferir se
+ *  a tela ainda é a mesma antes de confirmar a escolha. */
+esp_err_t herdr_conn_respond(int host, const char *pane_id, int choice, const char *label)
 {
-    return send_with_text(host, "respond", pane_id, text);
+    conn_slot_t *s = slot_for(host);
+    if (!s) {
+        return ESP_FAIL;
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "type", "respond");
+    cJSON_AddStringToObject(root, "pane_id", pane_id);
+    cJSON_AddNumberToObject(root, "choice", choice);
+    cJSON_AddStringToObject(root, "label", label);
+    return send_json(s, root);
 }
 
 esp_err_t herdr_conn_focus(int host, const char *pane_id)

@@ -62,14 +62,26 @@ MAX_TEXT = 1000
 # dicas de atalho. Some para sobrar espaço ao que importa.
 CHROME_RE = re.compile(
     r"^[\s─━═_—│|◔◑◕●\s]+$"
-    r"|esc to cancel"
+    r"|(?i:esc to cancel)"
     r"|type to queue"
     r"|^\s*[◔◑◕●]\s+(Shell|Bash)"
 )
 
-# Opções de aprovação que o Claude oferece quando bloqueia — viram botões na tela.
-TOOL_OPTIONS = ["yes, single permission", "trust, always allow", "no (tab to edit)"]
-SUBAGENT_OPTIONS = ["approve all pending", "configure individually", "exit (cancel subagents)"]
+# Opções de aprovação que o agente oferece quando bloqueia — viram botões na
+# tela. Não existe API para elas: o agent_status do Herdr é derivado por regra
+# sobre o texto do terminal e para por aí, então quem lê a lista é este parser.
+# O formato é uma linha numerada por opção, com o cursor ❯ na selecionada; as
+# descrições vêm indentadas embaixo e, por não serem numeradas, já ficam fora.
+OPTION_RE = re.compile(r"^[\s│|]*(❯)?\s*(\d{1,2})\.\s+(\S.*?)\s*$")
+FORM_FOOTER_RE = re.compile(r"enter to (select|confirm)", re.I)
+RULE_RE = re.compile(r"^\s*[─━═_-]{10,}\s*$")
+# Opções que abrem um campo de texto em vez de decidir na hora: com esta marca
+# o painel já abre o teclado depois de escolher.
+INPUT_OPTION_RE = re.compile(r"type something|chat about this|tell claude|tab to edit", re.I)
+OPTION_MAX_B = 68        # duas linhas do botão na tela, dentro do limite do firmware
+QUESTION_MAX_B = 300
+PROMPT_MAX_B = 480       # cabe em HERDR_PROMPT_LEN (512) com o terminador
+NAV_SETTLE_S = 0.2       # tempo para o agente redesenhar depois de uma seta
 
 # Eventos sem pane_id na assinatura; sinalizam mudança na composição dos panes.
 GENERIC_EVENTS = ("pane.updated", "pane.created", "pane.closed",
@@ -83,6 +95,7 @@ clients: set[asyncio.StreamWriter] = set()
 known_panes: set[str] = set()
 last_status: dict[str, str] = {}
 last_snapshot = ""       # último {"type":"agents"} serializado que foi ao ar
+last_agents: list = []   # o mesmo, ainda como objeto: quem conecta precisa dele
 _req_id = 0
 
 
@@ -144,11 +157,81 @@ def clean_output(raw: str, keep: int = 20) -> str:
     return "\n".join(lines[-keep:])
 
 
-def detect_options(text: str) -> list[str]:
-    lower = text.lower()
-    if "approve all pending" in lower:
-        return SUBAGENT_OPTIONS
-    return TOOL_OPTIONS
+def clip(text: str, limit: int) -> str:
+    """Corta em `limit` bytes sem partir caractere UTF-8.
+
+    O firmware guarda estes campos em buffers de tamanho fixo e trunca por
+    byte: cortar aqui, no lugar certo, evita meio caractere acentuado virar
+    lixo na tela.
+    """
+    raw = text.encode()
+    if len(raw) <= limit:
+        return text
+    return raw[:limit].decode(errors="ignore").rstrip() + "…"
+
+
+def strip_box(line: str) -> str:
+    """Tira a moldura: o prompt de permissão vem dentro de uma caixa."""
+    return line.strip().strip("│|╭╮╰╯├┤┌┐└┘").strip()
+
+
+def extract_question(lines: list[str], first_option: int) -> str:
+    """O bloco de texto logo acima da lista é a pergunta em si.
+
+    Uma linha só de moldura conta como vazia — é ela que separa a pergunta do
+    comando ou do diff que o agente mostrou acima.
+    """
+    def blank(i: int) -> bool:
+        return not strip_box(lines[i]) or bool(RULE_RE.match(lines[i]))
+
+    i = first_option - 1
+    while i >= 0 and blank(i):
+        i -= 1
+    out = []
+    while i >= 0 and not blank(i) and len(out) < 4:
+        out.append(strip_box(lines[i]))
+        i -= 1
+    out.reverse()
+    return clip(" ".join(out), QUESTION_MAX_B)
+
+
+def parse_form(raw: str) -> dict | None:
+    """Lê o formulário de escolha que está na tela do agente.
+
+    Devolve a pergunta, as opções (número, rótulo, se pedem texto) e em qual
+    delas está o cursor — ou None se o que está na tela não é um formulário
+    navegável, caso em que o painel mostra o texto e nenhum botão.
+    """
+    lines = raw.splitlines()
+    if not any(FORM_FOOTER_RE.search(l) for l in lines[-6:]):
+        return None
+
+    hits = []
+    for i, line in enumerate(lines):
+        m = OPTION_RE.match(line)
+        if m:
+            hits.append((i, int(m.group(2)), strip_box(m.group(3)), m.group(1) is not None))
+
+    # Sobe do último item encaixando a numeração: assim réguas e linhas em
+    # branco no meio da lista não a quebram, e qualquer lista numerada que o
+    # agente tenha escrito acima fica de fora.
+    block: list = []
+    for hit in reversed(hits):
+        if not block or hit[1] == block[-1][1] - 1:
+            block.append(hit)
+        if block[-1][1] == 1:
+            break
+    block.reverse()
+    if len(block) < 2 or block[0][1] != 1:
+        return None
+
+    return {
+        "question": extract_question(lines, block[0][0]),
+        "options": [{"n": n, "label": clip(label, OPTION_MAX_B),
+                     "input": bool(INPUT_OPTION_RE.search(label))}
+                    for _, n, label, _ in block],
+        "cursor": next((k for k, h in enumerate(block) if h[3]), None),
+    }
 
 
 async def broadcast_line(line: str) -> None:
@@ -165,12 +248,64 @@ async def broadcast(msg: dict) -> None:
     await broadcast_line(json.dumps(msg, separators=(",", ":")))
 
 
-async def read_pane(pane_id: str, lines: int = 40) -> str:
+async def read_pane_raw(pane_id: str, lines: int = 50) -> str:
     result = await herdr_request("pane.read", {"pane_id": pane_id, "lines": lines,
                                                "source": "recent"})
     if not result:
         return ""
-    return clean_output(result.get("read", {}).get("text", ""))
+    return result.get("read", {}).get("text", "")
+
+
+async def read_pane(pane_id: str, lines: int = 40) -> str:
+    return clean_output(await read_pane_raw(pane_id, lines))
+
+
+async def blocked_message(agent: dict) -> dict:
+    """Monta o alerta lendo a tela na hora.
+
+    Sem formulário reconhecível vão a cauda da tela e nenhuma opção: melhor o
+    painel ficar sem botão do que com botão que não corresponde à pergunta.
+    """
+    raw = await read_pane_raw(agent["pane_id"])
+    form = parse_form(raw)
+    return {"type": "blocked", "pane_id": agent["pane_id"], "agent": agent["agent"],
+            "project": agent["project"],
+            "prompt": (form["question"] if form
+                       else clip(clean_output(raw)[-500:], PROMPT_MAX_B)),
+            "options": form["options"] if form else []}
+
+
+async def answer_form(pane_id: str, choice: int, label: str) -> bool:
+    """Move o cursor até a opção pedida e só então confirma.
+
+    Mandar o texto da opção não escolhe nada: num seletor as letras são
+    ignoradas e o Enter confirma o que estiver marcado — sempre a primeira.
+    Daí navegar por setas e reler a tela antes de confirmar: se o formulário
+    mudou entre o toque no painel e a chegada do comando, nada é enviado.
+    """
+    form = parse_form(await read_pane_raw(pane_id))
+    if not form or form["cursor"] is None:
+        log.warning("respond pane=%s: nenhum formulário navegável na tela", pane_id)
+        return False
+    target = next((k for k, o in enumerate(form["options"]) if o["n"] == choice), None)
+    if target is None or form["options"][target]["label"] != label:
+        log.warning("respond pane=%s: opção %d não confere com %r", pane_id, choice, label)
+        return False
+
+    delta = target - form["cursor"]
+    if delta:
+        key = "Down" if delta > 0 else "Up"
+        await herdr_request("pane.send_keys", {"pane_id": pane_id, "keys": [key] * abs(delta)})
+        await asyncio.sleep(NAV_SETTLE_S)
+        form = parse_form(await read_pane_raw(pane_id))
+        if (not form or form["cursor"] != target or target >= len(form["options"])
+                or form["options"][target]["n"] != choice):
+            log.warning("respond pane=%s: cursor não parou na opção %d", pane_id, choice)
+            return False
+
+    log.info("respond pane=%s opção=%d %r", pane_id, choice, label)
+    await herdr_request("pane.send_keys", {"pane_id": pane_id, "keys": ["Enter"]})
+    return True
 
 
 async def push_agents() -> set[str] | None:
@@ -180,7 +315,7 @@ async def push_agents() -> set[str] | None:
     saber quando reassinar, ou None se o Herdr não respondeu — que não é motivo
     para reassinar.
     """
-    global last_snapshot
+    global last_snapshot, last_agents
     result = await herdr_request("pane.list")
     if not result:
         return None
@@ -197,6 +332,7 @@ async def push_agents() -> set[str] | None:
     ]
     known_panes.clear()
     known_panes.update(a["pane_id"] for a in agents)
+    last_agents = agents
     snapshot = json.dumps({"type": "agents", "agents": agents}, separators=(",", ":"))
     if snapshot != last_snapshot:
         last_snapshot = snapshot
@@ -205,10 +341,7 @@ async def push_agents() -> set[str] | None:
     for a in agents:
         pid, status = a["pane_id"], a["status"]
         if status == "blocked" and last_status.get(pid) != "blocked":
-            content = await read_pane(pid)
-            await broadcast({"type": "blocked", "pane_id": pid, "agent": a["agent"],
-                             "project": a["project"], "prompt": content[:500],
-                             "options": detect_options(content)})
+            await broadcast(await blocked_message(a))
         last_status[pid] = status
     return {p["pane_id"] for p in panes}
 
@@ -321,14 +454,19 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         log.info("send_keys pane=%s keys=%s", pane_id, keys)
         await herdr_request("pane.send_keys", {"pane_id": pane_id, "keys": keys})
 
-    elif kind in ("send_text", "respond"):
+    elif kind == "send_text":
         text = msg.get("text", "")
         if not text or len(text) > MAX_TEXT:
             return await deny("texto vazio ou longo demais")
-        log.info("%s pane=%s len=%d", kind, pane_id, len(text))
-        if kind == "respond":
-            text += "\n"
+        log.info("send_text pane=%s len=%d", pane_id, len(text))
         await herdr_request("pane.send_text", {"pane_id": pane_id, "text": text})
+
+    elif kind == "respond":
+        choice = msg.get("choice")
+        if not isinstance(choice, int) or not 1 <= choice <= 20:
+            return await deny("respond exige o número da opção")
+        if not await answer_form(pane_id, choice, msg.get("label", "")):
+            return await deny("a tela mudou; nada foi enviado")
 
     elif kind == "focus":
         log.info("focus pane=%s", pane_id)
@@ -375,6 +513,13 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         if last_snapshot:        # entrega direta: o broadcast acima pode ter
             writer.write((last_snapshot + "\n").encode())  # sido suprimido
             await writer.drain()
+        # Um bloqueio que já estava de pé não gera transição: sem isto, o painel
+        # que reconecta fica sem o alerta até algum outro agente parar.
+        for a in last_agents:
+            if a["status"] == "blocked":
+                msg = json.dumps(await blocked_message(a), separators=(",", ":"))
+                writer.write((msg + "\n").encode())
+                await writer.drain()
         while True:
             line = await reader.readline()
             if not line:
