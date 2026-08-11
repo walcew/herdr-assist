@@ -59,13 +59,17 @@ type the password. Leave the hosts alone for now — step 3 fills them in for yo
 The bridge is a Herdr plugin. Run this on every machine you want to reach from the panel:
 
 ```sh
-git clone https://github.com/walcew/herdr-assist.git
-herdr plugin link herdr-assist/plugin   # registers and enables it
+herdr plugin install walcew/herdr-assist/plugin            # registers and enables it
+herdr plugin action invoke herdr-assist.restart-bridge     # start it right now
 ```
 
-Herdr starts the bridge with the session from the next boot on. To start it right now
-without restarting, run the plugin's `Restart the bridge` action. It is pure Python
-stdlib — it works with the `python3` macOS ships (3.9+), with no toolchain.
+Herdr clones the repo, shows what the plugin declares, and starts the bridge with every
+session from then on — the second command just skips waiting for the next one. The bridge
+is pure Python stdlib: it works with the `python3` macOS ships (3.9+), with no toolchain.
+
+To **upgrade** later, run the same two commands again: reinstalling replaces the managed
+checkout and leaves the config directory (token, `env` overrides) untouched. To hack on
+the plugin instead, `git clone` the repo and `herdr plugin link herdr-assist/plugin`.
 
 ### 3. Pair the panel
 
@@ -79,6 +83,8 @@ reversed: **the host sends the finished config to the panel.**
    herdr plugin pane open --plugin herdr-assist --entrypoint admin
    ```
 3. Pick the code shown on the panel screen from the list.
+4. Still in the admin screen, press `k` to install the `prefix+a` keyboard shortcut —
+   from then on the screen opens without the command line (`ctrl+b`, then `a`).
 
 The host sends name, address, port and token; the panel writes them to NVS and reboots
 already connected. Nothing is typed on the touchscreen.
@@ -145,28 +151,34 @@ action in Herdr displays the value.
 
 ## Using the admin screen
 
-From the command line, inside any Herdr pane:
+With the shortcut installed (press `k` in the screen itself, or see below): `ctrl+b`,
+then `a`. From the command line, inside any Herdr pane:
 
 ```sh
-herdr plugin pane open --plugin herdr-assist --entrypoint admin   # open
-herdr plugin pane close --plugin herdr-assist --entrypoint admin  # or press "q"
+herdr plugin pane open --plugin herdr-assist --entrypoint admin
 ```
 
-The screen opens as an overlay on top of the active pane. Inside it: `p` pairs a panel,
-`r` rotates the token, `x` restarts the bridge, `q` closes.
+The screen opens as a 76×22 popup over the session. Inside it: `p` pairs a panel,
+`r` rotates the token, `x` restarts the bridge, `k` installs the keyboard shortcut,
+`q` closes.
 
 > Over SSH, `herdr` may not be on the PATH (a non-interactive session does not load the
 > Homebrew environment): use the full path, usually `/opt/homebrew/bin/herdr`.
 
-A keybinding is worth setting up, because Herdr 0.8.0 **does not list plugin actions in
-any menu** — the context menu items are fixed, and the manifest's `contexts` field only
-declares in which contexts the action is valid. Keybinding and CLI are the ways to use it:
+A keybinding is the way in, because Herdr 0.8.0 **has no UI surface for plugins** — no
+menu, palette or picker lists plugin panes or actions, and plugins cannot ship default
+keybindings (keys belong to the user's config, by design). Pressing `k` in the admin
+screen sets this up for you: it appends the block below to `~/.config/herdr/config.toml`
+(backup first), validates with `herdr config check` — rolling back on failure — and
+applies it with `herdr server reload-config`. `prefix+a` is unbound in the stock 0.8.0
+defaults; if your config already uses it, `k` refuses and you pick a key manually:
 
 ```toml
 [[keys.command]]
 key = "prefix+a"          # ctrl+b then "a"
 type = "plugin_action"
 command = "herdr-assist.admin"
+description = "herdr-assist admin"
 ```
 
 `herdr config check` validates and `herdr server reload-config` applies without a restart.
@@ -226,7 +238,7 @@ git push origin v0.1.0
 | `plugin/herdr-plugin.toml` | Herdr plugin manifest (startup, admin pane, actions) |
 | `plugin/start.sh` | Plugin startup: starts the bridge detached, idempotent, generates the token |
 | `plugin/herdr_bridge.py` | Bridge: Herdr socket ↔ TCP, token handshake, allowlist, sanitizing, usage-limit collection (Claude/Codex) |
-| `plugin/admin.py` | Admin screen in Herdr: status, token, pairing, token rotation |
+| `plugin/admin.py` | Admin screen in Herdr: status, token, pairing, keybinding install |
 | `plugin/i18n.py` | Admin screen strings (en/pt), language taken from the host locale |
 | `src/pairing.c` | Panel pairing mode: broadcast announcement + config reception |
 | `src/DEMO_LVGL.c` | Entry point: brings up panel, config, Wi-Fi, connections and UI |

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -220,6 +221,88 @@ def rotate_token() -> None:
     print(f"  {GREEN}{t('rotate.done')}{OFF}")
 
 
+# O Herdr não deixa plugin embarcar keybind (decisão de design: as teclas são
+# do config do usuário), então o caminho suportado é escrever no config POR ele,
+# com consentimento — o mesmo idioma do `herdr config reset-keys`, que também
+# edita o arquivo guardando backup. prefix+a está livre nos defaults do 0.8.0.
+KEYBIND_BLOCK = """
+# herdr-assist: open the admin screen (installed by the plugin)
+[[keys.command]]
+key = "prefix+a"
+type = "plugin_action"
+command = "herdr-assist.admin"
+description = "herdr-assist admin"
+"""
+
+
+def herdr_bin() -> str:
+    """Binário do herdr — o PATH do ambiente do plugin pode não o conter."""
+    return os.environ.get("HERDR_BIN_PATH", "herdr")
+
+
+def install_keybind() -> None:
+    clear()
+    print(f"{BOLD}{t('kb.title')}{OFF}\n")
+    cfg = os.path.join(os.environ.get("XDG_CONFIG_HOME",
+                                      os.path.expanduser("~/.config")),
+                       "herdr", "config.toml")
+    try:
+        with open(cfg) as f:
+            current = f.read()
+    except OSError:
+        current = ""
+    if "herdr-assist.admin" in current:
+        print(f"  {GREEN}{t('kb.already')}{OFF}")
+        return
+    # busca textual proposital: pega a tecla até em comentário e aborta — na
+    # dúvida, melhor mandar para o caminho manual do que criar bind duplicado
+    if '"prefix+a"' in current:
+        print(f"  {AMBER}{t('kb.conflict')}{OFF}")
+        print(f"  {DIM}{t('kb.conflict_hint')}{OFF}")
+        return
+    print(f"  {t('kb.what')}")
+    print(f"  {t('kb.where', path=cfg.replace(os.path.expanduser('~'), '~'))}")
+    try:
+        if input("\n  " + t("kb.prompt")).strip():
+            return
+    except (EOFError, KeyboardInterrupt):
+        return
+    backup = f"{cfg}.bak.{int(time.time())}" if current else ""
+    os.makedirs(os.path.dirname(cfg), exist_ok=True)
+    if backup:
+        shutil.copy2(cfg, backup)
+
+    def undo() -> None:
+        if backup:
+            shutil.move(backup, cfg)
+        elif os.path.exists(cfg):
+            os.remove(cfg)
+
+    with open(cfg, "a") as f:
+        f.write(KEYBIND_BLOCK)
+    try:
+        r = subprocess.run([herdr_bin(), "config", "check"],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError) as e:
+        undo()
+        print(f"\n  {RED}{t('kb.check_fail')}{OFF}\n  {e}")
+        return
+    if r.returncode != 0:
+        undo()
+        print(f"\n  {RED}{t('kb.check_fail')}{OFF}")
+        print("  " + (r.stderr or r.stdout).strip())
+        return
+    try:
+        r = subprocess.run([herdr_bin(), "server", "reload-config"],
+                           capture_output=True, text=True, timeout=15)
+        reloaded = r.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        reloaded = False
+    print(f"\n  {GREEN}{t('kb.done')}{OFF}")
+    if not reloaded:
+        print(f"  {AMBER}{t('kb.reload_warn')}{OFF}")
+
+
 def restart_bridge(quiet: bool = False) -> None:
     if not quiet:
         clear()
@@ -246,6 +329,8 @@ def main() -> None:
             rotate_token()
         elif key == "x":
             restart_bridge()
+        elif key == "k":
+            install_keybind()
         else:
             continue
         try:

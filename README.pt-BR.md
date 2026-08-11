@@ -61,13 +61,17 @@ senha. Deixe os hosts em branco por enquanto — o passo 3 preenche para você.
 A ponte é um plugin do Herdr. Rode em cada máquina que você quiser alcançar pelo painel:
 
 ```sh
-git clone https://github.com/walcew/herdr-assist.git
-herdr plugin link herdr-assist/plugin   # registra e habilita
+herdr plugin install walcew/herdr-assist/plugin            # registra e habilita
+herdr plugin action invoke herdr-assist.restart-bridge     # sobe agora mesmo
 ```
 
-O Herdr sobe a ponte junto com a sessão a partir do próximo boot. Para subir agora sem
-reiniciar, rode a ação `Restart the bridge` do plugin. Só stdlib do Python — funciona com
-o `python3` de fábrica do macOS (3.9+), sem toolchain.
+O Herdr clona o repositório, mostra o que o plugin declara e passa a subir a ponte junto
+com cada sessão — o segundo comando só evita esperar a próxima. A ponte é stdlib pura do
+Python: funciona com o `python3` de fábrica do macOS (3.9+), sem toolchain.
+
+Para **atualizar** depois, repita os dois comandos: reinstalar substitui o checkout
+gerenciado e não toca no diretório de config (token, overrides do `env`). Para mexer no
+plugin, o caminho é `git clone` do repositório + `herdr plugin link herdr-assist/plugin`.
 
 ### 3. Pareando o painel
 
@@ -81,6 +85,8 @@ configuração se inverte: **o host manda a configuração pronta para o painel*
    herdr plugin pane open --plugin herdr-assist --entrypoint admin
    ```
 3. Escolha na lista o código que aparece na tela do painel.
+4. Ainda na tela de administração, tecle `k` para instalar o atalho `prefix+a` — daí em
+   diante a tela abre sem linha de comando (`ctrl+b`, depois `a`).
 
 O host envia nome, endereço, porta e token; o painel grava na NVS e reinicia já
 conectado. Nada é digitado no touch.
@@ -147,28 +153,34 @@ exibe o valor.
 
 ## Usando a tela de administração
 
-Pela linha de comando, de dentro de qualquer pane do Herdr:
+Com o atalho instalado (tecle `k` na própria tela, ou veja abaixo): `ctrl+b`, depois
+`a`. Pela linha de comando, de dentro de qualquer pane do Herdr:
 
 ```sh
-herdr plugin pane open --plugin herdr-assist --entrypoint admin   # abre
-herdr plugin pane close --plugin herdr-assist --entrypoint admin  # ou tecle "q"
+herdr plugin pane open --plugin herdr-assist --entrypoint admin
 ```
 
-A tela abre em overlay sobre o pane ativo. Dentro dela: `p` pareia um painel, `r` gira o
-token, `x` reinicia a ponte, `q` fecha.
+A tela abre como popup de 76×22 sobre a sessão. Dentro dela: `p` pareia um painel, `r`
+gira o token, `x` reinicia a ponte, `k` instala o atalho de teclado, `q` fecha.
 
 > Por SSH o `herdr` pode não estar no PATH (uma sessão não-interativa não carrega o
 > ambiente do Homebrew): use o caminho completo, normalmente `/opt/homebrew/bin/herdr`.
 
-Vale ligar um atalho, porque o Herdr 0.8.0 **não lista ações de plugin em menu nenhum** —
-os itens do menu de contexto são fixos, e o campo `contexts` do manifest só declara em que
-contextos a ação é válida. Keybinding e CLI são as vias de uso:
+O atalho é a porta de entrada, porque o Herdr 0.8.0 **não tem superfície de UI para
+plugins** — nenhum menu, palette ou picker lista panes ou ações de plugin, e plugin não
+pode embarcar keybind padrão (as teclas são do config do usuário, por decisão de design).
+Teclar `k` na tela de administração resolve isso por você: acrescenta o bloco abaixo em
+`~/.config/herdr/config.toml` (com backup antes), valida com `herdr config check` —
+desfazendo se falhar — e aplica com `herdr server reload-config`. `prefix+a` está livre
+nos defaults de fábrica do 0.8.0; se a sua config já a usa, o `k` recusa e você escolhe
+uma tecla manualmente:
 
 ```toml
 [[keys.command]]
 key = "prefix+a"          # ctrl+b seguido de "a"
 type = "plugin_action"
 command = "herdr-assist.admin"
+description = "herdr-assist admin"
 ```
 
 `herdr config check` valida e `herdr server reload-config` aplica sem reiniciar.
@@ -228,7 +240,7 @@ git push origin v0.1.0
 | `plugin/herdr-plugin.toml` | Manifest do plugin do Herdr (startup, pane de administração, ações) |
 | `plugin/start.sh` | Startup do plugin: sobe a ponte destacada, idempotente, gera token |
 | `plugin/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização, coleta de uso de limites (Claude/Codex) |
-| `plugin/admin.py` | Tela de administração no Herdr: status, token, pareamento, girar token |
+| `plugin/admin.py` | Tela de administração no Herdr: status, token, pareamento, instalação do atalho |
 | `plugin/i18n.py` | Textos da tela de administração (en/pt), idioma vindo do locale do host |
 | `src/pairing.c` | Modo de pareamento do painel: anúncio por broadcast + recepção da config |
 | `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |

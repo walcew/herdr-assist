@@ -1,12 +1,12 @@
 # Plugin herdr-assist: sobe a ponte TCP que o painel físico usa para falar
-# com este Herdr. Instalação num host novo:
-#   git clone git@github.com:walcew/herdr-assist.git
-#   herdr plugin link herdr-assist/plugin
+# com este Herdr. Instalação num host novo (upgrade = repetir o comando):
+#   herdr plugin install walcew/herdr-assist/plugin
+# Para desenvolver, o caminho é git clone + herdr plugin link herdr-assist/plugin.
 # O token de autenticação é gerado na primeira subida (ação show-token exibe).
 
 id = "herdr-assist"
 name = "herdr-assist bridge"
-version = "0.1.0"
+version = "0.2.0"
 min_herdr_version = "0.8.0"
 # Os títulos e descrições abaixo ficam em inglês: o manifest é lido pelo Herdr
 # uma vez, sem campo por idioma, então não há como acompanhar o idioma do painel
@@ -21,11 +21,15 @@ command = ["./start.sh"]
 
 # Tela de administração: status, token, pareamento e reinício num lugar só.
 # É a superfície principal — as ações abaixo são atalhos para casos pontuais.
+# Popup (não overlay: aquele toma a tela inteira). Dimensões externas em
+# células, com borda: 76 porque o menu do admin tem ~70 colunas em pt_BR,
+# 22 porque o pareamento lista até 4 dispositivos com os prompts em volta.
 [[panes]]
 id = "admin"
 title = "herdr-assist"
-description = "Panel bridge: status, token and pairing"
-placement = "overlay"
+placement = "popup"
+width = 76
+height = 22
 command = ["python3", "admin.py"]
 
 # contexts é o que faz a ação aparecer nos menus do Herdr; sem ele, a ação

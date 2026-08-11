@@ -35,10 +35,11 @@ STRINGS = {
     "panels":         ("Panels", "Painéis"),
     "panels.some":    ("{n} connected", "{n} conectado(s)"),
     "panels.none":    ("none connected", "nenhum conectado"),
-    "menu":           ("[p] pair panel   [r] rotate token   "
-                       "[x] restart bridge   [q] quit",
-                       "[p] parear painel   [r] girar token   "
-                       "[x] reiniciar ponte   [q] sair"),
+    # duas linhas: com [k] uma linha só passaria das 76 colunas do popup
+    "menu":           ("[p] pair panel   [r] rotate token   [x] restart bridge\n"
+                       "  [k] install shortcut   [q] quit",
+                       "[p] parear painel   [r] girar token   [x] reiniciar ponte\n"
+                       "  [k] instalar atalho   [q] sair"),
     "back":           ("enter to go back", "enter para voltar"),
     # --- pareamento ---
     "pair.title":     ("Pair panel", "Parear painel"),
@@ -79,6 +80,26 @@ STRINGS = {
                        "ponte reiniciada com o token novo."),
     # --- reinício ---
     "restart.title":  ("Restart the bridge", "Reiniciar a ponte"),
+    # --- instalação do atalho ---
+    "kb.title":       ("Install keyboard shortcut", "Instalar atalho de teclado"),
+    "kb.what":        ("adds \"prefix+a\" (ctrl+b, then a) opening this screen to",
+                       "acrescenta \"prefix+a\" (ctrl+b, depois a) abrindo esta tela em"),
+    "kb.where":       ("{path} — a backup is saved first.",
+                       "{path} — um backup é salvo antes."),
+    "kb.prompt":      ("enter applies, anything else cancels: ",
+                       "enter aplica, outra tecla cancela: "),
+    "kb.already":     ("already installed — press ctrl+b, then a.",
+                       "já instalado — aperte ctrl+b, depois a."),
+    "kb.conflict":    ("\"prefix+a\" is already bound in your config.",
+                       "\"prefix+a\" já está em uso na sua config."),
+    "kb.conflict_hint": ("pick another key manually — see the README.",
+                         "escolha outra tecla manualmente — veja o README."),
+    "kb.check_fail":  ("config check failed — backup restored:",
+                       "a validação da config falhou — backup restaurado:"),
+    "kb.done":        ("installed — press ctrl+b, then a, anywhere in Herdr.",
+                       "instalado — aperte ctrl+b, depois a, em qualquer lugar do Herdr."),
+    "kb.reload_warn": ("could not reload the config — run: herdr server reload-config",
+                       "não deu para recarregar a config — rode: herdr server reload-config"),
 }
 
 
