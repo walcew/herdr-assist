@@ -27,13 +27,16 @@ ASSETS = REPO / "firmware" / "src" / "assets"
 FRAMES_DIR = Path(__file__).resolve().parent / "sonic_frames"
 
 # Animações montadas à mão: nome -> frames únicos (ids de mapping) + sequência.
-# ko = caído de costas (D7/D8), push = empurrando (anim $22),
-# duck = agachado (anim $07, dorme no frame 1).
+# ko = caído de costas (D7/D8), push = empurrando (anim $22).
+# sleep = deitado de barriga para cima, olhos fechados: os dois únicos frames do
+# jogo com o Sonic de olhos fechados. Um estica as pernas e o outro dobra, então
+# alternando devagar vira respiração — o agachado ($C3/$C4) que estava aqui antes
+# trava no segundo frame e fica parado na tela.
 ANIMS = {
-    "run":  {"frames": [0x21, 0x22, 0x23, 0x24], "seq": [0, 1, 2, 3], "loop": 0},
-    "push": {"frames": [0x90, 0x91, 0x92],       "seq": [0, 1, 2, 1], "loop": 0},
-    "ko":   {"frames": [0xD7, 0xD8],             "seq": [0, 1],       "loop": 0},
-    "duck": {"frames": [0xC3, 0xC4],             "seq": [0, 1],       "loop": 1},
+    "run":   {"frames": [0x21, 0x22, 0x23, 0x24], "seq": [0, 1, 2, 3], "loop": 0},
+    "push":  {"frames": [0x90, 0x91, 0x92],       "seq": [0, 1, 2, 1], "loop": 0},
+    "ko":    {"frames": [0xD7, 0xD8],             "seq": [0, 1],       "loop": 0},
+    "sleep": {"frames": [0x157, 0x158],           "seq": [0, 1],       "loop": 0},
 }
 
 # Animações copiadas na íntegra do jogo — frames, ordem e ponto de loop saem do

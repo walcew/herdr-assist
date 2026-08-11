@@ -12,12 +12,6 @@ static const uint8_t sonic_cheer_seq[11] = {
     0, 1, 1, 1, 1, 1, 1, 2, 1, 3, 1,
 };
 
-#define SONIC_DUCK_SEQ_LEN  2
-#define SONIC_DUCK_SEQ_LOOP 1
-static const uint8_t sonic_duck_seq[2] = {
-    0, 1,
-};
-
 #define SONIC_IDLE_SEQ_LEN  106
 #define SONIC_IDLE_SEQ_LOOP 53
 static const uint8_t sonic_idle_seq[106] = {
@@ -46,6 +40,12 @@ static const uint8_t sonic_push_seq[4] = {
 #define SONIC_RUN_SEQ_LOOP 0
 static const uint8_t sonic_run_seq[4] = {
     0, 1, 2, 3,
+};
+
+#define SONIC_SLEEP_SEQ_LEN  2
+#define SONIC_SLEEP_SEQ_LOOP 0
+static const uint8_t sonic_sleep_seq[2] = {
+    0, 1,
 };
 
 #endif // SONIC_SEQUENCES_H
