@@ -1,6 +1,9 @@
 #include "herdr_model.h"
 
+#include <stdlib.h>
 #include <string.h>
+
+#include <esp_heap_caps.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -9,8 +12,15 @@ static struct {
     herdr_agent_t agents[CFG_MAX_HOSTS][HERDR_MAX_AGENTS];
     int agent_count[CFG_MAX_HOSTS];
     herdr_blocked_t blocked[CFG_MAX_HOSTS];
-    herdr_pane_content_t pane_content;
+    struct {
+        char     pane_id[HERDR_ID_LEN];
+        uint8_t  host;
+        char    *content;   /* HERDR_CONTENT_LEN, alocado 1x em PSRAM no init */
+        uint32_t seq;       /* incrementa a cada conteúdo diferente */
+    } pane_content;
     herdr_conn_state_t conn[CFG_MAX_HOSTS];
+    herdr_limits_t limits[CFG_MAX_HOSTS][HERDR_MAX_PROVIDERS];
+    int limit_count[CFG_MAX_HOSTS];
     uint32_t generation;
     SemaphoreHandle_t mutex;
 } s_model;
@@ -28,6 +38,14 @@ void herdr_model_init(void)
 {
     memset(&s_model, 0, sizeof(s_model));
     s_model.mutex = xSemaphoreCreateMutex();
+    /* grande e sem pressa: PSRAM, poupando a SRAM interna */
+    s_model.pane_content.content = heap_caps_malloc(HERDR_CONTENT_LEN, MALLOC_CAP_SPIRAM);
+    if (!s_model.pane_content.content) {
+        s_model.pane_content.content = malloc(HERDR_CONTENT_LEN);
+    }
+    if (s_model.pane_content.content) {
+        s_model.pane_content.content[0] = '\0';
+    }
 }
 
 void herdr_model_set_agents(int host, const herdr_agent_t *agents, int count)
@@ -123,11 +141,38 @@ static void copy_utf8_safe(char *dst, const char *src, size_t dst_size)
 }
 
 /**
+ * Trocas de codepoint que a JetBrainsMono Nerd não cobre por vizinhos visuais
+ * que ela tem (auditado contra o cmap do .c gerado — ver gen_font.sh). Tudo
+ * 1 coluna -> 1 coluna e mesmo tamanho em bytes ou menor, para a troca in-place.
+ * Os quatro asteriscos do spinner do Claude Code colapsam no ✶, que é o único
+ * frame que a fonte tem. Entradas com "" removem o caractere (variation
+ * selectors: invisíveis no host, mas contariam coluna e virariam tofu aqui).
+ */
+static const struct { const char *from; const char *to; } GLYPH_SWAPS[] = {
+    { "\xE2\x8E\xBF", "\xE2\x94\x94" },  /* ⎿ -> └ */
+    { "\xE2\x8F\xBA", "\xE2\x97\x8F" },  /* ⏺ -> ● */
+    { "\xE2\x8F\xB5", "\xE2\x96\xB6" },  /* ⏵ -> ▶ */
+    { "\xE2\x8F\xB8", "\xE2\x80\x96" },  /* ⏸ -> ‖ */
+    { "\xE2\x8F\xB3", "\xE2\x97\x8B" },  /* ⏳ -> ○ */
+    { "\xE2\x97\x91", "\xE2\x97\x95" },  /* ◑ -> ◕ */
+    { "\xE2\x97\xBC", "\xE2\x96\xA0" },  /* ◼ -> ■ */
+    { "\xE2\x9C\xA2", "\xE2\x9C\xB6" },  /* ✢ -> ✶ */
+    { "\xE2\x9C\xB3", "\xE2\x9C\xB6" },  /* ✳ -> ✶ */
+    { "\xE2\x9C\xBB", "\xE2\x9C\xB6" },  /* ✻ -> ✶ */
+    { "\xE2\x9C\xBD", "\xE2\x9C\xB6" },  /* ✽ -> ✶ */
+    { "\xE2\x9C\x94", "\xE2\x9C\x93" },  /* ✔ -> ✓ */
+    { "\xE2\x9C\x85", "\xE2\x9C\x93" },  /* ✅ -> ✓ */
+    { "\xE2\xA7\x89", "\xE2\x8A\x9E" },  /* ⧉ -> ⊞ */
+    { "\xE2\x80\xBB", "*" },             /* ※ -> * */
+    { "\xEF\xB8\x8E", "" },              /* VS15 (U+FE0E) some */
+    { "\xEF\xB8\x8F", "" },              /* VS16 (U+FE0F) some */
+};
+
+/**
  * Substitui o que a fonte do terminal não desenha, evitando retângulos vazios.
  *
- * A fonte traz a JetBrainsMono Nerd inteira, então sobra pouco: o ⎿ (U+23BF) da
- * árvore de tool calls, que a fonte não tem e vira └ (mesmo sentido, mesmos 3
- * bytes), e os emojis, que nenhuma fonte monoespaçada cobre.
+ * A fonte traz a JetBrainsMono Nerd inteira, então sobra pouco: a tabela
+ * GLYPH_SWAPS acima e os emojis, que nenhuma fonte monoespaçada cobre.
  *
  * Emoji e ícone Nerd são ambos 4 bytes em UTF-8 e só se distinguem pelo primeiro:
  * 0xF0 abre os planos 1–3 (onde vivem os emojis) e 0xF3 abre a área privada
@@ -138,32 +183,52 @@ static void replace_missing_glyphs(char *s)
     unsigned char *w = (unsigned char *)s;
     const unsigned char *r = (const unsigned char *)s;
     while (*r) {
-        if (r[0] == 0xE2 && r[1] == 0x8E && r[2] == 0xBF) {
-            *w++ = 0xE2;            /* ⎿ -> └ */
-            *w++ = 0x94;
-            *w++ = 0x94;
-            r += 3;
-        } else if (r[0] == 0xF0 && r[1] == 0x9F && r[2] && r[3]) {
-            *w++ = '*';             /* emoji -> marcador de uma coluna */
+        if (r[0] == 0xF0 && r[1] == 0x9F && r[2] && r[3]) {
+            *w++ = '*';             /* emoji ocupa 2 células no host: 2 chars */
+            *w++ = ' ';             /* preservam o alinhamento das colunas */
             r += 4;
-        } else {
+            continue;
+        }
+        size_t i;
+        for (i = 0; i < sizeof(GLYPH_SWAPS) / sizeof(GLYPH_SWAPS[0]); i++) {
+            size_t flen = strlen(GLYPH_SWAPS[i].from);
+            /* strncmp para no NUL: nunca lê além do fim da string */
+            if (strncmp((const char *)r, GLYPH_SWAPS[i].from, flen) == 0) {
+                size_t tlen = strlen(GLYPH_SWAPS[i].to);
+                memcpy(w, GLYPH_SWAPS[i].to, tlen);
+                w += tlen;
+                r += flen;
+                break;
+            }
+        }
+        if (i == sizeof(GLYPH_SWAPS) / sizeof(GLYPH_SWAPS[0])) {
             *w++ = *r++;
         }
     }
     *w = '\0';
 }
 
-void herdr_model_set_pane_content(int host, const char *pane_id, const char *content)
+void herdr_model_set_pane_content(int host, const char *pane_id, char *content)
 {
-    if (!host_ok(host)) {
+    if (!host_ok(host) || !s_model.pane_content.content) {
         return;
     }
+    /* in-place e fora do lock: só encolhe, e 0x1B (escapes SGR) é ASCII,
+       intocado pelas trocas de glifo */
+    replace_missing_glyphs(content);
     lock();
-    s_model.pane_content.host = (uint8_t)host;
-    strlcpy(s_model.pane_content.pane_id, pane_id, HERDR_ID_LEN);
-    copy_utf8_safe(s_model.pane_content.content, content, HERDR_CONTENT_LEN);
-    replace_missing_glyphs(s_model.pane_content.content);
-    bump();
+    /* a ponte reenvia o mesmo snapshot a cada polling; só bumpa se mudou —
+       com full_refresh=1, cada repintura custa um quadro inteiro no QSPI */
+    bool changed = s_model.pane_content.host != (uint8_t)host ||
+                   strcmp(s_model.pane_content.pane_id, pane_id) != 0 ||
+                   strcmp(s_model.pane_content.content, content) != 0;
+    if (changed) {
+        s_model.pane_content.host = (uint8_t)host;
+        strlcpy(s_model.pane_content.pane_id, pane_id, HERDR_ID_LEN);
+        copy_utf8_safe(s_model.pane_content.content, content, HERDR_CONTENT_LEN);
+        s_model.pane_content.seq++;
+        bump();
+    }
     unlock();
 }
 
@@ -180,6 +245,35 @@ void herdr_model_set_conn(int host, herdr_conn_state_t state)
     unlock();
 }
 
+void herdr_model_set_limits(int host, const herdr_limits_t *limits, int count)
+{
+    if (!host_ok(host)) {
+        return;
+    }
+    if (count > HERDR_MAX_PROVIDERS) {
+        count = HERDR_MAX_PROVIDERS;
+    }
+    lock();
+    /* mesmo contrato de set_agents: a ponte deduplica, mas um snapshot idêntico
+       ainda pode chegar (reconexão) — só bumpa se mudou, com o host carimbado
+       antes da comparação. */
+    bool changed = (count != s_model.limit_count[host]);
+    for (int i = 0; i < count && !changed; i++) {
+        herdr_limits_t tmp = limits[i];
+        tmp.host = (uint8_t)host;
+        changed = memcmp(&s_model.limits[host][i], &tmp, sizeof(tmp)) != 0;
+    }
+    memcpy(s_model.limits[host], limits, count * sizeof(herdr_limits_t));
+    s_model.limit_count[host] = count;
+    for (int i = 0; i < count; i++) {
+        s_model.limits[host][i].host = (uint8_t)host;
+    }
+    if (changed) {
+        bump();
+    }
+    unlock();
+}
+
 int herdr_model_get_agents(herdr_agent_t *out, int max)
 {
     lock();
@@ -187,6 +281,19 @@ int herdr_model_get_agents(herdr_agent_t *out, int max)
     for (int h = 0; h < CFG_MAX_HOSTS && n < max; h++) {
         for (int i = 0; i < s_model.agent_count[h] && n < max; i++) {
             out[n++] = s_model.agents[h][i];
+        }
+    }
+    unlock();
+    return n;
+}
+
+int herdr_model_get_limits(herdr_limits_t *out, int max)
+{
+    lock();
+    int n = 0;
+    for (int h = 0; h < CFG_MAX_HOSTS && n < max; h++) {
+        for (int i = 0; i < s_model.limit_count[h] && n < max; i++) {
+            out[n++] = s_model.limits[h][i];
         }
     }
     unlock();
@@ -208,15 +315,24 @@ bool herdr_model_get_blocked(herdr_blocked_t *out)
     return found;
 }
 
-bool herdr_model_get_pane_content(herdr_pane_content_t *out)
+bool herdr_model_get_pane_content(char *pane_id, size_t id_size, int *host,
+                                  char *content, size_t content_size,
+                                  uint32_t *seq_inout)
 {
+    if (!s_model.pane_content.content) {
+        return false;
+    }
     lock();
-    bool has = s_model.pane_content.pane_id[0] != '\0';
-    if (has) {
-        *out = s_model.pane_content;
+    bool fresh = s_model.pane_content.pane_id[0] != '\0' &&
+                 s_model.pane_content.seq != *seq_inout;
+    if (fresh) {
+        strlcpy(pane_id, s_model.pane_content.pane_id, id_size);
+        *host = s_model.pane_content.host;
+        copy_utf8_safe(content, s_model.pane_content.content, content_size);
+        *seq_inout = s_model.pane_content.seq;
     }
     unlock();
-    return has;
+    return fresh;
 }
 
 herdr_conn_state_t herdr_model_get_conn(int host)

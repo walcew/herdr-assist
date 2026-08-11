@@ -93,7 +93,9 @@ lv_obj_t *ui_topbar(lv_obj_t *parent, const char *title, lv_obj_t **out_title)
 
 lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
 {
-    static const char *icons[] = { LV_SYMBOL_HOME, LV_SYMBOL_LIST, LV_SYMBOL_SETTINGS };
+    /* mesma ordem do enum ui_tab_t: o índice do laço vira a aba no callback */
+    static const char *icons[] = { LV_SYMBOL_HOME, LV_SYMBOL_LIST, UI_ICON_DASH,
+                                   LV_SYMBOL_SETTINGS };
 
     lv_obj_t *dock = lv_obj_create(parent);
     lv_obj_set_size(dock, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -113,7 +115,7 @@ lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
     lv_obj_set_flex_flow(dock, LV_FLEX_FLOW_ROW);
     lv_obj_clear_flag(dock, LV_OBJ_FLAG_SCROLLABLE);
 
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
         bool on = (i == (int)active);
         lv_obj_t *item = lv_btn_create(dock);
         lv_obj_set_size(item, 62, 38);
@@ -141,3 +143,15 @@ lv_color_t ui_status_color(const char *status)
     if (strcmp(status, "idle") == 0)    return UI_IDLE;
     return UI_MUTED;
 }
+
+/* Base Dracula com azul dessaturado (o azul oficial deles é roxo) e brights na
+   mesma matiz. Só vale para SGR indexado 30-37/90-97/38;5;0-15 — Claude Code e
+   afins emitem truecolor, que passa direto sem tocar aqui. */
+const term_palette_t ui_term_palette = {
+    .palette16 = {
+        0x21222c, 0xff5555, 0x50fa7b, 0xf1fa8c, 0x6272a4, 0xff79c6, 0x8be9fd, 0xf8f8f2,
+        0x555866, 0xff6e6e, 0x69ff94, 0xffffa5, 0x9db2ff, 0xff92df, 0xa4ffff, 0xffffff,
+    },
+    .default_fg = UI_TERM_TEXT_HEX,
+    .default_bg = UI_TERM_BG_HEX,
+};

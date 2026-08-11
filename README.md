@@ -40,7 +40,13 @@ sobe junto com a sessão — um plugin por máquina que você queira controlar p
 **Painel → ponte:** `hello` (token, obrigatório na 1ª linha), depois `read_pane`,
 `send_keys`, `send_text`, `respond`, `focus`, `ping`.
 **Ponte → painel:** `agents` (estado de todos), `blocked` (aprovação pendente com as
-opções já detectadas), `pane_content` (saída do terminal, limpa de spinners), `pong`.
+opções já detectadas), `pane_content` (tela do terminal **com SGR/cores**, fiel ao host —
+só linhas em branco do fim são removidas; quem emula é o motor do Ghostty embutido no
+Herdr, via `pane.read format:"ansi"`, e o painel só parseia SGR e pinta), `limits`
+(uso de limites dos provedores de IA para a aba Dash — coletado dos endpoints de uso
+do Claude Code e do Codex com as credenciais que os próprios CLIs mantêm renovadas em
+`~/.claude/.credentials.json` e `~/.codex/auth.json`; nenhum token sai do Mac, só
+percentuais), `pong`.
 
 A ponte é o ponto onde as decisões de segurança acontecem, porque qualquer um na LAN
 alcança essa porta. **Toda conexão exige um token** (handshake `hello` na primeira linha;
@@ -150,7 +156,7 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 |---|---|
 | `plugin/herdr-plugin.toml` | Manifest do plugin do Herdr (startup, pane de administração, ações) |
 | `plugin/start.sh` | Startup do plugin: sobe a ponte destacada, idempotente, gera token |
-| `plugin/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização |
+| `plugin/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização, coleta de uso de limites (Claude/Codex) |
 | `plugin/admin.py` | Tela de administração no Herdr: status, token, pareamento, girar token |
 | `src/pairing.c` | Modo de pareamento do painel: anúncio por broadcast + recepção da config |
 | `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |
@@ -158,8 +164,10 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 | `src/net.c` | Wi-Fi station com reconexão automática e scan para a tela de config |
 | `src/herdr_conn.c` | Uma conexão TCP por host, parse do protocolo, ping e reconexão |
 | `src/herdr_model.c` | Estado compartilhado entre as tasks de rede e a da UI (mutex + geração) |
+| `src/term_parse.c` | Parser SGR puro (sem LVGL/ESP): snapshot ANSI → grid de runs coloridos; testável no Mac (`scripts/term_parse_test.c`) |
+| `src/term_view.c` | Widget custom da tela de terminal: desenha o grid com cor/estilo por run, pan horizontal fiel |
 | `src/ui_theme.c` | Paleta, fontes, topbar e dock compartilhados pelas telas |
-| `src/herdr_ui.c` | UI LVGL: home (relógio, mascote, resumo, mapa de calor), sessões, terminal, ações, teclado |
+| `src/herdr_ui.c` | UI LVGL: home (relógio, mascote, resumo, mapa de calor), sessões, dash de limites, terminal, ações, teclado |
 | `src/herdr_ui_settings.c` | Aba de configurações: scan de Wi-Fi, senha, editor de hosts |
 | `src/lv_font_terminal_12.c` | Fonte gerada (não editar) — veja `scripts/gen_font.sh` |
 | `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | BSP do fabricante (display, touch, port LVGL) |
@@ -186,11 +194,27 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
   como "Sessões" e "Endereço" perdem os acentos. São duas famílias geradas: o terminal usa
   a JetBrainsMono Nerd inteira (`scripts/gen_font.sh`) e a interface usa a Montserrat com o
   Latin-1 completo, mesclada com a FontAwesome da própria LVGL para os `LV_SYMBOL_*`
-  continuarem valendo (`scripts/gen_font_ui.sh`). O `✳` (U+2733) que o Claude usa nos
-  títulos não existe nem na Nerd Font, e é trocado por `*` em `replace_missing_glyphs()`.
+  continuarem valendo (`scripts/gen_font_ui.sh`), mais pontuação tipográfica/setas da
+  própria Montserrat e `✓ ✗ ⚠ ●` da DejaVu Sans — símbolos que chegam aos alertas em
+  texto vindo do terminal. A Nerd Font, mesmo inteira, não cobre tudo que o Claude Code
+  desenha (spinner `✢✳✻✽`, `⏺ ⏵ ⏸ ⏳`, `◑ ◼ ✅ ✔ ⧉ ※` — auditado contra o cmap):
+  esses viram vizinhos visuais que a fonte tem (`⏺→●`, `✳→✶`, `✅→✓`...) na tabela
+  `GLYPH_SWAPS` de `replace_missing_glyphs()` — trocar por outra fonte quebraria o
+  grid de 7 px do term_view, que assume avanço uniforme.
 - **A interface segue o projeto "herdr-assist" no Claude Design** — paleta neutra (cor só
-  em status), topbar sem barra sólida e dock flutuante de três abas. Ao mexer no visual,
+  em status), topbar sem barra sólida e dock flutuante de quatro abas. Ao mexer no visual,
   atualize lá também: `src/ui_theme.h` é a tradução direta daquelas telas.
+- **A tela de terminal renderiza a formatação real** (`term_parse.c` + `term_view.c`): a
+  ponte pede `pane.read` com `format:"ansi"` — o emulador interno do Herdr é o libghostty,
+  que re-emite a tela como linhas com SGR (só SGR: sem cursor/OSC, confirmado em amostra
+  real) — e o painel parseia isso num grid de runs e desenha com `lv_draw_rect`/`lv_draw_label`
+  em célula de 7×19 px (métricas da `lv_font_terminal_12`). Sem re-wrap: o conteúdo fica na
+  largura real do pane do host e o container permite pan horizontal, com âncora vertical no
+  fim e pan preservado entre refreshes. Caps: 220 colunas × 48 linhas × 12 KB (`HERDR_CONTENT_LEN`,
+  casado com o cap de 12000 da ponte). Limitações assumidas: itálico não tem efeito visual
+  (fonte bpp1 única), bold vira cor clareada (bright na paleta indexada, +30% branco em
+  truecolor), e emoji vira `"* "` (2 células, preservando alinhamento). Snapshot idêntico
+  não repinta: o dedup por `seq` no model evita o full refresh de 307 KB à toa.
 - **O relógio da home depende de SNTP** (`net.c`), com fuso fixo em UTC-3. Sem sincronizar,
   a home mostra `--:--` em vez de uma hora inventada.
 - **Detecção de conexão morta** (`herdr_conn.c`): com push, silêncio é o estado normal, então

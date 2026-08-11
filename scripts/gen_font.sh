@@ -51,5 +51,7 @@ PY
 
 echo "gerado: $OUT"
 echo
-echo "Sobram apenas os emojis (nenhuma fonte monoespaçada os tem) e o ⎿ (U+23BF);"
-echo "ambos são substituídos em replace_missing_glyphs() (src/herdr_model.c)."
+echo "Sobram os emojis (nenhuma fonte monoespaçada os tem) e os símbolos que a"
+echo "Nerd Font não cobre (⎿ ⏺ ⏵ ⏸ ⏳ ◑ ◼ ✢ ✳ ✻ ✽ ✔ ✅ ⧉ ※) — todos trocados"
+echo "por vizinhos visuais na tabela GLYPH_SWAPS de replace_missing_glyphs()"
+echo "(src/herdr_model.c). Ao mexer aqui, re-audite a tabela contra o cmap do .c."

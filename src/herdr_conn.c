@@ -21,8 +21,9 @@
 
 static const char *TAG = "herdr_conn";
 
-/* Maior mensagem esperada é o pane_content; o resto é bem menor. */
-#define RX_BUF_LEN      16384
+/* Maior mensagem esperada é o pane_content (com SGR: a ponte capa a linha
+   JSON em 20000); o resto é bem menor. */
+#define RX_BUF_LEN      24576
 #define PING_PERIOD_S   20
 /* Sem tráfego por este tempo a conexão é dada como morta. Precisa ser bem maior
    que o intervalo de ping para não derrubar uma conexão apenas ociosa. */
@@ -45,6 +46,7 @@ typedef struct {
     size_t rx_used;
     herdr_agent_t parse_agents[HERDR_MAX_AGENTS];
     herdr_blocked_t parse_blocked;
+    herdr_limits_t parse_limits[HERDR_MAX_PROVIDERS];
     bool used;
 } conn_slot_t;
 
@@ -92,9 +94,69 @@ static void handle_agents(conn_slot_t *s, const cJSON *root)
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "workspace_id")))) {
             strlcpy(a->workspace_id, f->valuestring, HERDR_ID_LEN);
         }
+        /* valuedouble, não valueint: o epoch já está perto do teto de int */
+        if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "since")))) {
+            a->since = (uint32_t)f->valuedouble;
+        }
         n++;
     }
     herdr_model_set_agents(s->idx, s->parse_agents, n);
+}
+
+static void handle_limits(conn_slot_t *s, const cJSON *root)
+{
+    const cJSON *arr = cJSON_GetObjectItem(root, "providers");
+    if (!cJSON_IsArray(arr)) {
+        return;
+    }
+    /* o memset também zera padding e linhas não usadas — o memcmp do modelo
+       depende disso para comparar structs inteiras */
+    memset(s->parse_limits, 0, sizeof(s->parse_limits));
+    int n = 0;
+    const cJSON *item;
+    cJSON_ArrayForEach(item, arr) {
+        if (n >= HERDR_MAX_PROVIDERS) {
+            break;
+        }
+        const cJSON *name = cJSON_GetObjectItem(item, "name");
+        if (!cJSON_IsString(name)) {
+            continue;
+        }
+        herdr_limits_t *l = &s->parse_limits[n];
+        strlcpy(l->name, name->valuestring, sizeof(l->name));
+        const cJSON *f;
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "plan")))) {
+            strlcpy(l->plan, f->valuestring, sizeof(l->plan));
+        }
+        l->ok = cJSON_IsTrue(cJSON_GetObjectItem(item, "ok"));
+        /* valuedouble, não valueint: o epoch já está perto do teto de int */
+        if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "stale_since")))) {
+            l->stale_since = (uint32_t)f->valuedouble;
+        }
+        const cJSON *rows = cJSON_GetObjectItem(item, "limits");
+        if (cJSON_IsArray(rows)) {
+            const cJSON *r;
+            cJSON_ArrayForEach(r, rows) {
+                if (l->row_count >= HERDR_MAX_LIMIT_ROWS) {
+                    break;
+                }
+                const cJSON *label = cJSON_GetObjectItem(r, "label");
+                const cJSON *pct = cJSON_GetObjectItem(r, "pct");
+                if (!cJSON_IsString(label) || !cJSON_IsNumber(pct)) {
+                    continue;
+                }
+                herdr_limit_row_t *row = &l->rows[l->row_count++];
+                strlcpy(row->label, label->valuestring, sizeof(row->label));
+                int p = pct->valueint;
+                row->pct = (uint8_t)(p < 0 ? 0 : (p > 100 ? 100 : p));
+                if (cJSON_IsNumber((f = cJSON_GetObjectItem(r, "resets_at")))) {
+                    row->resets_at = (uint32_t)f->valuedouble;
+                }
+            }
+        }
+        n++;
+    }
+    herdr_model_set_limits(s->idx, s->parse_limits, n);
 }
 
 static void handle_blocked(conn_slot_t *s, const cJSON *root)
@@ -148,10 +210,13 @@ static void handle_line(conn_slot_t *s, char *line, size_t len)
             handle_blocked(s, root);
         } else if (strcmp(t, "pane_content") == 0) {
             const cJSON *pane = cJSON_GetObjectItem(root, "pane_id");
-            const cJSON *content = cJSON_GetObjectItem(root, "content");
+            cJSON *content = cJSON_GetObjectItem(root, "content");
             if (cJSON_IsString(pane) && cJSON_IsString(content)) {
+                /* valuestring é mutável: o model sanitiza glifos in-place */
                 herdr_model_set_pane_content(s->idx, pane->valuestring, content->valuestring);
             }
+        } else if (strcmp(t, "limits") == 0) {
+            handle_limits(s, root);
         } else if (strcmp(t, "error") == 0) {
             const cJSON *m = cJSON_GetObjectItem(root, "message");
             ESP_LOGW(TAG, "[%s] ponte recusou: %s", s->label,

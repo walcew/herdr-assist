@@ -27,6 +27,7 @@ Variáveis: HERDR_SOCK, BRIDGE_PORT (9375), BRIDGE_BIND (0.0.0.0), BRIDGE_TOKEN.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hmac
 import json
 import logging
@@ -36,6 +37,8 @@ import secrets
 import socket
 import sys
 import time
+import urllib.error
+import urllib.request
 
 SOCK = (os.environ.get("HERDR_SOCK")
         or os.environ.get("HERDR_SOCKET_PATH")  # fornecida pelo plugin do Herdr
@@ -57,6 +60,14 @@ log = logging.getLogger("bridge")
 SAFE_KEYS = {"y", "n", "a", "Enter", "Tab", "Escape", "C-c", "Up", "Down",
              "Left", "Right", "BSpace"} | {str(n) for n in range(10)}
 MAX_TEXT = 1000
+
+# pane_content vai com SGR (cores) e sem filtro de conteúdo; os caps casam com
+# os buffers do firmware (HERDR_CONTENT_LEN 12288, RX_BUF_LEN 24576) e cortam
+# linhas inteiras — nunca no meio de um escape.
+PANE_LINES = 40
+CONTENT_MAX_B = 12000
+WIRE_MAX_B = 20000
+SGR_RE = re.compile(r"\x1b\[[0-9;:]*m")
 
 # Ruído de terminal que não ajuda em nada numa tela de 3.5": spinners, barras,
 # dicas de atalho. Some para sobrar espaço ao que importa.
@@ -91,11 +102,31 @@ BURST_CAP_S = 0.5        # rajada contínua não adia o envio além disto
 RECONCILE_BUSY_S = 1.0   # painel conectado: teto de latência do status
 RECONCILE_IDLE_S = 5.0   # sem painel: só manter o cache morno
 
+# Uso de limites dos provedores de IA. As credenciais são as que os próprios
+# CLIs mantêm renovadas no disco — nada se configura aqui, e nenhum token sai
+# desta máquina: só percentuais derivados atravessam a LAN. Arquivo ausente
+# significa "CLI não instalado", não erro.
+LIMITS_POLL_S = 60.0     # cadência da coleta com painel conectado
+LIMITS_STEP_S = 5.0      # passo do laço: painel que conecta espera pouco
+LIMITS_HTTP_TIMEOUT = 10
+CLAUDE_CRED = os.path.expanduser("~/.claude/.credentials.json")
+CODEX_AUTH = os.path.expanduser("~/.codex/auth.json")
+
 clients: set[asyncio.StreamWriter] = set()
 known_panes: set[str] = set()
 last_status: dict[str, str] = {}
+# Nem o Herdr nem sua API guardam quando o status mudou, então o instante em que
+# um agente entra em "working" é carimbado aqui — é o que o painel usa para
+# cronometrar. Vai como epoch absoluto (ver push_agents).
+working_since: dict[str, float] = {}
 last_snapshot = ""       # último {"type":"agents"} serializado que foi ao ar
 last_agents: list = []   # o mesmo, ainda como objeto: quem conecta precisa dele
+last_limits_snapshot = ""  # último {"type":"limits"} serializado que foi ao ar
+# Última coleta boa por provedor ({"data": ..., "at": epoch}): quando a coleta
+# falha, o painel recebe esses valores com ok=false e stale_since imutável —
+# um stale_since que andasse a cada falha quebraria o dedup do snapshot.
+limits_last_good: dict[str, dict] = {}
+limits_ok: dict[str, bool] = {}  # só para logar transições, não cada ciclo
 _req_id = 0
 
 
@@ -260,6 +291,38 @@ async def read_pane(pane_id: str, lines: int = 40) -> str:
     return clean_output(await read_pane_raw(pane_id, lines))
 
 
+async def read_pane_ansi(pane_id: str, lines: int = PANE_LINES) -> str:
+    """Tela fiel, com SGR (cores/estilos), para o pane_content do painel.
+
+    O emulador interno do Herdr é o motor do Ghostty; format:"ansi" re-emite o
+    grid já emulado com os estilos por célula. O caminho de texto puro
+    (read_pane/clean_output) continua existindo para o respond/blocked, que
+    fazem match por regex sobre o texto.
+    """
+    result = await herdr_request("pane.read", {"pane_id": pane_id, "lines": lines,
+                                               "source": "recent", "format": "ansi",
+                                               "strip_ansi": False})
+    if not result:
+        return ""
+    return result.get("read", {}).get("text", "")
+
+
+def trim_ansi(raw: str, keep: int) -> str:
+    """Últimas `keep` linhas da tela autêntica, dentro de CONTENT_MAX_B.
+
+    Sem CHROME_RE aqui: spinners e réguas agora renderizam direito no painel.
+    Só as linhas em branco do fim caem; estourando o cap, caem linhas inteiras
+    mais antigas (nunca um corte no meio de escape/UTF-8).
+    """
+    lines = raw.splitlines()
+    while lines and not SGR_RE.sub("", lines[-1]).strip():
+        lines.pop()
+    lines = lines[-keep:]
+    while len(lines) > 1 and len("\n".join(lines).encode()) > CONTENT_MAX_B:
+        lines.pop(0)
+    return "\n".join(lines)
+
+
 async def blocked_message(agent: dict) -> dict:
     """Monta o alerta lendo a tela na hora.
 
@@ -315,21 +378,36 @@ async def push_agents() -> set[str] | None:
     saber quando reassinar, ou None se o Herdr não respondeu — que não é motivo
     para reassinar.
     """
-    global last_snapshot, last_agents
+    global last_snapshot, last_agents, working_since
     result = await herdr_request("pane.list")
     if not result:
         return None
     panes = result.get("panes", [])
-    agents = [
-        {
-            "pane_id": p["pane_id"],
+    # O carimbo vai como epoch absoluto, e não como duração: o broadcast só sai
+    # quando o snapshot serializado muda (adiante), então uma duração mudaria a
+    # cada segundo e faria a ponte transmitir sem parar — e o painel reconstruir
+    # a lista inteira junto. Absoluto, fica imutável enquanto o agente trabalha.
+    now = time.time()
+    new_since = {}
+    agents = []
+    for p in panes:
+        if not p.get("agent"):
+            continue
+        pid, status = p["pane_id"], p.get("agent_status", "unknown")
+        a = {
+            "pane_id": pid,
             "agent": p.get("agent", ""),
-            "status": p.get("agent_status", "unknown"),
+            "status": status,
             "project": os.path.basename(p.get("cwd", "")),
             "workspace_id": p.get("workspace_id", ""),
         }
-        for p in panes if p.get("agent")
-    ]
+        if status == "working":
+            # só o primeiro ciclo em working cria o carimbo; os seguintes o herdam
+            new_since[pid] = working_since.get(pid, now)
+            a["since"] = int(new_since[pid])
+        agents.append(a)
+    # reconstruir em vez de mutar poda de graça quem saiu de working ou sumiu
+    working_since = new_since
     known_panes.clear()
     known_panes.update(a["pane_id"] for a in agents)
     last_agents = agents
@@ -429,6 +507,150 @@ async def event_loop() -> None:
         await asyncio.sleep(2)
 
 
+def fetch_json(url: str, headers: dict) -> dict:
+    """GET + parse, síncrona — é ela que bloqueia, por isso a coleta roda no
+    executor. Isolada também para o teste trocar por fixtures."""
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=LIMITS_HTTP_TIMEOUT) as resp:
+        return json.loads(resp.read().decode())
+
+
+def round_min(epoch: float) -> int:
+    """Arredonda um epoch ao minuto cheio.
+
+    O servidor recalcula o instante de reset a cada resposta e ele treme ±1s
+    entre chamadas — sem arredondar, quase todo ciclo geraria um snapshot
+    "novo" e broadcast à toa. O painel só mostra HH:MM, nada se perde.
+    """
+    return int(round(epoch / 60) * 60)
+
+
+def iso_epoch(s: str) -> int:
+    """ISO 8601 → epoch ao minuto. O fromisoformat do 3.9 não aceita 'Z'."""
+    return round_min(datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
+
+
+def collect_claude() -> dict:
+    """Uso do Claude Code pelo endpoint OAuth, com o token que o CLI renova.
+
+    É o mesmo endpoint interno que alimenta o /usage do CLI; formato pode mudar
+    sem aviso, e qualquer surpresa aqui vira falha do provedor, nunca crash
+    (collect_limits embrulha tudo). O array limits[] já vem normalizado —
+    session (5h), weekly_all (7d) e weekly_scoped por modelo.
+    """
+    with open(CLAUDE_CRED) as f:
+        cred = json.load(f)["claudeAiOauth"]
+    if cred.get("expiresAt", 0) / 1000 <= time.time():
+        # o CLI renova no próximo uso; request agora seria um 401 garantido
+        raise RuntimeError("token expirado")
+    data = fetch_json("https://api.anthropic.com/api/oauth/usage",
+                      {"Authorization": "Bearer " + cred["accessToken"],
+                       "anthropic-beta": "oauth-2025-04-20"})
+    rows = []
+    for lim in data.get("limits", [])[:4]:      # teto espelhado no firmware
+        kind = lim.get("kind", "")
+        if kind == "session":
+            label = "5h"
+        elif kind == "weekly_all":
+            label = "7d"
+        elif kind == "weekly_scoped":
+            model = ((lim.get("scope") or {}).get("model") or {}).get("display_name") or "?"
+            label = clip("7d " + model, 16)     # cabe em label[20] mesmo truncado
+        else:
+            label = clip(kind, 16)              # kind novo aparece cru, não some
+        rows.append({"label": label, "pct": int(round(lim.get("percent") or 0)),
+                     "resets_at": iso_epoch(lim["resets_at"]) if lim.get("resets_at") else 0})
+    # o plano vem do próprio arquivo de credencial: default_claude_max_20x → Max 20x
+    tier = cred.get("rateLimitTier", "")
+    plan = (tier.split("claude_")[-1].replace("_", " ").capitalize()
+            if tier else cred.get("subscriptionType", "").capitalize())
+    return {"name": "Claude", "plan": plan, "limits": rows}
+
+
+def collect_codex() -> dict:
+    """Uso do Codex pelo backend do ChatGPT, com o token que o CLI renova.
+
+    Atenção ao reset_after_seconds: muda a cada segundo e por isso NÃO entra
+    na saída — só o reset_at (epoch fixo), senão o dedup do snapshot morre.
+    """
+    with open(CODEX_AUTH) as f:
+        tok = json.load(f)["tokens"]
+    data = fetch_json("https://chatgpt.com/backend-api/wham/usage",
+                      {"Authorization": "Bearer " + tok["access_token"],
+                       "chatgpt-account-id": tok["account_id"]})
+    rl = data.get("rate_limit") or {}
+    rows = []
+    for win in (rl.get("primary_window"), rl.get("secondary_window")):
+        if not win:
+            continue
+        secs = win.get("limit_window_seconds") or 0
+        label = ("%dd" % round(secs / 86400) if secs >= 86400
+                 else "%dh" % max(1, round(secs / 3600)))
+        rows.append({"label": label, "pct": int(round(win.get("used_percent") or 0)),
+                     "resets_at": round_min(win.get("reset_at") or 0)})
+    return {"name": "Codex", "plan": (data.get("plan_type") or "").capitalize(),
+            "limits": rows}
+
+
+def collect_limits() -> list:
+    """Monta a lista de provedores, degradando com honestidade.
+
+    Três estados por provedor: credencial ausente → omitido (CLI não instalado
+    nesta máquina); falha com sucesso anterior → últimos valores com ok=false e
+    stale_since do último sucesso; falha sem histórico → omitido. Ordem fixa
+    dos provedores: a serialização precisa ser determinística para o dedup.
+    """
+    providers = []
+    for key, path, collect in (("claude", CLAUDE_CRED, collect_claude),
+                               ("codex", CODEX_AUTH, collect_codex)):
+        if not os.path.exists(path):
+            limits_last_good.pop(key, None)
+            limits_ok.pop(key, None)
+            continue
+        try:
+            cur = collect()
+            cur.update(ok=True, stale_since=0)
+            limits_last_good[key] = {"data": {k: cur[k] for k in ("name", "plan", "limits")},
+                                     "at": int(time.time())}
+            providers.append(cur)
+            if limits_ok.get(key) is not True:
+                log.info("limites %s: ok (%d janelas)", key, len(cur["limits"]))
+            limits_ok[key] = True
+        except Exception as e:  # endpoint interno: qualquer surpresa é falha, não crash
+            reason = ("HTTP %d" % e.code if isinstance(e, urllib.error.HTTPError)
+                      else str(e) or type(e).__name__)
+            good = limits_last_good.get(key)
+            if good:
+                stale = dict(good["data"])
+                stale.update(ok=False, stale_since=good["at"])
+                providers.append(stale)
+            if limits_ok.get(key) is not False:
+                log.warning("limites %s: %s", key, reason)
+            limits_ok[key] = False
+    return providers
+
+
+async def limits_loop() -> None:
+    """Coleta o uso de limites e difunde com o mesmo dedup de agents.
+
+    Passo curto com contabilização própria em vez de dormir o ciclo inteiro:
+    um painel que conecta depois de ociosidade espera LIMITS_STEP_S pelo
+    primeiro dado, não LIMITS_POLL_S. Sem painel conectado, nada é coletado.
+    """
+    global last_limits_snapshot
+    last = None   # sentinela: a base do monotonic varia por plataforma
+    while True:
+        if clients and (last is None or time.monotonic() - last >= LIMITS_POLL_S):
+            last = time.monotonic()
+            providers = await asyncio.get_running_loop().run_in_executor(None, collect_limits)
+            snapshot = json.dumps({"type": "limits", "providers": providers},
+                                  separators=(",", ":"))
+            if snapshot != last_limits_snapshot:
+                last_limits_snapshot = snapshot
+                await broadcast_line(snapshot)
+        await asyncio.sleep(LIMITS_STEP_S)
+
+
 async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
     kind = msg.get("type")
     pane_id = msg.get("pane_id", "")
@@ -442,9 +664,21 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
             return await deny("pane desconhecido")
 
     if kind == "read_pane":
-        content = await read_pane(pane_id, int(msg.get("lines", 40)))
-        writer.write((json.dumps({"type": "pane_content", "pane_id": pane_id,
-                                  "content": content}, separators=(",", ":")) + "\n").encode())
+        lines = max(1, min(int(msg.get("lines", PANE_LINES)), 60))
+        content = trim_ansi(await read_pane_ansi(pane_id, lines), lines)
+
+        def encode_payload(c: str) -> bytes:
+            # ensure_ascii=False: box-drawing cru pesa ~1.2x no JSON (a forma
+            # \uXXXX passa de 1.4x e estouraria o RX do firmware à toa)
+            return json.dumps({"type": "pane_content", "pane_id": pane_id,
+                               "content": c}, separators=(",", ":"),
+                              ensure_ascii=False).encode()
+
+        payload = encode_payload(content)
+        while len(payload) > WIRE_MAX_B and "\n" in content:
+            content = content.split("\n", 1)[1]   # densidade patológica: derruba as antigas
+            payload = encode_payload(content)
+        writer.write(payload + b"\n")
         await writer.drain()
 
     elif kind == "send_keys":
@@ -513,6 +747,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         if last_snapshot:        # entrega direta: o broadcast acima pode ter
             writer.write((last_snapshot + "\n").encode())  # sido suprimido
             await writer.drain()
+        if last_limits_snapshot:  # limites: mesmo trio cache/push/entrega
+            writer.write((last_limits_snapshot + "\n").encode())
+            await writer.drain()
         # Um bloqueio que já estava de pé não gera transição: sem isto, o painel
         # que reconecta fica sem o alerta até algum outro agente parar.
         for a in last_agents:
@@ -544,6 +781,7 @@ async def main() -> None:
         sys.exit(1)
     TOKEN = load_token()
     asyncio.create_task(event_loop())
+    asyncio.create_task(limits_loop())
     server = await asyncio.start_server(handle_client, BIND, PORT)
     log.info("ponte ouvindo em %s:%d", BIND, PORT)
     async with server:

@@ -1,16 +1,22 @@
 #include "herdr_ui.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
 #include <lvgl.h>
 
+#include <esp_heap_caps.h>
+
+#include "assets/logo_claude.h"
+#include "assets/logo_codex.h"
 #include "avatar.h"
 #include "herdr_model.h"
 #include "herdr_conn.h"
 #include "herdr_ui_settings.h"
 #include "panel_cfg.h"
+#include "term_view.h"
 #include "ui_theme.h"
 
 #define DETAIL_POLL_TICKS 20   /* 20 x 150ms = 3s entre read_pane */
@@ -20,6 +26,7 @@
 /* --- telas --- */
 static lv_obj_t *s_home;
 static lv_obj_t *s_sessions;
+static lv_obj_t *s_dash;
 static lv_obj_t *s_detail;
 static lv_obj_t *s_blocked_modal;
 static lv_obj_t *s_kb_overlay;
@@ -44,11 +51,28 @@ static lv_obj_t *s_lbl_sort;    /* ícone do botão de ordenação */
 static bool s_group_by_host = true;
 static bool s_sort_priority;
 
+/* Cronômetros das sessões em "working". O since fica junto do ponteiro em vez
+   de um índice para s_ui_agents: aquele array é recopiado a cada geração nova,
+   mas a lista só se reconstrói com a aba aberta, então um índice guardado
+   passaria a apontar para outro agente. */
+typedef struct {
+    lv_obj_t *label;
+    uint32_t  since;
+} sess_timer_t;
+static sess_timer_t s_sess_timers[HERDR_MAX_AGENTS_TOTAL];
+static int          s_sess_timer_count;
+static time_t       s_last_timer_sec;
+
+/* --- dash --- */
+static lv_obj_t *s_dash_list;
+static herdr_limits_t s_ui_limits[HERDR_MAX_PROVIDERS * CFG_MAX_HOSTS];
+static int s_ui_limit_count;
+
 /* --- detalhe --- */
 static lv_obj_t *s_detail_title;
 static lv_obj_t *s_detail_dot;
 static lv_obj_t *s_term_cont;
-static lv_obj_t *s_term_label;
+static lv_obj_t *s_term_view;
 
 /* --- aprovação e teclado --- */
 static lv_obj_t *s_blocked_title;
@@ -96,12 +120,14 @@ static int status_rank(const char *status)
 /* ---------- navegação ---------- */
 
 static void rebuild_session_rows(void);
+static void rebuild_dash_cards(void);
 
 static void show_tab(ui_tab_t tab)
 {
     s_tab = tab;
     lv_obj_add_flag(s_home, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sessions, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_dash, LV_OBJ_FLAG_HIDDEN);
     herdr_ui_settings_hide();
     switch (tab) {
     case UI_TAB_SESSIONS:
@@ -110,6 +136,11 @@ static void show_tab(ui_tab_t tab)
         rebuild_session_rows();
         lv_obj_clear_flag(s_sessions, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_sessions);
+        break;
+    case UI_TAB_DASH:
+        rebuild_dash_cards();   /* mesmo motivo da lista de sessões */
+        lv_obj_clear_flag(s_dash, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_dash);
         break;
     case UI_TAB_SETTINGS:
         herdr_ui_settings_show();
@@ -140,7 +171,7 @@ static void open_detail(const herdr_agent_t *agent)
     lv_label_set_text_fmt(s_detail_title, "%s / %s \xC2\xB7 %s",
                           host_label(agent->host), agent->project, agent->agent);
     lv_obj_set_style_bg_color(s_detail_dot, ui_status_color(agent->status), 0);
-    lv_label_set_text(s_term_label, "carregando...");
+    term_view_clear(s_term_view, "carregando...");
     lv_obj_clear_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_detail);
 }
@@ -356,6 +387,11 @@ static void build_home(void)
     ui_dock(s_home, UI_TAB_HOME, dock_cb);
 }
 
+/* no escopo do arquivo porque o dash também usa (dia de reset dos limites) */
+static const char *wd[] = { "dom", "seg", "ter", "qua", "qui", "sex", "sáb" };
+static const char *mo[] = { "jan", "fev", "mar", "abr", "mai", "jun",
+                            "jul", "ago", "set", "out", "nov", "dez" };
+
 static void refresh_clock(void)
 {
     time_t now;
@@ -372,9 +408,6 @@ static void refresh_clock(void)
     }
     s_last_minute = tm.tm_min;
 
-    static const char *wd[] = { "dom", "seg", "ter", "qua", "qui", "sex", "sáb" };
-    static const char *mo[] = { "jan", "fev", "mar", "abr", "mai", "jun",
-                                "jul", "ago", "set", "out", "nov", "dez" };
     lv_label_set_text_fmt(s_clock, "%02d:%02d", tm.tm_hour, tm.tm_min);
     lv_label_set_text_fmt(s_date, "%s, %d %s", wd[tm.tm_wday], tm.tm_mday, mo[tm.tm_mon]);
 }
@@ -459,6 +492,28 @@ static void build_sessions(void)
     ui_dock(s_sessions, UI_TAB_SESSIONS, dock_cb);
 }
 
+/** Escreve o tempo decorrido como mm:ss (h:mm:ss acima de uma hora). */
+static void set_elapsed_text(lv_obj_t *label, time_t now, uint32_t since)
+{
+    /* antes do SNTP responder o relógio está em 1970 e a conta não vale nada;
+       a mesma guarda cobre um since no futuro por desvio entre os relógios */
+    if (now < (time_t)since) {
+        lv_label_set_text(label, "");
+        return;
+    }
+    uint32_t s = (uint32_t)(now - (time_t)since);
+    /* %02u nos minutos: a Montserrat é proporcional e a largura fixa evita que
+       o texto salte a cada mudança de dezena. Os casts são porque no xtensa
+       uint32_t é unsigned long e o -Werror=format reclama. */
+    if (s >= 3600) {
+        lv_label_set_text_fmt(label, "%u:%02u:%02u", (unsigned)(s / 3600),
+                              (unsigned)((s / 60) % 60), (unsigned)(s % 60));
+    } else {
+        lv_label_set_text_fmt(label, "%02u:%02u", (unsigned)(s / 60),
+                              (unsigned)(s % 60));
+    }
+}
+
 static void add_session_row(int flat_idx)
 {
     const herdr_agent_t *a = &s_ui_agents[flat_idx];
@@ -481,6 +536,9 @@ static void add_session_row(int flat_idx)
     lv_label_set_text(name, a->project);
     lv_obj_set_style_text_font(name, &lv_font_ui_16, 0);
     lv_obj_set_style_text_color(name, UI_TEXT, 0);
+    /* corta o nome longo em vez de deixá-lo passar por baixo do cronômetro */
+    lv_obj_set_width(name, LV_PCT(72));
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 26, -8);
 
     lv_obj_t *sub = lv_label_create(row);
@@ -494,6 +552,41 @@ static void add_session_row(int flat_idx)
     lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(sub, UI_MUTED, 0);
     lv_obj_align(sub, LV_ALIGN_LEFT_MID, 26, 11);
+
+    /* Só quem está working ganha cronômetro. Mudar de status muda a geração e
+       reconstrói a lista, então uma linha registrada aqui continua working até
+       ser destruída — não há caso de virar working sem passar por aqui. */
+    if (strcmp(a->status, "working") == 0 && a->since != 0 &&
+        s_sess_timer_count < HERDR_MAX_AGENTS_TOTAL) {
+        lv_obj_t *t = lv_label_create(row);
+        set_elapsed_text(t, time(NULL), a->since);   /* já nasce com o valor certo */
+        lv_obj_set_style_text_font(t, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(t, UI_MUTED, 0);
+        lv_obj_align(t, LV_ALIGN_RIGHT_MID, -4, -8);   /* na altura do nome */
+        s_sess_timers[s_sess_timer_count].label = t;
+        s_sess_timers[s_sess_timer_count].since = a->since;
+        s_sess_timer_count++;
+    }
+}
+
+/**
+ * Faz os cronômetros correrem sem depender da geração do modelo.
+ *
+ * O tick da UI é de 150ms, mas o texto só muda quando vira o segundo.
+ */
+static void refresh_session_timers(void)
+{
+    if (s_tab != UI_TAB_SESSIONS || s_detail_open || s_sess_timer_count == 0) {
+        return;
+    }
+    time_t now = time(NULL);
+    if (now == s_last_timer_sec) {
+        return;
+    }
+    s_last_timer_sec = now;
+    for (int i = 0; i < s_sess_timer_count; i++) {
+        set_elapsed_text(s_sess_timers[i].label, now, s_sess_timers[i].since);
+    }
 }
 
 /**
@@ -556,6 +649,9 @@ static void add_muted_line(const char *text)
 static void rebuild_session_rows(void)
 {
     lv_obj_clean(s_sess_list);
+    /* os labels foram destruídos junto com as linhas; add_session_row reabastece */
+    s_sess_timer_count = 0;
+    s_last_timer_sec = 0;
     const panel_cfg_t *cfg = panel_cfg_get();
     int order[HERDR_MAX_AGENTS_TOTAL];
 
@@ -598,6 +694,218 @@ static void rebuild_session_rows(void)
             add_muted_line(conn == HERDR_CONN_ONLINE ? "Nenhuma sessão ativa."
                                                      : "Aguardando a ponte...");
         }
+    }
+}
+
+/* ---------- dash ---------- */
+
+/* Medidas da tela "Dashboards" no Claude Design (projeto herdr-assist). */
+#define DASH_PAD_TOP    10  /* padding superior do card */
+#define DASH_PAD_X      12  /* padding lateral do card */
+#define DASH_PAD_BOTTOM 12
+#define DASH_LOGO       26  /* slot quadrado do logo do provedor */
+#define DASH_TXT_H      17  /* altura da linha de texto de um limite */
+#define DASH_BAR_H      12
+/* margem 11 + texto + respiro 6 + barra: passo de um bloco de limite */
+#define DASH_ROW_BLOCK  (11 + DASH_TXT_H + 6 + DASH_BAR_H)
+/* onde o primeiro bloco começa, logo abaixo do cabeçalho do card */
+#define DASH_ROWS_Y     (DASH_PAD_TOP + DASH_LOGO)
+#define DASH_BAR_W      (LV_HOR_RES - 2 * UI_PAD - 2 * DASH_PAD_X)
+
+static void build_dash(void)
+{
+    s_dash = ui_screen();
+    ui_topbar(s_dash, "Dashboards", NULL);
+
+    s_dash_list = ui_plain(s_dash);
+    lv_obj_set_size(s_dash_list, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
+    lv_obj_align(s_dash_list, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
+    lv_obj_set_flex_flow(s_dash_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_dash_list, 8, 0);
+    lv_obj_set_style_pad_left(s_dash_list, UI_PAD, 0);
+    lv_obj_set_style_pad_right(s_dash_list, UI_PAD, 0);
+    lv_obj_set_style_pad_bottom(s_dash_list, UI_DOCK_SPACE, 0);
+    lv_obj_add_flag(s_dash_list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_dash_list, LV_DIR_VER);
+
+    ui_dock(s_dash, UI_TAB_DASH, dock_cb);
+}
+
+/** Cor da barra por nível de uso: verde, âmbar, laranja, vermelho. */
+static lv_color_t limit_color(uint8_t pct)
+{
+    if (pct < 50) return UI_IDLE;
+    if (pct < 65) return UI_WORKING;
+    if (pct < 80) return UI_LIMIT_HIGH;
+    return UI_BLOCKED;
+}
+
+/**
+ * Escreve um instante de forma curta: hora se a menos de 24h, senão o dia da
+ * semana. Devolve false (e buf vazio) sem SNTP sincronizado ou sem instante —
+ * melhor omitir do que mostrar hora calculada sobre relógio de 1970.
+ */
+static bool fmt_when(char *buf, size_t size, time_t now, uint32_t t)
+{
+    struct tm tm;
+    localtime_r(&now, &tm);
+    if (tm.tm_year < 120 || t == 0) {
+        buf[0] = '\0';
+        return false;
+    }
+    time_t tt = (time_t)t;
+    struct tm wtm;
+    localtime_r(&tt, &wtm);
+    long diff = (long)(tt > now ? tt - now : now - tt);
+    if (diff < 24 * 3600) {
+        snprintf(buf, size, "%02d:%02d", wtm.tm_hour, wtm.tm_min);
+    } else {
+        snprintf(buf, size, "%s", wd[wtm.tm_wday]);
+    }
+    return true;
+}
+
+/** Logo do provedor, ou NULL para um nome que ainda não tem arte. */
+static const lv_img_dsc_t *provider_logo(const char *name)
+{
+    if (strcmp(name, "Claude") == 0) return &logo_claude;
+    if (strcmp(name, "Codex") == 0)  return &logo_codex;
+    return NULL;
+}
+
+static void add_limits_card(const herdr_limits_t *l, bool show_host)
+{
+    time_t now = time(NULL);
+    int n = l->row_count;
+    /* altura fixa por fórmula: LV_SIZE_CONTENT com filhos alinhados é armadilha
+       no 8.4. A linha de "sem atualizar" cobra a margem de 8 mais a própria
+       altura de texto. */
+    lv_coord_t h = (lv_coord_t)(DASH_ROWS_Y + n * DASH_ROW_BLOCK +
+                                (l->ok ? 0 : 8 + 14) + DASH_PAD_BOTTOM);
+
+    lv_obj_t *card = ui_card(s_dash_list, 10);
+    lv_obj_set_size(card, LV_PCT(100), h);
+
+    /* slot do logo: mesmo fundo da tela, para o ícone ficar num recorte */
+    lv_obj_t *slot = lv_obj_create(card);
+    lv_obj_set_size(slot, DASH_LOGO, DASH_LOGO);
+    lv_obj_set_style_radius(slot, 7, 0);
+    lv_obj_set_style_bg_color(slot, UI_BG, 0);
+    lv_obj_set_style_border_width(slot, 1, 0);
+    lv_obj_set_style_border_color(slot, UI_BORDER, 0);
+    lv_obj_set_style_shadow_width(slot, 0, 0);
+    lv_obj_set_style_pad_all(slot, 0, 0);
+    lv_obj_clear_flag(slot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(slot, LV_ALIGN_TOP_LEFT, DASH_PAD_X, DASH_PAD_TOP);
+
+    const lv_img_dsc_t *logo = provider_logo(l->name);
+    if (logo) {
+        lv_obj_t *img = lv_img_create(slot);
+        lv_img_set_src(img, logo);
+        lv_obj_center(img);
+    }
+
+    lv_obj_t *name = lv_label_create(card);
+    if (show_host) {
+        lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", host_label(l->host), l->name);
+    } else {
+        lv_label_set_text(name, l->name);
+    }
+    lv_obj_set_style_text_font(name, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(name, UI_TEXT, 0);
+    lv_obj_align_to(name, slot, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+
+    if (l->plan[0]) {
+        lv_obj_t *plan = lv_label_create(card);
+        lv_label_set_text(plan, l->plan);
+        lv_obj_set_style_text_font(plan, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(plan, UI_MUTED, 0);
+        /* centralizado na altura do slot, como o align-items:center do design */
+        lv_obj_align(plan, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X,
+                     DASH_PAD_TOP + (DASH_LOGO - 14) / 2);
+    }
+
+    for (int i = 0; i < n; i++) {
+        const herdr_limit_row_t *r = &l->rows[i];
+        lv_coord_t y = (lv_coord_t)(DASH_ROWS_Y + 11 + i * DASH_ROW_BLOCK);
+
+        lv_obj_t *lab = lv_label_create(card);
+        lv_label_set_text(lab, r->label);
+        lv_obj_set_style_text_font(lab, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(lab, UI_TEXT, 0);
+        lv_obj_align(lab, LV_ALIGN_TOP_LEFT, DASH_PAD_X, y);
+
+        /* o reset ancora na direita e o percentual encosta nele: são fontes e
+           cores diferentes, então não cabem num label só */
+        char when[12];
+        lv_obj_t *rst = NULL;
+        if (fmt_when(when, sizeof(when), now, r->resets_at) && (time_t)r->resets_at > now) {
+            rst = lv_label_create(card);
+            lv_label_set_text_fmt(rst, LV_SYMBOL_RIGHT " %s", when);
+            lv_obj_set_style_text_font(rst, &lv_font_ui_12, 0);
+            lv_obj_set_style_text_color(rst, UI_MUTED, 0);
+            lv_obj_align(rst, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X, y + 2);
+        }
+        lv_obj_t *val = lv_label_create(card);
+        lv_label_set_text_fmt(val, "%u%%", (unsigned)r->pct);
+        lv_obj_set_style_text_font(val, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(val, UI_TEXT, 0);
+        if (rst) {
+            lv_obj_align_to(val, rst, LV_ALIGN_OUT_LEFT_MID, -5, -1);
+        } else {
+            lv_obj_align(val, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X, y);
+        }
+
+        lv_obj_t *bar = lv_bar_create(card);
+        lv_obj_set_size(bar, DASH_BAR_W, DASH_BAR_H);
+        lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, (lv_coord_t)(y + DASH_TXT_H + 6));
+        /* sem sobrescrever, o tema default pinta o indicador na cor primária
+           e anima cada mudança de valor */
+        lv_obj_set_style_bg_color(bar, UI_BORDER, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(bar, DASH_BAR_H / 2, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(bar, limit_color(r->pct), LV_PART_INDICATOR);
+        lv_obj_set_style_radius(bar, DASH_BAR_H / 2, LV_PART_INDICATOR);
+        lv_bar_set_range(bar, 0, 100);
+        lv_bar_set_value(bar, r->pct, LV_ANIM_OFF);
+    }
+
+    if (!l->ok) {
+        /* âmbar, não muted: o estado degradado é justamente o que precisa
+           aparecer */
+        char when[12];
+        lv_obj_t *st = lv_label_create(card);
+        if (fmt_when(when, sizeof(when), now, l->stale_since)) {
+            lv_label_set_text_fmt(st, "sem atualizar desde %s", when);
+        } else {
+            lv_label_set_text(st, "sem atualizar");
+        }
+        lv_obj_set_style_text_font(st, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(st, UI_WORKING, 0);
+        lv_obj_align(st, LV_ALIGN_TOP_LEFT, DASH_PAD_X,
+                     (lv_coord_t)(DASH_ROWS_Y + n * DASH_ROW_BLOCK + 8));
+    }
+}
+
+static void rebuild_dash_cards(void)
+{
+    lv_obj_clean(s_dash_list);
+    s_ui_limit_count = herdr_model_get_limits(
+        s_ui_limits, HERDR_MAX_PROVIDERS * CFG_MAX_HOSTS);
+    if (s_ui_limit_count == 0) {
+        lv_obj_t *l = lv_label_create(s_dash_list);
+        lv_label_set_text(l, "Sem dados de uso ainda.");
+        lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(l, UI_MUTED, 0);
+        return;
+    }
+    /* com um host os cards falam por si; com mais, o título ganha o host */
+    bool multi = false;
+    for (int i = 1; i < s_ui_limit_count; i++) {
+        multi |= s_ui_limits[i].host != s_ui_limits[0].host;
+    }
+    for (int i = 0; i < s_ui_limit_count; i++) {
+        add_limits_card(&s_ui_limits[i], multi);
     }
 }
 
@@ -650,12 +958,7 @@ static void build_detail(void)
     lv_obj_set_style_radius(s_term_cont, 0, 0);
     lv_obj_set_style_pad_all(s_term_cont, 8, 0);
 
-    s_term_label = lv_label_create(s_term_cont);
-    lv_obj_set_width(s_term_label, LV_PCT(100));
-    lv_label_set_long_mode(s_term_label, LV_LABEL_LONG_WRAP);
-    lv_label_set_text(s_term_label, "");
-    lv_obj_set_style_text_font(s_term_label, &lv_font_terminal_12, 0);
-    lv_obj_set_style_text_color(s_term_label, UI_TERM_TEXT, 0);
+    s_term_view = term_view_create(s_term_cont);
 
     lv_obj_t *actions = ui_plain(s_detail);
     lv_obj_set_size(actions, LV_HOR_RES, ACTION_BAR_H);
@@ -687,15 +990,27 @@ static void refresh_detail(void)
             break;
         }
     }
-    /* static: a struct tem ~8KB e a task da LVGL tem 8KB de stack.
+    /* buffer grande fora da pilha (task da LVGL tem 8KB): PSRAM, alocado 1x.
        Seguro porque esta função roda exclusivamente na task da LVGL. */
-    static herdr_pane_content_t content;
-    if (herdr_model_get_pane_content(&content) &&
-        content.host == s_detail_host &&
-        strcmp(content.pane_id, s_detail_pane) == 0 &&
-        strcmp(lv_label_get_text(s_term_label), content.content) != 0) {
-        lv_label_set_text(s_term_label, content.content);
-        lv_obj_scroll_to_y(s_term_cont, LV_COORD_MAX, LV_ANIM_OFF);
+    static char *raw;
+    if (!raw) {
+        raw = heap_caps_malloc(HERDR_CONTENT_LEN, MALLOC_CAP_SPIRAM);
+        if (!raw) {
+            raw = malloc(HERDR_CONTENT_LEN);
+        }
+        if (!raw) {
+            return;
+        }
+    }
+    static uint32_t seq;
+    char pane_id[HERDR_ID_LEN];
+    int host;
+    /* o dedup mora no model (seq): snapshot repetido nem chega aqui */
+    if (herdr_model_get_pane_content(pane_id, sizeof(pane_id), &host,
+                                     raw, HERDR_CONTENT_LEN, &seq) &&
+        host == s_detail_host &&
+        strcmp(pane_id, s_detail_pane) == 0) {
+        term_view_set_ansi(s_term_view, raw);
     }
 }
 
@@ -815,6 +1130,9 @@ static void ui_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
     refresh_clock();
+    /* antes do early-out por geração: o cronômetro corre com o relógio, não
+       com as mudanças de estado, e esse return é o caminho da maioria dos ticks */
+    refresh_session_timers();
 
     if (s_detail_open && ++s_poll_tick >= DETAIL_POLL_TICKS) {
         s_poll_tick = 0;
@@ -832,6 +1150,9 @@ static void ui_timer_cb(lv_timer_t *timer)
     if (s_tab == UI_TAB_SESSIONS && !s_detail_open) {
         rebuild_session_rows();
     }
+    if (s_tab == UI_TAB_DASH) {
+        rebuild_dash_cards();
+    }
     refresh_detail();
     refresh_blocked();
 }
@@ -842,6 +1163,7 @@ void herdr_ui_init(void)
 
     build_home();
     build_sessions();
+    build_dash();
     build_detail();
     build_blocked_modal();
     build_keyboard_overlay();
