@@ -14,6 +14,11 @@ terminal.
 | ![Home screen: clock, mascot and per-host heatmap](docs/images/panel-home.jpg) | ![Sessions list grouped by host](docs/images/panel-sessions.jpg) | ![Provider usage limits](docs/images/panel-dash.jpg) |
 | Clock, mascot and a heatmap per host | Sessions with state, grouped by host | Claude and Codex usage limits |
 
+> **Requires Herdr.** This panel is a client, not a standalone device — it needs a running
+> [Herdr](https://herdr.dev) instance on every machine you want to monitor. The bridge in
+> `plugin/` ships as a Herdr plugin and speaks its native socket, so everything the panel
+> shows comes from Herdr's own event stream.
+
 ## Quick start
 
 Three steps: flash the panel, install the bridge on the machine you want to control, and

@@ -16,6 +16,11 @@ sessão certa com um toque, sem precisar procurar a janela no terminal.
 | ![Tela inicial: relógio, mascote e mapa de calor por host](docs/images/panel-home.jpg) | ![Lista de sessões agrupada por host](docs/images/panel-sessions.jpg) | ![Limites de uso dos provedores](docs/images/panel-dash.jpg) |
 | Relógio, mascote e um mapa de calor por host | Sessões com estado, agrupadas por host | Limites de uso do Claude e do Codex |
 
+> **Requer o Herdr.** Este painel é um cliente, não um dispositivo independente — ele
+> precisa de uma instância do [Herdr](https://herdr.dev) rodando em cada máquina que você
+> quiser monitorar. A ponte em `plugin/` é um plugin do Herdr e fala o socket nativo dele,
+> então tudo que o painel mostra vem do próprio fluxo de eventos do Herdr.
+
 ## Começando
 
 Três passos: gravar o painel, instalar a ponte na máquina que você quer controlar e
