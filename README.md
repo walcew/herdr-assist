@@ -158,9 +158,10 @@ then `a`. From the command line, inside any Herdr pane:
 herdr plugin pane open --plugin herdr-assist --entrypoint admin
 ```
 
-The screen opens as a 76×22 popup over the session. Inside it: `p` pairs a panel,
+The screen opens as a 76×22 popup over the session — a small TUI you can drive with
+the mouse (click any row or button) or entirely from the keyboard: `p` pairs a panel,
 `r` rotates the token, `x` restarts the bridge, `k` installs the keyboard shortcut,
-`q` closes.
+arrows + enter navigate, `q`/esc closes. The status block refreshes on its own.
 
 > Over SSH, `herdr` may not be on the PATH (a non-interactive session does not load the
 > Homebrew environment): use the full path, usually `/opt/homebrew/bin/herdr`.

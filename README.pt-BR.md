@@ -160,8 +160,10 @@ Com o atalho instalado (tecle `k` na própria tela, ou veja abaixo): `ctrl+b`, d
 herdr plugin pane open --plugin herdr-assist --entrypoint admin
 ```
 
-A tela abre como popup de 76×22 sobre a sessão. Dentro dela: `p` pareia um painel, `r`
-gira o token, `x` reinicia a ponte, `k` instala o atalho de teclado, `q` fecha.
+A tela abre como popup de 76×22 sobre a sessão — uma pequena TUI que você usa com o
+mouse (clique em qualquer linha ou botão) ou só pelo teclado: `p` pareia um painel, `r`
+gira o token, `x` reinicia a ponte, `k` instala o atalho de teclado, setas + enter
+navegam, `q`/esc fecha. O bloco de status atualiza sozinho.
 
 > Por SSH o `herdr` pode não estar no PATH (uma sessão não-interativa não carrega o
 > ambiente do Homebrew): use o caminho completo, normalmente `/opt/homebrew/bin/herdr`.
