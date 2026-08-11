@@ -28,21 +28,20 @@ FRAMES_DIR = Path(__file__).resolve().parent / "sonic_frames"
 
 # Animações montadas à mão: nome -> frames únicos (ids de mapping) + sequência.
 # ko = caído de costas (D7/D8), push = empurrando (anim $22).
-# complain = boca aberta gesticulando (anim $0C): o Sonic 3 não tem nenhuma
-# animação de sono ou descanso — as 36 são de locomoção, ação, dano ou
-# especiais, e a única parada é a espera, que já é o idle. Então quem fica
-# ocioso demais reclama, que é o que o personagem faz mesmo.
 ANIMS = {
-    "run":      {"frames": [0x21, 0x22, 0x23, 0x24], "seq": [0, 1, 2, 3], "loop": 0},
-    "push":     {"frames": [0x90, 0x91, 0x92],       "seq": [0, 1, 2, 1], "loop": 0},
-    "ko":       {"frames": [0xD7, 0xD8],             "seq": [0, 1],       "loop": 0},
-    "complain": {"frames": [0xA1, 0xA2, 0xA3],       "seq": [0, 1, 2],    "loop": 0},
+    "run":  {"frames": [0x21, 0x22, 0x23, 0x24], "seq": [0, 1, 2, 3], "loop": 0},
+    "push": {"frames": [0x90, 0x91, 0x92],       "seq": [0, 1, 2, 1], "loop": 0},
+    "ko":   {"frames": [0xD7, 0xD8],             "seq": [0, 1],       "loop": 0},
 }
 
 # Animações copiadas na íntegra do jogo — frames, ordem e ponto de loop saem do
 # próprio script de animação. $05 = espera (fica parado, depois bate o pé);
-# $13 = levanta a mão e fica balançando o dedo.
-GAME_ANIMS = {"idle": 0x05, "cheer": 0x13}
+# $13 = levanta a mão e fica balançando o dedo; $0A = agacha e fica agachado,
+# escolhida para o sono porque o Sonic 3 não tem animação de dormir (as 36 são
+# de locomoção, ação, dano ou especiais). Ela termina em $FD, que no jogo troca
+# de animação e aqui vira ponto de loop 0: o ciclo levanta e agacha de novo, em
+# vez de congelar no último frame como fazia o agachado montado à mão.
+GAME_ANIMS = {"idle": 0x05, "cheer": 0x13, "sleep": 0x0A}
 
 LABEL_RE = re.compile(r"^(\w+):")
 DC_RE = re.compile(r"dc\.(b|w)\s+(.*)")
