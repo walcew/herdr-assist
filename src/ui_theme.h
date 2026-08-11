@@ -37,7 +37,10 @@ extern "C" {
 #define UI_TOPBAR_H    64
 #define UI_ICON_BTN    44
 #define UI_ROW_H       52
-#define UI_DOCK_SPACE  62   /* espaço a reservar embaixo para o dock flutuante */
+/* Espaço a reservar embaixo para o dock flutuante. O dock tem 50px (item de 38
+   + pad 5 + borda 1, dos dois lados) e sobe 10px da base, mas a sombra sai mais
+   14px por cima (width 24, ofs_y 10): 74px no total, +6 de folga. */
+#define UI_DOCK_SPACE  80
 #define UI_PAD         8
 
 /* --- fontes --- */

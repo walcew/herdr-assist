@@ -538,17 +538,31 @@ static bool cfg_dirty(void)
     return memcmp(&s_edit, panel_cfg_get(), sizeof(s_edit)) != 0;
 }
 
-static void save_cb(lv_event_t *e)
+/** Troca o conteúdo pelo aviso e reinicia; não retorna. */
+static void restart_now(void)
 {
-    (void)e;
-    panel_cfg_save(&s_edit);
     lv_obj_clean(s_content);
     lv_obj_t *l = lv_label_create(s_content);
     lv_label_set_text(l, "Reiniciando...");
     lv_obj_set_style_text_font(l, &lv_font_ui_16, 0);
     lv_obj_set_style_text_color(l, UI_TEXT, 0);
-    /* reinício limpa Wi-Fi e conexões; mais simples e confiável que teardown */
+    lv_refr_now(NULL);            /* pinta o aviso antes de sumir a tela */
     esp_restart();
+}
+
+static void save_cb(lv_event_t *e)
+{
+    (void)e;
+    panel_cfg_save(&s_edit);
+    /* reinício limpa Wi-Fi e conexões; mais simples e confiável que teardown */
+    restart_now();
+}
+
+/** Reinício avulso: o que estiver pendente de salvar é descartado. */
+static void restart_cb(lv_event_t *e)
+{
+    (void)e;
+    restart_now();
 }
 
 /** O aviso de pendência só existe na tela principal, e só quando há mudança. */
@@ -637,6 +651,15 @@ static void show_main(void)
         lv_obj_set_style_text_color(al, UI_MUTED, 0);
         lv_obj_center(al);
     }
+
+    make_section_label("Dispositivo");
+    lv_obj_t *rst = make_row(restart_cb, NULL, 44);
+    lv_obj_t *rsl = lv_label_create(rst);
+    lv_label_set_text(rsl, "Reiniciar dispositivo");
+    lv_obj_set_style_text_font(rsl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(rsl, UI_TEXT, 0);
+    lv_obj_center(rsl);
+
     update_toast();
 }
 
