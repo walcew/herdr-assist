@@ -21,6 +21,8 @@ import subprocess
 import sys
 import time
 
+from i18n import t
+
 PORT = int(os.environ.get("BRIDGE_PORT", "9375"))
 PAIR_PORT = 9376
 CONF = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
@@ -88,23 +90,32 @@ def clear() -> None:
     sys.stdout.write("\033[2J\033[H")
 
 
+def row(key: str, value: str) -> None:
+    """Linha rotulada do status, com os valores na mesma coluna nos dois idiomas."""
+    label = t(key)
+    print(f"  {DIM}{label}{OFF}{' ' * max(2, 9 - len(label))}{value}")
+
+
 def status_screen() -> None:
     clear()
     tok, pid = read_token(), bridge_pid()
     conn = panels()
-    print(f"{BOLD}herdr-assist — ponte do painel{OFF}\n")
-    print(f"  {DIM}Host{OFF}     {host_name()}")
+    print(f"{BOLD}{t('title')}{OFF}\n")
+    row("host", host_name())
     if pid:
-        print(f"  {DIM}Ponte{OFF}    {GREEN}ativa{OFF} (pid {pid}, porta {PORT})")
+        row("bridge", f"{GREEN}{t('bridge.up')}{OFF} "
+                      f"({t('bridge.where', pid=pid, port=PORT)})")
     else:
-        print(f"  {DIM}Ponte{OFF}    {RED}parada{OFF} — use [x] para subir")
-    print(f"  {DIM}Token{OFF}    {tok or RED + 'ausente' + OFF}")
+        row("bridge", f"{RED}{t('bridge.down')}{OFF} — {t('bridge.hint')}")
+    row("token", tok or RED + t("token.missing") + OFF)
     if conn:
-        print(f"  {DIM}Painéis{OFF}  {GREEN}{len(conn)} conectado(s){OFF} — {', '.join(conn)}")
+        row("panels", f"{GREEN}{t('panels.some', n=len(conn))}{OFF}"
+                      f" — {', '.join(conn)}")
     else:
-        print(f"  {DIM}Painéis{OFF}  nenhum conectado")
-    print(f"\n  {BOLD}[p]{OFF} parear painel   {BOLD}[r]{OFF} girar token   "
-          f"{BOLD}[x]{OFF} reiniciar ponte   {BOLD}[q]{OFF} sair")
+        row("panels", t("panels.none"))
+    # as teclas ficam em negrito dentro da própria string traduzida
+    menu = t("menu").replace("[", BOLD + "[").replace("]", "]" + OFF)
+    print(f"\n  {menu}")
 
 
 def discover() -> list:
@@ -114,7 +125,7 @@ def discover() -> list:
     try:
         s.bind(("", PAIR_PORT))
     except OSError as e:
-        print(f"  {RED}não foi possível escutar a porta {PAIR_PORT}: {e}{OFF}")
+        print(f"  {RED}{t('pair.listen_er', port=PAIR_PORT, err=e)}{OFF}")
         return []
     s.settimeout(0.5)
     found, deadline = {}, time.time() + SCAN_SECONDS
@@ -130,7 +141,7 @@ def discover() -> list:
         if msg.get("t") == "herdr-assist" and msg.get("id"):
             found[msg["id"]] = (addr[0], int(msg.get("port", PAIR_PORT)))
         left = int(deadline - time.time())
-        sys.stdout.write(f"\r  procurando... {left}s — {len(found)} encontrado(s)   ")
+        sys.stdout.write("\r  " + t("pair.searching", left=left, n=len(found)) + "   ")
         sys.stdout.flush()
     s.close()
     print()
@@ -147,7 +158,7 @@ def send_config(ip: str, port: int, token: str) -> bool:
         reply = s.recv(256).decode(errors="replace")
         s.close()
     except OSError as e:
-        print(f"  {RED}falha ao enviar: {e}{OFF}")
+        print(f"  {RED}{t('pair.send_fail', err=e)}{OFF}")
         return False
     try:
         return bool(json.loads(reply).get("ok"))
@@ -159,42 +170,42 @@ def pair_flow() -> None:
     clear()
     token = read_token()
     if not token:
-        print(f"  {RED}sem token — suba a ponte antes de parear.{OFF}")
+        print(f"  {RED}{t('pair.no_token')}{OFF}")
         return
-    print(f"{BOLD}Parear painel{OFF}\n")
-    print(f"  {DIM}No painel: Configurações → Parear com um host{OFF}\n")
+    print(f"{BOLD}{t('pair.title')}{OFF}\n")
+    print(f"  {DIM}{t('pair.where')}{OFF}\n")
     devices = discover()
     if not devices:
-        print(f"\n  {AMBER}nenhum painel em modo de pareamento.{OFF}")
-        print(f"  {DIM}ligue o modo no painel e tente de novo.{OFF}")
+        print(f"\n  {AMBER}{t('pair.none')}{OFF}")
+        print(f"  {DIM}{t('pair.none_hint')}{OFF}")
         return
     print()
     for n, (dev_id, ip, _) in enumerate(devices, 1):
         print(f"  {BOLD}{n}{OFF}) {dev_id}   {DIM}{ip}{OFF}")
-    print(f"\n  {DIM}confira o código mostrado na tela do painel{OFF}")
+    print(f"\n  {DIM}{t('pair.check')}{OFF}")
     try:
-        choice = input("\n  número (enter cancela): ").strip()
+        choice = input("\n  " + t("pair.prompt")).strip()
     except (EOFError, KeyboardInterrupt):
         return
     if not choice.isdigit() or not (1 <= int(choice) <= len(devices)):
         return
     dev_id, ip, port = devices[int(choice) - 1]
-    print(f"\n  enviando configuração para {dev_id}...")
+    print("\n  " + t("pair.sending", dev=dev_id))
     if send_config(ip, port, token):
-        print(f"  {GREEN}pareado.{OFF} o painel vai reiniciar e conectar "
-              f"como \"{host_name()}\".")
+        print(f"  {GREEN}{t('pair.ok')}{OFF} {t('pair.ok_hint', host=host_name())}")
     else:
-        print(f"  {RED}o painel recusou a configuração.{OFF}")
+        print(f"  {RED}{t('pair.refused')}{OFF}")
 
 
 def rotate_token() -> None:
     clear()
-    print(f"{BOLD}Girar token{OFF}\n")
-    print(f"  {AMBER}todos os painéis pareados com este host param de conectar{OFF}")
-    print(f"  {AMBER}até serem pareados de novo.{OFF}")
+    print(f"{BOLD}{t('rotate.title')}{OFF}\n")
+    print(f"  {AMBER}{t('rotate.warn1')}{OFF}")
+    print(f"  {AMBER}{t('rotate.warn2')}{OFF}")
+    word = t("rotate.confirm")
     try:
-        if input("\n  digite SIM para confirmar: ").strip() != "SIM":
-            print("  cancelado.")
+        if input("\n  " + t("rotate.prompt", word=word)).strip() != word:
+            print("  " + t("rotate.cancel"))
             return
     except (EOFError, KeyboardInterrupt):
         return
@@ -204,15 +215,15 @@ def rotate_token() -> None:
     with open(TOKEN_FILE, "w") as f:
         f.write(new + "\n")
     os.chmod(TOKEN_FILE, 0o600)
-    print(f"\n  novo token: {BOLD}{new}{OFF}")
+    print(f"\n  {t('rotate.new')}{BOLD}{new}{OFF}")
     restart_bridge(quiet=True)
-    print(f"  {GREEN}ponte reiniciada com o token novo.{OFF}")
+    print(f"  {GREEN}{t('rotate.done')}{OFF}")
 
 
 def restart_bridge(quiet: bool = False) -> None:
     if not quiet:
         clear()
-        print(f"{BOLD}Reiniciar a ponte{OFF}\n")
+        print(f"{BOLD}{t('restart.title')}{OFF}\n")
     r = subprocess.run([os.path.join(ROOT, "start.sh"), "--restart"],
                        capture_output=True, text=True)
     out = (r.stdout + r.stderr).strip()
@@ -238,7 +249,7 @@ def main() -> None:
         else:
             continue
         try:
-            input(f"\n  {DIM}enter para voltar{OFF}")
+            input(f"\n  {DIM}{t('back')}{OFF}")
         except (EOFError, KeyboardInterrupt):
             return
 

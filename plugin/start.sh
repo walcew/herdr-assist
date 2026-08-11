@@ -5,6 +5,10 @@
 # Idempotente: se a porta já responde, não sobe uma segunda ponte (o startup
 # re-executa em live handoff do Herdr). Com --restart, derruba a atual antes.
 #
+# As mensagens saem em inglês (fixo): a tela de administração as ecoa ao
+# reiniciar a ponte, e ali o idioma é o do locale do host — um shell script não
+# tem como acompanhar isso sem carregar uma tabela só para dois echo.
+#
 # Config opcional em $HERDR_PLUGIN_CONFIG_DIR/env (KEY=VALUE por linha):
 # BRIDGE_PORT, BRIDGE_BIND. O token vive em $HERDR_PLUGIN_CONFIG_DIR/token
 # (gerado pela ponte na primeira subida).
@@ -32,10 +36,10 @@ fi
 
 # porta em uso = ponte já de pé (bind falha -> exit 1 -> não sobe outra)
 if ! python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1', $PORT)); s.close()" 2>/dev/null; then
-    echo "ponte já ativa na porta $PORT"
+    echo "bridge already running on port $PORT"
     exit 0
 fi
 
 BRIDGE_PORT="$PORT" nohup python3 "$DIR/herdr_bridge.py" >> "$STATE/bridge.log" 2>&1 &
 echo $! > "$PIDFILE"
-echo "ponte iniciada (pid $!, porta $PORT, log em $STATE/bridge.log)"
+echo "bridge started (pid $!, port $PORT, log at $STATE/bridge.log)"

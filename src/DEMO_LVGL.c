@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include "display.h"
 #include "esp_bsp.h"
+#include "i18n.h"
 #include "lv_port.h"
 #include "net.h"
 #include "panel_cfg.h"
@@ -81,6 +82,9 @@ void setup()
 
   logSection("Config");
   panel_cfg_init();
+  /* antes de montar a UI: as telas são construídas uma vez e não se retraduzem */
+  i18n_set_lang((ui_lang_t)panel_cfg_get()->lang);
+  ESP_LOGI(TAG, "idioma: %s", i18n_lang_name(i18n_lang()));
 
   logSection("Initialize panel device");
   // ESP_LOGI(TAG, "Initialize panel device");

@@ -12,6 +12,7 @@
 #include "assets/logo_claude.h"
 #include "assets/logo_codex.h"
 #include "avatar.h"
+#include "i18n.h"
 #include "herdr_model.h"
 #include "herdr_conn.h"
 #include "herdr_ui_settings.h"
@@ -169,7 +170,7 @@ static void open_detail(const herdr_agent_t *agent)
     lv_label_set_text_fmt(s_detail_title, "%s / %s \xC2\xB7 %s",
                           host_label(agent->host), agent->project, agent->agent);
     lv_obj_set_style_bg_color(s_detail_dot, ui_status_color(agent->status), 0);
-    term_view_clear(s_term_view, "carregando...");
+    term_view_clear(s_term_view, T(STR_LOADING));
     lv_obj_clear_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_detail);
 }
@@ -393,8 +394,7 @@ static void build_host_cards(lv_obj_t *parent)
 
     if (s_hw_count == 0) {
         lv_obj_t *empty = lv_label_create(s_host_area);
-        lv_label_set_text(empty, "Nenhum host configurado.\nToque em " LV_SYMBOL_SETTINGS
-                                 " para cadastrar.");
+        lv_label_set_text_fmt(empty, "%s\n%s", T(STR_NO_HOSTS), T(STR_TAP_TO_ADD));
         lv_obj_set_style_text_font(empty, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(empty, UI_MUTED, 0);
     }
@@ -419,7 +419,7 @@ static void build_home(void)
     lv_obj_align(s_clock, LV_ALIGN_LEFT_MID, 0, -8);
 
     s_date = lv_label_create(hero);
-    lv_label_set_text(s_date, "sincronizando");
+    lv_label_set_text(s_date, T(STR_SYNCING));
     lv_obj_set_style_text_font(s_date, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(s_date, UI_MUTED, 0);
     lv_obj_align(s_date, LV_ALIGN_LEFT_MID, 2, 20);
@@ -439,11 +439,6 @@ static void build_home(void)
     ui_dock(s_home, UI_TAB_HOME, dock_cb);
 }
 
-/* no escopo do arquivo porque o dash também usa (dia de reset dos limites) */
-static const char *wd[] = { "dom", "seg", "ter", "qua", "qui", "sex", "sáb" };
-static const char *mo[] = { "jan", "fev", "mar", "abr", "mai", "jun",
-                            "jul", "ago", "set", "out", "nov", "dez" };
-
 static void refresh_clock(void)
 {
     time_t now;
@@ -461,7 +456,9 @@ static void refresh_clock(void)
     s_last_minute = tm.tm_min;
 
     lv_label_set_text_fmt(s_clock, "%02d:%02d", tm.tm_hour, tm.tm_min);
-    lv_label_set_text_fmt(s_date, "%s, %d %s", wd[tm.tm_wday], tm.tm_mday, mo[tm.tm_mon]);
+    char date[24];
+    i18n_format_date(date, sizeof(date), &tm);
+    lv_label_set_text(s_date, date);
 }
 
 static void refresh_home(void)
@@ -508,13 +505,14 @@ static void refresh_home(void)
             lv_obj_set_style_bg_color(hw->cells[c], empty, 0);
         }
         if (conn == HERDR_CONN_ONLINE) {
-            lv_label_set_text_fmt(hw->status, "%d %s", n, n == 1 ? "agente" : "agentes");
+            lv_label_set_text_fmt(hw->status, "%d %s", n,
+                                  n == 1 ? T(STR_AGENT_ONE) : T(STR_AGENT_MANY));
             lv_obj_set_style_text_color(hw->status, UI_IDLE, 0);
         } else if (conn == HERDR_CONN_CONNECTING) {
-            lv_label_set_text(hw->status, "Conectando");
+            lv_label_set_text(hw->status, T(STR_CONNECTING));
             lv_obj_set_style_text_color(hw->status, UI_WORKING, 0);
         } else {
-            lv_label_set_text(hw->status, "Offline");
+            lv_label_set_text(hw->status, T(STR_OFFLINE));
             lv_obj_set_style_text_color(hw->status, UI_BLOCKED, 0);
         }
     }
@@ -526,7 +524,7 @@ static void build_sessions(void)
 {
     s_sessions = ui_screen();
 
-    lv_obj_t *bar = ui_topbar(s_sessions, "Sessões", NULL);
+    lv_obj_t *bar = ui_topbar(s_sessions, T(STR_TAB_SESSIONS), NULL);
     s_lbl_group = lv_obj_get_child(ui_icon_btn(bar, "", toggle_group_cb, NULL), 0);
     s_lbl_sort = lv_obj_get_child(ui_icon_btn(bar, "", toggle_sort_cb, NULL), 0);
     update_toolbar_icons();
@@ -597,10 +595,10 @@ static void add_session_row(int flat_idx)
     lv_obj_t *sub = lv_label_create(row);
     /* sem host quando a lista já está agrupada por ele */
     if (s_group_by_host) {
-        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s", a->agent, a->status);
+        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s", a->agent, i18n_status(a->status));
     } else {
         lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s \xC2\xB7 %s",
-                              host_label(a->host), a->agent, a->status);
+                              host_label(a->host), a->agent, i18n_status(a->status));
     }
     lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(sub, UI_MUTED, 0);
@@ -713,15 +711,15 @@ static void rebuild_session_rows(void)
         enabled += cfg->hosts[h].enabled;
     }
     if (enabled == 0) {
-        add_muted_line("Nenhum host configurado.");
-        add_muted_line("Toque em " LV_SYMBOL_SETTINGS " para cadastrar.");
+        add_muted_line(T(STR_NO_HOSTS));
+        add_muted_line(T(STR_TAP_TO_ADD));
         return;
     }
 
     if (!s_group_by_host) {
         int n = collect_agents(-1, order, HERDR_MAX_AGENTS_TOTAL);
         if (n == 0) {
-            add_muted_line("Nenhuma sessão ativa.");
+            add_muted_line(T(STR_NO_SESSIONS));
         }
         for (int i = 0; i < n; i++) {
             add_session_row(order[i]);
@@ -735,8 +733,8 @@ static void rebuild_session_rows(void)
         }
         herdr_conn_state_t conn = herdr_model_get_conn(h);
         add_section_label(host_label(h),
-                          conn == HERDR_CONN_ONLINE ? "Online" :
-                          conn == HERDR_CONN_CONNECTING ? "Conectando" : "Offline",
+                          conn == HERDR_CONN_ONLINE ? T(STR_ONLINE) :
+                          conn == HERDR_CONN_CONNECTING ? T(STR_CONNECTING) : T(STR_OFFLINE),
                           conn == HERDR_CONN_ONLINE ? UI_IDLE :
                           conn == HERDR_CONN_CONNECTING ? UI_WORKING : UI_BLOCKED);
         int n = collect_agents(h, order, HERDR_MAX_AGENTS_TOTAL);
@@ -744,8 +742,8 @@ static void rebuild_session_rows(void)
             add_session_row(order[i]);
         }
         if (n == 0) {
-            add_muted_line(conn == HERDR_CONN_ONLINE ? "Nenhuma sessão ativa."
-                                                     : "Aguardando a ponte...");
+            add_muted_line(conn == HERDR_CONN_ONLINE ? T(STR_NO_SESSIONS)
+                                                     : T(STR_WAITING_BRIDGE));
         }
     }
 }
@@ -768,7 +766,7 @@ static void rebuild_session_rows(void)
 static void build_dash(void)
 {
     s_dash = ui_screen();
-    ui_topbar(s_dash, "Dashboards", NULL);
+    ui_topbar(s_dash, T(STR_TAB_DASH), NULL);
 
     s_dash_list = ui_plain(s_dash);
     lv_obj_set_size(s_dash_list, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
@@ -813,7 +811,7 @@ static bool fmt_when(char *buf, size_t size, time_t now, uint32_t t)
     if (diff < 24 * 3600) {
         snprintf(buf, size, "%02d:%02d", wtm.tm_hour, wtm.tm_min);
     } else {
-        snprintf(buf, size, "%s", wd[wtm.tm_wday]);
+        snprintf(buf, size, "%s", i18n_weekday(wtm.tm_wday));
     }
     return true;
 }
@@ -929,9 +927,9 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host)
         char when[12];
         lv_obj_t *st = lv_label_create(card);
         if (fmt_when(when, sizeof(when), now, l->stale_since)) {
-            lv_label_set_text_fmt(st, "sem atualizar desde %s", when);
+            lv_label_set_text_fmt(st, T(STR_STALE_SINCE), when);
         } else {
-            lv_label_set_text(st, "sem atualizar");
+            lv_label_set_text(st, T(STR_STALE));
         }
         lv_obj_set_style_text_font(st, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(st, UI_WORKING, 0);
@@ -947,7 +945,7 @@ static void rebuild_dash_cards(void)
         s_ui_limits, HERDR_MAX_PROVIDERS * CFG_MAX_HOSTS);
     if (s_ui_limit_count == 0) {
         lv_obj_t *l = lv_label_create(s_dash_list);
-        lv_label_set_text(l, "Sem dados de uso ainda.");
+        lv_label_set_text(l, T(STR_NO_USAGE));
         lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(l, UI_MUTED, 0);
         return;
@@ -1077,7 +1075,7 @@ static void build_keyboard_overlay(void)
     s_kb_ta = lv_textarea_create(s_kb_overlay);
     lv_obj_set_size(s_kb_ta, LV_HOR_RES - 16, 76);
     lv_obj_align(s_kb_ta, LV_ALIGN_TOP_MID, 0, 8);
-    lv_textarea_set_placeholder_text(s_kb_ta, "Prompt para o agente...");
+    lv_textarea_set_placeholder_text(s_kb_ta, T(STR_PROMPT_PH));
     lv_obj_set_style_text_font(s_kb_ta, &lv_font_ui_14, 0);
     lv_obj_set_style_bg_color(s_kb_ta, UI_PANEL, 0);
     lv_obj_set_style_border_color(s_kb_ta, UI_BORDER, 0);

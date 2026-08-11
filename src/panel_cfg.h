@@ -37,6 +37,7 @@ typedef struct {
     char         wifi_ssid[CFG_SSID_LEN];
     char         wifi_pass[CFG_PASS_LEN];
     panel_host_t hosts[CFG_MAX_HOSTS];
+    uint8_t      lang;                  /* ui_lang_t; 0 (en_US) é o de fábrica */
 } panel_cfg_t;
 
 /** Inicializa a NVS e carrega a config salva (zerada se não houver). */

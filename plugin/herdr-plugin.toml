@@ -8,7 +8,10 @@ id = "herdr-assist"
 name = "herdr-assist bridge"
 version = "0.1.0"
 min_herdr_version = "0.8.0"
-description = "Ponte TCP autenticada entre o Herdr e o painel físico herdr-assist"
+# Os títulos e descrições abaixo ficam em inglês: o manifest é lido pelo Herdr
+# uma vez, sem campo por idioma, então não há como acompanhar o idioma do painel
+# nem o locale do host. Inglês é o denominador comum de um repo público.
+description = "Authenticated TCP bridge between Herdr and the herdr-assist panel"
 platforms = ["macos", "linux"]
 
 # Roda quando o Herdr sobe a sessão; o script destaca a ponte e sai
@@ -21,7 +24,7 @@ command = ["./start.sh"]
 [[panes]]
 id = "admin"
 title = "herdr-assist"
-description = "Ponte do painel: status, token e pareamento"
+description = "Panel bridge: status, token and pairing"
 placement = "overlay"
 command = ["python3", "admin.py"]
 
@@ -36,18 +39,18 @@ command = ["python3", "admin.py"]
 # plugin, onde o binário pode não estar (é o caso de um Homebrew não exportado).
 [[actions]]
 id = "admin"
-title = "Abrir painel de administração"
+title = "Open admin panel"
 contexts = ["global", "workspace", "tab", "pane"]
 command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-assist --entrypoint admin"]
 
 [[actions]]
 id = "show-token"
-title = "Mostrar token do painel"
+title = "Show panel token"
 contexts = ["global"]
 command = ["sh", "-c", "cat \"$HERDR_PLUGIN_CONFIG_DIR/token\""]
 
 [[actions]]
 id = "restart-bridge"
-title = "Reiniciar a ponte"
+title = "Restart the bridge"
 contexts = ["global"]
 command = ["./start.sh", "--restart"]

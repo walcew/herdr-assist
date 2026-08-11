@@ -8,6 +8,7 @@
 
 #include "esp_system.h"
 
+#include "i18n.h"
 #include "net.h"
 #include "pairing.h"
 #include "panel_cfg.h"
@@ -35,6 +36,7 @@ static lv_obj_t *s_ta_name;
 static lv_obj_t *s_ta_host;
 static lv_obj_t *s_ta_port;
 static lv_obj_t *s_ta_token;
+static lv_obj_t *s_lbl_lang;        /* valor da linha de idioma, na tela principal */
 static lv_obj_t *s_pair_status;
 static lv_timer_t *s_pair_timer;
 
@@ -186,18 +188,18 @@ static void show_pass(const char *ssid)
     strlcpy(s_sel_ssid, ssid, CFG_SSID_LEN);
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
     update_toast();
-    build_bar("Senha", back_to_scan_cb, NULL);
+    build_bar(T(STR_PASSWORD), back_to_scan_cb, NULL);
     lv_obj_clean(s_content);
 
     lv_obj_t *l = lv_label_create(s_content);
-    lv_label_set_text_fmt(l, "Rede: %s", ssid);
+    lv_label_set_text_fmt(l, T(STR_NETWORK_FMT), ssid);
     lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(l, UI_TEXT, 0);
 
     s_ta_pass = lv_textarea_create(s_content);
     lv_textarea_set_one_line(s_ta_pass, true);
     lv_textarea_set_password_mode(s_ta_pass, true);
-    lv_textarea_set_placeholder_text(s_ta_pass, "Senha (vazio se aberta)");
+    lv_textarea_set_placeholder_text(s_ta_pass, T(STR_PASSWORD_PH));
     lv_obj_set_style_text_font(s_ta_pass, &lv_font_ui_14, 0);
     lv_obj_set_style_bg_color(s_ta_pass, UI_PANEL, 0);
     lv_obj_set_style_border_color(s_ta_pass, UI_SWITCH_OFF, 0);
@@ -240,13 +242,12 @@ static void scan_timer_cb(lv_timer_t *t)
     lv_obj_clean(s_content);
     if (s_ap_count <= 0) {
         lv_obj_t *l = lv_label_create(s_content);
-        lv_label_set_text(l, s_ap_count == 0 ? "Nenhuma rede encontrada."
-                                             : "Falha ao buscar redes.");
+        lv_label_set_text(l, s_ap_count == 0 ? T(STR_NO_NETWORKS) : T(STR_SCAN_FAILED));
         lv_obj_set_style_text_color(l, UI_MUTED, 0);
         lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
         lv_obj_t *row = make_row(scan_retry_cb, NULL, 40);
         lv_obj_t *rl = lv_label_create(row);
-        lv_label_set_text(rl, "Tentar de novo");
+        lv_label_set_text(rl, T(STR_RETRY));
         lv_obj_set_style_text_font(rl, &lv_font_ui_14, 0);
         lv_obj_center(rl);
         return;
@@ -277,12 +278,12 @@ static void show_scan(void)
     s_view = VIEW_SCAN;
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
     update_toast();
-    build_bar("Redes Wi-Fi", back_to_main_cb, NULL);
+    build_bar(T(STR_WIFI_NETWORKS), back_to_main_cb, NULL);
     hide_kb();
     lv_obj_clean(s_content);
 
     lv_obj_t *l = lv_label_create(s_content);
-    lv_label_set_text(l, "Buscando redes...");
+    lv_label_set_text(l, T(STR_SCANNING));
     lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(l, UI_MUTED, 0);
     /* one-shot: deixa a tela pintar antes do scan bloqueante */
@@ -324,7 +325,7 @@ static void show_host(int idx)
     s_edit_host = idx;
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
     update_toast();
-    build_bar("Editar host", back_to_main_cb, host_apply_cb);
+    build_bar(T(STR_EDIT_HOST), back_to_main_cb, host_apply_cb);
     hide_kb();
     lv_obj_clean(s_content);
 
@@ -334,11 +335,11 @@ static void show_host(int idx)
         snprintf(port, sizeof(port), "%u", h->port);
     }
 
-    s_ta_name  = make_field("Nome", h->name, "ex: mac");
-    s_ta_host  = make_field("Endereço", h->host, "IP ou hostname");
-    s_ta_port  = make_field("Porta", port, "9375");
+    s_ta_name  = make_field(T(STR_FIELD_NAME), h->name, T(STR_FIELD_NAME_PH));
+    s_ta_host  = make_field(T(STR_FIELD_ADDR), h->host, T(STR_FIELD_ADDR_PH));
+    s_ta_port  = make_field(T(STR_FIELD_PORT), port, "9375");
     /* token da ponte deste host (ação show-token do plugin exibe no Herdr) */
-    s_ta_token = make_field("Token", h->token, "32 hex da ponte");
+    s_ta_token = make_field(T(STR_FIELD_TOKEN), h->token, T(STR_FIELD_TOKEN_PH));
 
     lv_obj_t *rm = lv_btn_create(s_content);
     lv_obj_set_size(rm, LV_PCT(100), 40);
@@ -347,7 +348,7 @@ static void show_host(int idx)
     lv_obj_set_style_shadow_width(rm, 0, 0);
     lv_obj_add_event_cb(rm, host_remove_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *rl = lv_label_create(rm);
-    lv_label_set_text(rl, LV_SYMBOL_TRASH "  Remover");
+    lv_label_set_text(rl, T(STR_REMOVE));
     lv_obj_set_style_text_font(rl, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(rl, UI_TEXT, 0);
     lv_obj_center(rl);
@@ -394,13 +395,13 @@ static void pair_apply(const panel_host_t *h)
         }
     }
     if (slot < 0) {
-        lv_label_set_text(s_pair_status, "Sem espaço: remova um host antes de parear.");
+        lv_label_set_text(s_pair_status, T(STR_PAIR_NO_SLOT));
         lv_obj_set_style_text_color(s_pair_status, UI_BLOCKED, 0);
         return;
     }
     cfg.hosts[slot] = *h;
     panel_cfg_save(&cfg);
-    lv_label_set_text_fmt(s_pair_status, "Pareado com %s.\nReiniciando...", h->name);
+    lv_label_set_text_fmt(s_pair_status, T(STR_PAIRED_FMT), h->name);
     lv_obj_set_style_text_color(s_pair_status, UI_IDLE, 0);
     lv_refr_now(NULL);            /* pinta o aviso antes de sumir a tela */
     esp_restart();
@@ -418,11 +419,11 @@ static void pair_tick_cb(lv_timer_t *t)
         }
         break;
     case PAIRING_WAITING:
-        lv_label_set_text_fmt(s_pair_status, "Aguardando um host... (%ds)",
+        lv_label_set_text_fmt(s_pair_status, T(STR_PAIR_WAITING),
                               pairing_seconds_left());
         break;
     default:
-        lv_label_set_text(s_pair_status, "Janela encerrada. Volte e tente de novo.");
+        lv_label_set_text(s_pair_status, T(STR_PAIR_CLOSED));
         lv_obj_set_style_text_color(s_pair_status, UI_MUTED, 0);
         pair_leave();
         break;
@@ -434,7 +435,7 @@ static void show_pair(void)
     s_view = VIEW_PAIR;
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
     update_toast();
-    build_bar("Parear", back_from_pair_cb, NULL);
+    build_bar(T(STR_PAIR_TITLE), back_from_pair_cb, NULL);
     hide_kb();
     lv_obj_clean(s_content);
 
@@ -443,7 +444,7 @@ static void show_pair(void)
     lv_obj_set_style_pad_all(card, 12, 0);
 
     lv_obj_t *cap = lv_label_create(card);
-    lv_label_set_text(cap, "Este painel");
+    lv_label_set_text(cap, T(STR_THIS_PANEL));
     lv_obj_set_style_text_font(cap, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(cap, UI_MUTED, 0);
     lv_obj_align(cap, LV_ALIGN_TOP_MID, 0, 0);
@@ -455,33 +456,27 @@ static void show_pair(void)
     lv_obj_align(id, LV_ALIGN_TOP_MID, 0, 22);
 
     lv_obj_t *hint = lv_label_create(card);
-    lv_label_set_text(hint, "Escolha este código no host");
+    lv_label_set_text(hint, T(STR_PICK_CODE));
     lv_obj_set_style_text_font(hint, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(hint, UI_MUTED, 0);
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     s_pair_status = lv_label_create(s_content);
-    lv_label_set_text(s_pair_status, "Iniciando...");
+    lv_label_set_text(s_pair_status, T(STR_STARTING));
     lv_obj_set_style_text_font(s_pair_status, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(s_pair_status, UI_WORKING, 0);
     lv_obj_set_width(s_pair_status, LV_PCT(100));
     lv_label_set_long_mode(s_pair_status, LV_LABEL_LONG_WRAP);
 
     lv_obj_t *steps = lv_label_create(s_content);
-    lv_label_set_text(steps,
-        "No host, com o Herdr aberto:\n\n"
-        "1. Abra o painel do plugin herdr-assist\n"
-        "2. Escolha \"Parear painel\"\n"
-        "3. Selecione o código acima\n\n"
-        "O host envia nome, endereço e token —\n"
-        "nada precisa ser digitado aqui.");
+    lv_label_set_text(steps, T(STR_PAIR_STEPS));
     lv_obj_set_style_text_font(steps, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(steps, UI_MUTED, 0);
     lv_obj_set_width(steps, LV_PCT(100));
     lv_label_set_long_mode(steps, LV_LABEL_LONG_WRAP);
 
     if (pairing_start() != ESP_OK) {
-        lv_label_set_text(s_pair_status, "Não foi possível abrir a porta de pareamento.");
+        lv_label_set_text(s_pair_status, T(STR_PAIR_PORT_FAIL));
         lv_obj_set_style_text_color(s_pair_status, UI_BLOCKED, 0);
         return;
     }
@@ -543,7 +538,7 @@ static void restart_now(void)
 {
     lv_obj_clean(s_content);
     lv_obj_t *l = lv_label_create(s_content);
-    lv_label_set_text(l, "Reiniciando...");
+    lv_label_set_text(l, T(STR_RESTARTING));
     lv_obj_set_style_text_font(l, &lv_font_ui_16, 0);
     lv_obj_set_style_text_color(l, UI_TEXT, 0);
     lv_refr_now(NULL);            /* pinta o aviso antes de sumir a tela */
@@ -556,6 +551,21 @@ static void save_cb(lv_event_t *e)
     panel_cfg_save(&s_edit);
     /* reinício limpa Wi-Fi e conexões; mais simples e confiável que teardown */
     restart_now();
+}
+
+/**
+ * Alterna o idioma na cópia em edição.
+ *
+ * Só o valor da linha se atualiza — o resto da tela continua no idioma em
+ * vigor, porque as telas são montadas uma vez e a troca vale a partir do
+ * reinício, como toda mudança de config. O toast de pendência é quem diz isso.
+ */
+static void lang_toggle_cb(lv_event_t *e)
+{
+    (void)e;
+    s_edit.lang = (uint8_t)((s_edit.lang + 1) % LANG_COUNT);
+    lv_label_set_text(s_lbl_lang, i18n_lang_name((ui_lang_t)s_edit.lang));
+    update_toast();
 }
 
 /** Reinício avulso: o que estiver pendente de salvar é descartado. */
@@ -581,24 +591,24 @@ static void show_main(void)
     s_view = VIEW_MAIN;
     lv_obj_clear_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_dock);
-    build_bar("Configurações", NULL, save_cb);
+    build_bar(T(STR_TAB_SETTINGS), NULL, save_cb);
     hide_kb();
     lv_obj_clean(s_content);
 
-    make_section_label("Rede Wi-Fi");
+    make_section_label(T(STR_SEC_WIFI));
     lv_obj_t *wrow = make_row(wifi_change_cb, NULL, 44);
     lv_obj_t *wl = lv_label_create(wrow);
-    lv_label_set_text(wl, s_edit.wifi_ssid[0] ? s_edit.wifi_ssid : "Não configurada");
+    lv_label_set_text(wl, s_edit.wifi_ssid[0] ? s_edit.wifi_ssid : T(STR_NOT_CONFIGURED));
     lv_obj_set_style_text_font(wl, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(wl, UI_TEXT, 0);
     lv_obj_align(wl, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_t *wc = lv_label_create(wrow);
-    lv_label_set_text(wc, "Trocar " LV_SYMBOL_RIGHT);
+    lv_label_set_text(wc, T(STR_CHANGE));
     lv_obj_set_style_text_font(wc, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(wc, UI_MUTED, 0);
     lv_obj_align(wc, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    make_section_label("Hosts herdr");
+    make_section_label(T(STR_SEC_HOSTS));
     bool has_free = false;
     for (int i = 0; i < CFG_MAX_HOSTS; i++) {
         const panel_host_t *h = &s_edit.hosts[i];
@@ -639,23 +649,39 @@ static void show_main(void)
         lv_obj_t *pair = make_row(pair_open_cb, NULL, 44);
         lv_obj_set_style_bg_color(pair, UI_IDLE, 0);
         lv_obj_t *pl = lv_label_create(pair);
-        lv_label_set_text(pl, LV_SYMBOL_WIFI "  Parear com um host");
+        lv_label_set_text(pl, T(STR_PAIR_WITH_HOST));
         lv_obj_set_style_text_font(pl, &lv_font_ui_14, 0);
         lv_obj_set_style_text_color(pl, UI_TERM_BG, 0);
         lv_obj_center(pl);
 
         lv_obj_t *add = make_row(add_host_cb, NULL, 44);
         lv_obj_t *al = lv_label_create(add);
-        lv_label_set_text(al, LV_SYMBOL_PLUS "  Adicionar manualmente");
+        lv_label_set_text(al, T(STR_ADD_MANUALLY));
         lv_obj_set_style_text_font(al, &lv_font_ui_14, 0);
         lv_obj_set_style_text_color(al, UI_MUTED, 0);
         lv_obj_center(al);
     }
 
-    make_section_label("Dispositivo");
+    make_section_label(T(STR_SEC_DEVICE));
+
+    /* Duas opções só: a linha alterna no toque em vez de abrir uma tela para
+       escolher entre duas. O valor mostrado é sempre no próprio idioma, então
+       dá para ver para onde se está indo mesmo sem entender o rótulo. */
+    lv_obj_t *lrow = make_row(lang_toggle_cb, NULL, 44);
+    lv_obj_t *ll = lv_label_create(lrow);
+    lv_label_set_text(ll, T(STR_LANGUAGE));
+    lv_obj_set_style_text_font(ll, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(ll, UI_TEXT, 0);
+    lv_obj_align(ll, LV_ALIGN_LEFT_MID, 0, 0);
+    s_lbl_lang = lv_label_create(lrow);
+    lv_label_set_text(s_lbl_lang, i18n_lang_name((ui_lang_t)s_edit.lang));
+    lv_obj_set_style_text_font(s_lbl_lang, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(s_lbl_lang, UI_MUTED, 0);
+    lv_obj_align(s_lbl_lang, LV_ALIGN_RIGHT_MID, 0, 0);
+
     lv_obj_t *rst = make_row(restart_cb, NULL, 44);
     lv_obj_t *rsl = lv_label_create(rst);
-    lv_label_set_text(rsl, "Reiniciar dispositivo");
+    lv_label_set_text(rsl, T(STR_RESTART_DEVICE));
     lv_obj_set_style_text_font(rsl, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(rsl, UI_TEXT, 0);
     lv_obj_center(rsl);
@@ -706,13 +732,13 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     lv_obj_align(ticon, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_t *t1 = lv_label_create(s_toast);
-    lv_label_set_text(t1, "Configurações pendentes");
+    lv_label_set_text(t1, T(STR_PENDING_TITLE));
     lv_obj_set_style_text_font(t1, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(t1, UI_TEXT, 0);
     lv_obj_align(t1, LV_ALIGN_LEFT_MID, 32, -9);
 
     lv_obj_t *t2 = lv_label_create(s_toast);
-    lv_label_set_text(t2, "Toque para aplicar e reiniciar");
+    lv_label_set_text(t2, T(STR_PENDING_SUB));
     lv_obj_set_style_text_font(t2, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(t2, UI_MUTED, 0);
     lv_obj_align(t2, LV_ALIGN_LEFT_MID, 32, 10);
