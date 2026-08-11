@@ -23,7 +23,7 @@
 /* Arrays `static const`: incluir SOMENTE neste .c, senão duplicam em flash. */
 #include "assets/sonic_sequences.h"
 #include "assets/sprite_sonic_cheer.h"
-#include "assets/sprite_sonic_sleep.h"
+#include "assets/sprite_sonic_complain.h"
 #include "assets/sprite_sonic_idle.h"
 #include "assets/sprite_sonic_ko.h"
 #include "assets/sprite_sonic_push.h"
@@ -31,7 +31,7 @@
 
 #define TAG             "avatar"
 #define TRANSPARENT_KEY 0x18C5
-#define SLEEP_AFTER_MS  (3u * 60u * 1000u)   /* idle contínuo até dormir */
+#define COMPLAIN_AFTER_MS (3u * 60u * 1000u)  /* idle contínuo até reclamar */
 #define PAD             4
 
 typedef struct {
@@ -48,7 +48,7 @@ typedef struct {
 enum {
     ANIM_KO = 0,      /* caído de costas (desconectado) */
     ANIM_IDLE,        /* espera do jogo: parado -> impaciente batendo o pé */
-    ANIM_SLEEP,       /* deitado de olhos fechados, respirando */
+    ANIM_COMPLAIN,    /* boca aberta gesticulando: ocioso tempo demais */
     ANIM_RUN,         /* correndo (trabalhando) */
     ANIM_CHEER,       /* levanta a mão e balança o dedo (terminou) */
     ANIM_PUSH,        /* empurrando parede invisível (bloqueado) */
@@ -65,8 +65,9 @@ static const sonic_anim_t s_anims[ANIM_COUNT] = {
     [ANIM_KO]    = ANIM_DEF(ko,    KO,    600),
     /* 100 ms = a duração real da animação de espera no jogo (6 ticks de 60 Hz) */
     [ANIM_IDLE]  = ANIM_DEF(idle,  IDLE,  100),
-    /* 900 ms: as pernas esticam e dobram devagar, lendo como respiração */
-    [ANIM_SLEEP] = ANIM_DEF(sleep, SLEEP, 900),
+    /* 180 ms em vez dos 83 do jogo: gesticular devagar lê como reclamação,
+       na velocidade original vira surto */
+    [ANIM_COMPLAIN] = ANIM_DEF(complain, COMPLAIN, 180),
     [ANIM_RUN]   = ANIM_DEF(run,   RUN,   60),
     [ANIM_CHEER] = ANIM_DEF(cheer, CHEER, 133),
     [ANIM_PUSH]  = ANIM_DEF(push,  PUSH,  200),
@@ -179,8 +180,8 @@ static void sonic_tick(uint32_t now)
         return;
     }
     if (s_st == AVATAR_ST_IDLE && s_anim == ANIM_IDLE &&
-        now - s_idle_since >= SLEEP_AFTER_MS) {
-        play(ANIM_SLEEP);
+        now - s_idle_since >= COMPLAIN_AFTER_MS) {
+        play(ANIM_COMPLAIN);
         return;
     }
 
