@@ -76,6 +76,12 @@ static void set_content_height(lv_coord_t h)
 
 static void hide_kb(void)
 {
+    /* Desvincula antes que a tela destrua o textarea: o lv_keyboard guarda o
+       ponteiro cru e, no ✓/✕, ainda envia READY/CANCEL para ele DEPOIS do
+       nosso callback — com o campo já destruído é use-after-free (crash
+       LoadProhibited em lv_keyboard.c:318, visto ao vivo). Com NULL, o guarda
+       if(keyboard->ta) da própria LVGL pula esse envio. */
+    lv_keyboard_set_textarea(s_kb, NULL);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     set_content_height(LV_VER_RES - UI_TOPBAR_H);
 }
