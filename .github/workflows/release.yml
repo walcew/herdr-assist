@@ -2,10 +2,12 @@
 # so nobody needs a PlatformIO toolchain just to flash a panel.
 #
 # Two binaries go out, and the difference matters: the install image spans
-# 0x0-0x10000, which covers the NVS partition (0x9000-0xF000) and therefore
-# wipes Wi-Fi, hosts, tokens and language. The update image is the app alone at
+# 0x0-0x10000, which covers the NVS partition (0x9000-0xD000) and therefore
+# wipes Wi-Fi, hosts, tokens and language — and also otadata (0xD000-0xF000),
+# so the panel boots clean from ota_0. The update image is the app alone at
 # 0x10000, leaving the config untouched. Publishing only the merged image would
-# make every upgrade a factory reset.
+# make every upgrade a factory reset. A manifest.json with a fixed name lets
+# the panel discover the newest version for OTA (see fw_update.c).
 name: release
 
 on:
@@ -41,6 +43,14 @@ jobs:
       - name: Install PlatformIO
         run: pip install --upgrade platformio
 
+      # O checkout é shallow e sem tags, então o `git describe` da IDF falharia e
+      # o binário sairia com versão "1". O version.txt tem precedência sobre o
+      # git describe na resolução de PROJECT_VER e garante versão == tag byte a
+      # byte — é o que o fw_update do painel compara via strcmp com o manifest.
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: echo "${GITHUB_REF_NAME}" > version.txt
+
       - name: Build
         run: pio run
 
@@ -60,33 +70,62 @@ jobs:
           cp "$BUILD/firmware.bin" "dist/herdr-assist-${GITHUB_REF_NAME}-update.bin"
           cd dist && sha256sum *.bin > SHA256SUMS && cat SHA256SUMS
 
+      # O manifest tem nome fixo, então o painel resolve a versão mais nova com
+      # um único GET em releases/latest/download/manifest.json — sem tocar na
+      # API do GitHub (rate limit) nem parsear release notes. O sha256 fica
+      # para conferência humana; o chip valida o hash embutido na própria
+      # imagem via esp_https_ota_finish().
+      - name: Write OTA manifest
+        run: |
+          BUILD=.pio/build/LVGL-320-480
+          SIZE=$(stat -c%s "$BUILD/firmware.bin")
+          SHA=$(sha256sum "$BUILD/firmware.bin" | cut -d' ' -f1)
+          printf '{"version":"%s","url":"https://github.com/walcew/herdr-assist/releases/download/%s/herdr-assist-%s-update.bin","size":%s,"sha256":"%s"}\n' \
+            "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" "$SIZE" "$SHA" > dist/manifest.json
+          cat dist/manifest.json
+
       # gh is preinstalled on the runner — no third-party action needed to publish.
+      # Idempotente: se o release já existe (criado à mão antes do CI terminar,
+      # como aconteceu no v0.4.0), só substitui os assets em vez de falhar.
       - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')   # dispatch é dry-run de verdade
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cat > notes.md <<'EOF'
-          ## Flashing
+          ## Updating
+
+          Panels on v0.5.0 or newer update themselves: Settings → Device →
+          Update firmware (a toast also appears when a new version is out).
+
+          ## Flashing over USB
 
           No toolchain needed — download a binary below and write it with esptool.
 
-          **First install** (wipes the panel config, including Wi-Fi and paired hosts):
+          **First install, or migrating from v0.4.0 or older** (wipes the panel
+          config, including Wi-Fi and paired hosts):
 
           ```sh
           esptool.py --chip esp32s3 write_flash 0x0 herdr-assist-VERSION-install.bin
           ```
 
-          **Upgrade** (keeps Wi-Fi, hosts, tokens and language):
+          **Upgrade over USB** (keeps Wi-Fi, hosts, tokens and language; the
+          erase forces the bootloader to pick the slot being written):
 
           ```sh
+          esptool.py --chip esp32s3 erase_region 0xd000 0x2000
           esptool.py --chip esp32s3 write_flash 0x10000 herdr-assist-VERSION-update.bin
           ```
 
           Full step-by-step, including the Herdr plugin, in the [README](https://github.com/walcew/herdr-assist#readme).
           EOF
           sed -i "s/VERSION/${GITHUB_REF_NAME}/g" notes.md
-          gh release create "$GITHUB_REF_NAME" \
-            --title "$GITHUB_REF_NAME" \
-            --notes-file notes.md \
-            --generate-notes \
-            dist/*.bin dist/SHA256SUMS
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.bin dist/SHA256SUMS dist/manifest.json --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file notes.md \
+              --generate-notes \
+              dist/*.bin dist/SHA256SUMS dist/manifest.json
+          fi

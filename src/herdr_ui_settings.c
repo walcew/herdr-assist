@@ -8,6 +8,8 @@
 
 #include "esp_system.h"
 
+#include "fw_update.h"
+#include "herdr_ui.h"
 #include "i18n.h"
 #include "net.h"
 #include "pairing.h"
@@ -23,6 +25,7 @@ typedef enum {
     VIEW_PASS,
     VIEW_HOST,
     VIEW_PAIR,
+    VIEW_UPDATE,
 } view_t;
 
 static lv_obj_t *s_panel;
@@ -40,6 +43,14 @@ static lv_obj_t *s_sw_auto;         /* switch de descoberta automática do edito
 static lv_obj_t *s_lbl_lang;        /* valor da linha de idioma, na tela principal */
 static lv_obj_t *s_pair_status;
 static lv_timer_t *s_pair_timer;
+static lv_obj_t *s_fwup_status;     /* label de estado da tela de atualização */
+static lv_obj_t *s_fwup_bar;        /* barra de progresso do download */
+static lv_obj_t *s_fwup_btn;        /* botão de ação (verificar/instalar) */
+static lv_obj_t *s_fwup_btn_label;
+static lv_timer_t *s_fwup_timer;
+static lv_obj_t *s_fw_toast;        /* aviso global de versão nova (layer_top) */
+static lv_obj_t *s_fw_toast_title;
+static char s_fw_notified[32];      /* última versão já vista pelo usuário */
 
 static panel_cfg_t s_edit;          /* cópia em edição; só vale ao salvar */
 static view_t s_view;
@@ -53,6 +64,7 @@ static void show_scan(void);
 static void show_pass(const char *ssid);
 static void show_host(int idx);
 static void show_pair(void);
+static void show_update(void);
 static void update_toast(void);
 
 /* ---------- teclado ---------- */
@@ -557,6 +569,190 @@ static void show_pair(void)
     s_pair_timer = lv_timer_create(pair_tick_cb, 500, NULL);
 }
 
+/* ---------- view: atualização de firmware ---------- */
+
+static void fwup_leave(void)
+{
+    if (s_fwup_timer) {
+        lv_timer_del(s_fwup_timer);
+        s_fwup_timer = NULL;
+    }
+}
+
+static void back_from_fwup_cb(lv_event_t *e)
+{
+    (void)e;
+    fwup_leave();
+    show_main();                  /* um download em curso segue em background */
+}
+
+static void fwup_action_cb(lv_event_t *e)
+{
+    (void)e;
+    fw_update_status_t st;
+    fw_update_get_status(&st);
+    if (st.state == FW_UPDATE_AVAILABLE) {
+        fw_update_start();
+    } else {
+        fw_update_check_now();
+    }
+    /* o tick pinta o novo estado; nada a fazer aqui */
+}
+
+/**
+ * Pinta a tela conforme o estado do fw_update — a task de OTA nunca toca a
+ * LVGL; este timer (task da LVGL) é o único pintor, como no pareamento.
+ */
+static void fwup_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    fw_update_status_t st;
+    fw_update_get_status(&st);
+
+    if (st.state == FW_UPDATE_DONE) {
+        /* mesmo gesto do restart_now(); o esp_restart é da task de OTA */
+        fwup_leave();
+        lv_obj_clean(s_content);
+        lv_obj_t *l = lv_label_create(s_content);
+        lv_label_set_text(l, T(STR_FW_DONE));
+        lv_obj_set_style_text_font(l, &lv_font_ui_16, 0);
+        lv_obj_set_style_text_color(l, UI_TEXT, 0);
+        lv_refr_now(NULL);
+        return;
+    }
+
+    bool busy = st.state == FW_UPDATE_CHECKING || st.state == FW_UPDATE_DOWNLOADING;
+    switch (st.state) {
+    case FW_UPDATE_CHECKING:
+        lv_label_set_text(s_fwup_status, T(STR_FW_CHECKING));
+        lv_obj_set_style_text_color(s_fwup_status, UI_WORKING, 0);
+        break;
+    case FW_UPDATE_UP_TO_DATE:
+        lv_label_set_text(s_fwup_status, T(STR_FW_UP_TO_DATE));
+        lv_obj_set_style_text_color(s_fwup_status, UI_IDLE, 0);
+        break;
+    case FW_UPDATE_AVAILABLE:
+        lv_label_set_text_fmt(s_fwup_status, T(STR_FW_AVAILABLE_FMT), st.latest);
+        lv_obj_set_style_text_color(s_fwup_status, UI_WORKING, 0);
+        break;
+    case FW_UPDATE_DOWNLOADING:
+        lv_label_set_text_fmt(s_fwup_status, T(STR_FW_DOWNLOADING_FMT), st.pct);
+        lv_obj_set_style_text_color(s_fwup_status, UI_WORKING, 0);
+        lv_bar_set_value(s_fwup_bar, st.pct, LV_ANIM_OFF);
+        break;
+    case FW_UPDATE_ERROR:
+        lv_label_set_text(s_fwup_status, st.err == FW_ERR_DOWNLOAD
+                          ? T(STR_FW_ERR_DOWNLOAD) : T(STR_FW_ERR_CHECK));
+        lv_obj_set_style_text_color(s_fwup_status, UI_BLOCKED, 0);
+        break;
+    default:                      /* IDLE: ainda sem rede desde o boot */
+        lv_label_set_text(s_fwup_status, T(STR_FW_CHECK_NOW));
+        lv_obj_set_style_text_color(s_fwup_status, UI_MUTED, 0);
+        break;
+    }
+    if (st.state == FW_UPDATE_DOWNLOADING) {
+        lv_obj_clear_flag(s_fwup_bar, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_fwup_bar, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (busy) {
+        lv_obj_add_flag(s_fwup_btn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_clear_flag(s_fwup_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_fwup_btn_label, st.state == FW_UPDATE_AVAILABLE
+                          ? T(STR_FW_INSTALL) : T(STR_FW_CHECK_NOW));
+    }
+}
+
+static void show_update(void)
+{
+    fwup_leave();                 /* reentrar (toast) não pode deixar timer órfão */
+    s_view = VIEW_UPDATE;
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
+    build_bar(T(STR_FW_UPDATE), back_from_fwup_cb, NULL);
+    hide_kb();
+    lv_obj_clean(s_content);
+
+    /* versão instalada, no molde do card de pareamento */
+    lv_obj_t *card = ui_card(s_content, 8);
+    lv_obj_set_size(card, LV_PCT(100), 84);
+    lv_obj_set_style_pad_all(card, 12, 0);
+
+    lv_obj_t *cap = lv_label_create(card);
+    lv_label_set_text(cap, T(STR_FW_ROW));
+    lv_obj_set_style_text_font(cap, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(cap, UI_MUTED, 0);
+    lv_obj_align(cap, LV_ALIGN_TOP_MID, 0, 0);
+
+    lv_obj_t *ver = lv_label_create(card);
+    lv_label_set_text(ver, fw_update_current_version());
+    lv_obj_set_style_text_font(ver, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(ver, UI_TEXT, 0);
+    lv_obj_align(ver, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    s_fwup_status = lv_label_create(s_content);
+    lv_obj_set_style_text_font(s_fwup_status, &lv_font_ui_14, 0);
+    lv_obj_set_width(s_fwup_status, LV_PCT(100));
+    lv_label_set_long_mode(s_fwup_status, LV_LABEL_LONG_WRAP);
+
+    s_fwup_bar = lv_bar_create(s_content);
+    lv_obj_set_size(s_fwup_bar, LV_PCT(100), 10);
+    lv_bar_set_range(s_fwup_bar, 0, 100);
+    lv_obj_set_style_bg_color(s_fwup_bar, UI_PANEL, 0);
+    lv_obj_set_style_bg_color(s_fwup_bar, UI_WORKING, LV_PART_INDICATOR);
+    lv_obj_add_flag(s_fwup_bar, LV_OBJ_FLAG_HIDDEN);
+
+    s_fwup_btn = make_row(fwup_action_cb, NULL, 44);
+    s_fwup_btn_label = lv_label_create(s_fwup_btn);
+    lv_obj_set_style_text_font(s_fwup_btn_label, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(s_fwup_btn_label, UI_TEXT, 0);
+    lv_obj_center(s_fwup_btn_label);
+
+    /* entrar na tela já é "ver" o aviso: cala o toast desta versão */
+    fw_update_status_t st;
+    fw_update_get_status(&st);
+    if (st.latest[0]) {
+        strlcpy(s_fw_notified, st.latest, sizeof(s_fw_notified));
+    }
+    lv_obj_add_flag(s_fw_toast, LV_OBJ_FLAG_HIDDEN);
+
+    s_fwup_timer = lv_timer_create(fwup_tick_cb, 500, NULL);
+    fwup_tick_cb(NULL);           /* primeira pintura sem esperar o tick */
+}
+
+void herdr_ui_settings_open_update(void)
+{
+    show_update();
+}
+
+/* Aviso global de versão nova: vive em lv_layer_top para flutuar sobre
+   qualquer aba, no visual do toast de pendência. Roda devagar (5s) — é só
+   um espelho do estado; quem trabalha é a task do fw_update. */
+static void fw_notify_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    fw_update_status_t st;
+    fw_update_get_status(&st);
+    bool show = st.state == FW_UPDATE_AVAILABLE &&
+                strcmp(st.latest, s_fw_notified) != 0;
+    if (show) {
+        lv_label_set_text_fmt(s_fw_toast_title, T(STR_FW_AVAILABLE_FMT), st.latest);
+        lv_obj_clear_flag(s_fw_toast, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_fw_toast);
+    } else if (st.state != FW_UPDATE_AVAILABLE) {
+        lv_obj_add_flag(s_fw_toast, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void fw_toast_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_obj_add_flag(s_fw_toast, LV_OBJ_FLAG_HIDDEN);
+    herdr_ui_show_settings();     /* traz a aba de configurações para frente */
+    show_update();                /* e cai direto na tela de atualização */
+}
+
 /* ---------- view: principal ---------- */
 
 static void pair_open_cb(lv_event_t *e)
@@ -647,6 +843,12 @@ static void restart_cb(lv_event_t *e)
 {
     (void)e;
     restart_now();
+}
+
+static void fw_open_cb(lv_event_t *e)
+{
+    (void)e;
+    show_update();
 }
 
 /** O aviso de pendência só existe na tela principal, e só quando há mudança. */
@@ -765,6 +967,36 @@ static void show_main(void)
     lv_obj_set_style_text_color(rsl, UI_TEXT, 0);
     lv_obj_center(rsl);
 
+    /* versão instalada + atalho de atualização; o valor à direita da segunda
+       linha só aparece quando a checagem já anunciou uma versão diferente */
+    lv_obj_t *fwrow = make_row(fw_open_cb, NULL, 44);
+    lv_obj_t *fwl = lv_label_create(fwrow);
+    lv_label_set_text(fwl, T(STR_FW_ROW));
+    lv_obj_set_style_text_font(fwl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(fwl, UI_TEXT, 0);
+    lv_obj_align(fwl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *fwv = lv_label_create(fwrow);
+    lv_label_set_text(fwv, fw_update_current_version());
+    lv_obj_set_style_text_font(fwv, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(fwv, UI_MUTED, 0);
+    lv_obj_align(fwv, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_t *uprow = make_row(fw_open_cb, NULL, 44);
+    lv_obj_t *upl = lv_label_create(uprow);
+    lv_label_set_text(upl, T(STR_FW_UPDATE));
+    lv_obj_set_style_text_font(upl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(upl, UI_TEXT, 0);
+    lv_obj_align(upl, LV_ALIGN_LEFT_MID, 0, 0);
+    fw_update_status_t fwst;
+    fw_update_get_status(&fwst);
+    if (fwst.state == FW_UPDATE_AVAILABLE) {
+        lv_obj_t *upv = lv_label_create(uprow);
+        lv_label_set_text_fmt(upv, T(STR_FW_AVAILABLE_FMT), fwst.latest);
+        lv_obj_set_style_text_font(upv, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(upv, UI_WORKING, 0);
+        lv_obj_align(upv, LV_ALIGN_RIGHT_MID, 0, 0);
+    }
+
     update_toast();
 }
 
@@ -828,6 +1060,40 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_CANCEL, NULL);
+
+    /* Aviso de versão nova, no visual do toast de pendência mas em layer_top:
+       precisa aparecer em qualquer aba, não só nas configurações. */
+    s_fw_toast = lv_btn_create(lv_layer_top());
+    lv_obj_set_size(s_fw_toast, LV_HOR_RES - 24, 56);
+    lv_obj_align(s_fw_toast, LV_ALIGN_BOTTOM_MID, 0, -68);
+    lv_obj_set_style_bg_color(s_fw_toast, UI_PANEL, 0);
+    lv_obj_set_style_border_width(s_fw_toast, 1, 0);
+    lv_obj_set_style_border_color(s_fw_toast, UI_WORKING, 0);
+    lv_obj_set_style_radius(s_fw_toast, 8, 0);
+    lv_obj_set_style_shadow_width(s_fw_toast, 20, 0);
+    lv_obj_set_style_shadow_color(s_fw_toast, lv_color_black(), 0);
+    lv_obj_set_style_shadow_ofs_y(s_fw_toast, 6, 0);
+    lv_obj_add_flag(s_fw_toast, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_fw_toast, fw_toast_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *ficon = lv_label_create(s_fw_toast);
+    lv_label_set_text(ficon, LV_SYMBOL_DOWNLOAD);
+    lv_obj_set_style_text_font(ficon, &lv_font_ui_20, 0);
+    lv_obj_set_style_text_color(ficon, UI_WORKING, 0);
+    lv_obj_align(ficon, LV_ALIGN_LEFT_MID, 0, 0);
+
+    s_fw_toast_title = lv_label_create(s_fw_toast);
+    lv_obj_set_style_text_font(s_fw_toast_title, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(s_fw_toast_title, UI_TEXT, 0);
+    lv_obj_align(s_fw_toast_title, LV_ALIGN_LEFT_MID, 32, -9);
+
+    lv_obj_t *f2 = lv_label_create(s_fw_toast);
+    lv_label_set_text(f2, T(STR_FW_TOAST_SUB));
+    lv_obj_set_style_text_font(f2, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(f2, UI_MUTED, 0);
+    lv_obj_align(f2, LV_ALIGN_LEFT_MID, 32, 10);
+
+    lv_timer_create(fw_notify_tick_cb, 5000, NULL);
 }
 
 void herdr_ui_settings_show(void)

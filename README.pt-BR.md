@@ -40,7 +40,7 @@ pipx install esptool          # ou: brew install esptool
 esptool.py chip_id            # macOS: /dev/cu.usbmodemXXXX, Linux: /dev/ttyACM0
 
 esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX \
-    write_flash 0x0 herdr-assist-v0.1.0-install.bin
+    write_flash 0x0 herdr-assist-v0.5.0-install.bin
 ```
 
 O painel reinicia na tela de configurações: escolha sua rede Wi-Fi na lista e digite a
@@ -48,12 +48,19 @@ senha. Deixe os hosts em branco por enquanto — o passo 3 preenche para você.
 
 > **Instalar × atualizar.** A imagem `-install.bin` cobre de `0x0` a `0x10000`, faixa que
 > inclui a partição NVS, então ela **apaga a configuração do painel** (Wi-Fi, hosts,
-> tokens, idioma). É o que se quer numa placa nova. Para atualizar um painel já
-> configurado, grave só o app e preserve tudo:
+> tokens, idioma). É o que se quer numa placa nova — e o **caminho obrigatório na
+> migração a partir da v0.4.0 ou anterior**, cuja tabela de partições não tem slots OTA.
+>
+> Da v0.5.0 em diante o painel **se atualiza sozinho**: Configurações → Dispositivo →
+> Atualizar firmware, e um aviso anuncia releases novos (checagem diária). O USB só
+> volta a ser necessário se o painel não alcançar o GitHub; nesse caso, apague o
+> otadata antes (para o bootloader bootar o slot que será gravado) e grave só o app,
+> preservando a configuração:
 >
 > ```sh
+> esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX erase_region 0xd000 0x2000
 > esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX \
->     write_flash 0x10000 herdr-assist-v0.1.0-update.bin
+>     write_flash 0x10000 herdr-assist-v0.5.0-update.bin
 > ```
 
 ### 2. Instalando a ponte no host
@@ -242,12 +249,20 @@ Para regenerar a fonte do terminal (só é preciso ao mudar os ranges de glifos)
 ### Publicando um release
 
 Empurre uma tag `v*` e [o workflow](.github/workflows/release.yml) compila, mescla a
-imagem de instalação e publica o release com os dois binários e seus checksums:
+imagem de instalação e publica o release com os dois binários, seus checksums e um
+`manifest.json` de nome fixo — o arquivo que os painéis consultam (via
+`releases/latest/download/`) para descobrir atualizações OTA:
 
 ```sh
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+git tag -a v0.5.0 -m "v0.5.0"
+git push origin v0.5.0
 ```
+
+A versão embutida no binário vem da tag (o workflow a grava em `version.txt` antes de
+compilar), então o `strcmp` do painel contra o manifest bate exatamente. Builds locais
+caem no `git describe`, que nunca é igual a uma tag de release — um painel de
+desenvolvimento sempre vê o release corrente como "disponível", o que é útil para
+testar o fluxo.
 
 ## Estrutura
 
@@ -269,7 +284,8 @@ git push origin v0.1.0
 | `src/i18n.c` | Textos da interface (en/pt) numa lista só, que gera enum e tabela |
 | `src/ui_theme.c` | Paleta, fontes, topbar e dock compartilhados pelas telas |
 | `src/herdr_ui.c` | UI LVGL: home (relógio, mascote, resumo, mapa de calor), sessões, dash de limites, terminal, ações, teclado |
-| `src/herdr_ui_settings.c` | Aba de configurações: scan de Wi-Fi, senha, editor de hosts, idioma |
+| `src/herdr_ui_settings.c` | Aba de configurações: scan de Wi-Fi, senha, editor de hosts, idioma, atualização de firmware |
+| `src/fw_update.c` | OTA via GitHub Releases: checagem diária do manifest, download com esp_https_ota, confirmação do rollback |
 | `src/lv_font_terminal_12.c` | Fonte gerada (não editar) — veja `scripts/gen_font.sh` |
 | `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | BSP do fabricante (display, touch, port LVGL) |
 

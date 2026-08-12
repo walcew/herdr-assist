@@ -1,2 +1,5 @@
 # fix for build issue
 CONFIG_FREERTOS_HZ=1000
+# anti-brick do OTA: app novo boota como PENDING_VERIFY e precisa se confirmar
+# (fw_update_init); se crashar antes, o bootloader volta sozinho ao slot anterior
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

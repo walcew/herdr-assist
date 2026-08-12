@@ -123,7 +123,20 @@ typedef enum {
     X(PAIR_WAITING,    "Waiting for a host... (%ds)",                                        \
                        "Aguardando um host... (%ds)")                                        \
     X(PAIR_CLOSED,     "Window closed. Go back and try again.",                              \
-                       "Janela encerrada. Volte e tente de novo.")
+                       "Janela encerrada. Volte e tente de novo.")                           \
+    /* --- configurações: atualização de firmware --- */                                     \
+    X(FW_ROW,          "Firmware",                    "Firmware")                            \
+    X(FW_UPDATE,       "Update firmware",             "Atualizar firmware")                  \
+    X(FW_CHECKING,     "Checking...",                 "Verificando...")                      \
+    X(FW_UP_TO_DATE,   "Up to date.",                 "Atualizado.")                         \
+    X(FW_AVAILABLE_FMT, "%s available",               "%s disponível")                       \
+    X(FW_CHECK_NOW,    "Check now",                   "Verificar agora")                     \
+    X(FW_INSTALL,      "Download and install",        "Baixar e instalar")                   \
+    X(FW_DOWNLOADING_FMT, "Downloading... %d%%",      "Baixando... %d%%")                    \
+    X(FW_DONE,         "Installed. Restarting...",    "Instalado. Reiniciando...")           \
+    X(FW_ERR_CHECK,    "Check failed. Is Wi-Fi up?",  "Falha ao verificar. Wi-Fi ok?")       \
+    X(FW_ERR_DOWNLOAD, "Download failed. Try again.", "Falha no download. Tente de novo.")   \
+    X(FW_TOAST_SUB,    "Tap to update",               "Toque para atualizar")
 
 typedef enum {
 #define X(id, en, pt) STR_##id,

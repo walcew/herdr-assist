@@ -22,6 +22,9 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb);
 void herdr_ui_settings_show(void);
 void herdr_ui_settings_hide(void);
 
+/** Abre direto a tela de atualização de firmware (usada pelo toast global). */
+void herdr_ui_settings_open_update(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -38,7 +38,7 @@ pipx install esptool          # or: brew install esptool
 esptool.py chip_id            # macOS: /dev/cu.usbmodemXXXX, Linux: /dev/ttyACM0
 
 esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX \
-    write_flash 0x0 herdr-assist-v0.1.0-install.bin
+    write_flash 0x0 herdr-assist-v0.5.0-install.bin
 ```
 
 The panel reboots into the settings screen: pick your Wi-Fi network from the list and
@@ -46,12 +46,18 @@ type the password. Leave the hosts alone for now — step 3 fills them in for yo
 
 > **Installing vs. upgrading.** The `-install.bin` image spans `0x0`–`0x10000`, which
 > covers the NVS partition, so it **erases the panel config** (Wi-Fi, hosts, tokens,
-> language). That is what you want on a fresh board. To upgrade a panel you already
-> configured, flash the app alone and keep everything:
+> language). That is what you want on a fresh board — and the **required path when
+> migrating from v0.4.0 or older**, whose partition table has no OTA slots.
+>
+> From v0.5.0 on the panel **updates itself**: Settings → Device → Update firmware,
+> and a toast announces new releases (checked once a day). USB is only needed again
+> if a panel cannot reach GitHub; in that case erase otadata first (so the bootloader
+> boots the slot being written) and flash the app alone, keeping the config:
 >
 > ```sh
+> esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX erase_region 0xd000 0x2000
 > esptool.py --chip esp32s3 --port /dev/cu.usbmodemXXXX \
->     write_flash 0x10000 herdr-assist-v0.1.0-update.bin
+>     write_flash 0x10000 herdr-assist-v0.5.0-update.bin
 > ```
 
 ### 2. Install the bridge on the host
@@ -239,12 +245,20 @@ To regenerate the terminal font (only needed when changing glyph ranges):
 ### Cutting a release
 
 Push a `v*` tag and [the workflow](.github/workflows/release.yml) builds, merges the
-install image and publishes the release with both binaries and their checksums:
+install image and publishes the release with both binaries, their checksums and a
+fixed-name `manifest.json` — the file panels poll (via `releases/latest/download/`)
+to discover updates OTA:
 
 ```sh
-git tag -a v0.1.0 -m "v0.1.0"
-git push origin v0.1.0
+git tag -a v0.5.0 -m "v0.5.0"
+git push origin v0.5.0
 ```
+
+The version baked into the binary comes from the tag (the workflow writes it to
+`version.txt` before building), so the panel's `strcmp` against the manifest matches
+exactly. Local builds fall back to `git describe`, which never equals a release tag —
+a dev panel therefore always sees the current release as "available", which is handy
+for testing the flow.
 
 ## Structure
 
@@ -266,7 +280,8 @@ git push origin v0.1.0
 | `src/i18n.c` | Interface strings (en/pt) in a single list that generates both enum and table |
 | `src/ui_theme.c` | Palette, fonts, topbar and dock shared by the screens |
 | `src/herdr_ui.c` | LVGL UI: home (clock, mascot, summary, heatmap), sessions, limits dash, terminal, actions, keyboard |
-| `src/herdr_ui_settings.c` | Settings tab: Wi-Fi scan, password, host editor, language |
+| `src/herdr_ui_settings.c` | Settings tab: Wi-Fi scan, password, host editor, language, firmware update |
+| `src/fw_update.c` | OTA via GitHub Releases: daily manifest check, download with esp_https_ota, rollback confirm |
 | `src/lv_font_terminal_12.c` | Generated font (do not edit) — see `scripts/gen_font.sh` |
 | `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | Vendor BSP (display, touch, LVGL port) |
 

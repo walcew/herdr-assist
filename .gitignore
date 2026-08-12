@@ -1,5 +1,7 @@
 /.pio
 /build
+# gerado pelo CI a partir da tag; localmente a versão vem do git describe
+/version.txt
 /managed_components
 /dependencies.lock
 .vscode/c_cpp_properties.json

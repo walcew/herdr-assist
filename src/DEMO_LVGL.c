@@ -11,6 +11,7 @@
 #include "herdr_ui.h"
 #include "herdr_ui_settings.h"
 #include "herdr_conn.h"
+#include "fw_update.h"
 #include <esp_log.h>   // Add this line to include the header file that declares ESP_LOGI
 #include <esp_flash.h> // Add this line to include the header file that declares esp_flash_t
 #include <esp_chip_info.h>
@@ -142,6 +143,9 @@ void setup()
 
   logSection("Pontes");
   herdr_conn_start();
+
+  /* por último: chegar aqui é o critério de "boot são" do rollback */
+  fw_update_init();
 
   logSection("LVGL porting example end");
 }

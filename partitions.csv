@@ -1,5 +1,11 @@
-# Tabela de partições herdr-assist — flash de 16MB, app único de 6MB (sem OTA)
-# Name,   Type, SubType, Offset,  Size,  Flags
-nvs,      data, nvs,     0x9000,  0x6000,
-phy_init, data, phy,     0xf000,  0x1000,
-factory,  app,  factory, 0x10000, 6M,
+# Tabela de partições herdr-assist — flash de 16MB, dois slots OTA de 6MB.
+# Layout canônico "two OTA" da IDF: o app fica em 0x10000 (receitas de cabo e
+# offsets do workflow inalterados) e a NVS encolhe para 0x4000 — suficiente
+# para panel_cfg + calibração Wi-Fi. Migrar de uma tabela antiga exige flash
+# a cabo do install.bin (a tabela vive em 0x8000, fora do alcance do OTA).
+# Name,   Type, SubType, Offset,   Size,  Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+ota_0,    app,  ota_0,   0x10000,  6M,
+ota_1,    app,  ota_1,   0x610000, 6M,
