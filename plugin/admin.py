@@ -156,8 +156,10 @@ class PairScan:
 
 def send_config(ip: str, port: int, token: str) -> "tuple[bool, str]":
     """Manda a config pronta ao painel; (aceitou, erro_de_transporte)."""
+    # auto: firmware com descoberta grava o slot sem IP (broadcast resolve);
+    # firmware antigo ignora o campo e usa o host, como sempre
     payload = {"t": "pair", "name": host_name(), "host": lan_ip(ip),
-               "port": PORT, "token": token}
+               "port": PORT, "token": token, "auto": True}
     try:
         s = socket.create_connection((ip, port), timeout=8)
         s.settimeout(8)

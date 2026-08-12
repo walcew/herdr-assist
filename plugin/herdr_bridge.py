@@ -694,6 +694,80 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         log.info("painel desconectado: %s", peer)
 
 
+class DiscoveryResponder(asyncio.DatagramProtocol):
+    """Responde probes herdr-find de painéis com slot em descoberta automática.
+
+    O probe é broadcast e o nonce é público; a resposta prova posse do token
+    sem transportá-lo — h = HMAC-SHA256(token, "nonce|ip|port|name") — e
+    assina o ip/port que o painel deve adotar (nunca o remetente do datagrama,
+    para um vizinho não conseguir redirecionar o painel por relay).
+    Só escuta broadcast de verdade com BRIDGE_BIND no default 0.0.0.0.
+    """
+
+    RATE_MAX = 10       # respostas por janela de 1s (higiene anti-amplificação)
+    DEDUPE_S = 0.3      # probe duplicado (255.255.255.255 + subnet) responde 1x;
+                        # o reenvio legítimo do painel chega a ~400ms e passa
+
+    def __init__(self) -> None:
+        self.transport: asyncio.DatagramTransport | None = None
+        self.seen: dict[tuple[str, str], float] = {}
+        self.window = 0.0
+        self.count = 0
+        self.limited = False    # anti-spam: warning só na transição
+        self.replied: set[tuple[str, str]] = set()  # (id, ip) já logados
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        self.transport = transport  # type: ignore[assignment]
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        try:
+            msg = json.loads(data)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return  # broadcast é tráfego público: lixo não merece log
+        if not (isinstance(msg, dict) and msg.get("t") == "herdr-find"):
+            return
+        nonce = str(msg.get("n", ""))
+        panel = str(msg.get("id", "?"))
+        if not nonce:
+            return
+        now = time.monotonic()
+        key = (panel, nonce)
+        if now - self.seen.get(key, 0.0) < self.DEDUPE_S:
+            return
+        self.seen[key] = now
+        if len(self.seen) > 64:  # aparar entradas velhas de vez em quando
+            self.seen = {k: t for k, t in self.seen.items() if now - t < 2.0}
+        if now - self.window >= 1.0:
+            self.window, self.count = now, 0
+            self.limited = False
+        self.count += 1
+        if self.count > self.RATE_MAX:
+            if not self.limited:
+                self.limited = True
+                log.warning("descoberta: limite de respostas atingido, silenciando")
+            return
+        # IP desta máquina na rota até o painel (mesmo truque do admin.py);
+        # é o campo que o painel adota, então precisa ser o da interface certa
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((addr[0], 9))
+            my_ip = s.getsockname()[0]
+        except OSError:
+            return
+        finally:
+            s.close()
+        name = socket.gethostname().split(".")[0][:15]
+        canon = "%s|%s|%d|%s" % (nonce, my_ip, PORT, name)
+        h = hmac.new(TOKEN.encode(), canon.encode(), "sha256").hexdigest()
+        reply = json.dumps({"t": "herdr-here", "name": name, "ip": my_ip,
+                            "port": PORT, "h": h}, separators=(",", ":"))
+        if self.transport is not None:
+            self.transport.sendto(reply.encode(), addr)
+        if (panel, addr[0]) not in self.replied:
+            self.replied.add((panel, addr[0]))
+            log.info("descoberta: sonda do painel %s respondida para %s", panel, addr[0])
+
+
 async def main() -> None:
     global TOKEN
     if not os.path.exists(SOCK):
@@ -702,6 +776,14 @@ async def main() -> None:
     TOKEN = load_token()
     asyncio.create_task(event_loop())
     asyncio.create_task(limits_loop())
+    # porta UDP ocupada não pode derrubar a ponte: sem descoberta ela ainda
+    # serve os painéis que já sabem o endereço
+    try:
+        await asyncio.get_running_loop().create_datagram_endpoint(
+            DiscoveryResponder, local_addr=(BIND, PORT))
+        log.info("descoberta udp em %s:%d", BIND, PORT)
+    except OSError as exc:
+        log.warning("descoberta indisponível (udp %s:%d: %s)", BIND, PORT, exc)
     server = await asyncio.start_server(handle_client, BIND, PORT)
     log.info("ponte ouvindo em %s:%d", BIND, PORT)
     async with server:

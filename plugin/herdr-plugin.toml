@@ -6,7 +6,7 @@
 
 id = "herdr-assist"
 name = "herdr-assist bridge"
-version = "0.3.0"
+version = "0.4.0"
 min_herdr_version = "0.8.0"
 # Os títulos e descrições abaixo ficam em inglês: o manifest é lido pelo Herdr
 # uma vez, sem campo por idioma, então não há como acompanhar o idioma do painel
