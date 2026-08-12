@@ -7,6 +7,8 @@
 /scripts/.fontcache
 /scripts/sonic_frames
 /scripts/sonic_anims
+/scripts/mcqueen_frames
+/scripts/mcqueen_anims
 # amostra local do teste do parser: é saída real de sessões (nomes de projeto,
 # IPs da LAN), e o teste roda sem ela — regerar com o comando em term_parse_test.c
 /scripts/fixtures

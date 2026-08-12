@@ -48,8 +48,9 @@ typedef struct {
     void (*tick)(uint32_t now);
 } avatar_driver_t;
 
-extern const avatar_driver_t avatar_clawd_driver;  /* avatar_clawd.c */
-extern const avatar_driver_t avatar_sonic_driver;  /* avatar_sonic.c */
+extern const avatar_driver_t avatar_clawd_driver;    /* avatar_clawd.c */
+extern const avatar_driver_t avatar_sonic_driver;    /* avatar_sonic.c */
+extern const avatar_driver_t avatar_mcqueen_driver;  /* avatar_mcqueen.c */
 
 /** Monta o motor no slot da home (chamar uma vez, em build_home). */
 void avatar_create(lv_obj_t *slot);
