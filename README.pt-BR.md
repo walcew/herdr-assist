@@ -128,8 +128,8 @@ sobe junto com a sessão — um plugin por máquina que você queira controlar p
 │ herdr-assist               │ ◄── TCP + JSON ───►  │ plugin herdr-assist (:9375) │
 │ ESP-IDF 5.2 + LVGL 8.4     │    uma msg por       │          │ unix socket      │
 │ UI: lista, terminal, ações │    linha             │          ▼                  │
-└────────────────────────────┘                      │   herdr (events.subscribe)  │
-                                                    └─────────────────────────────┘
+└────────────────────────────┘ ◄─ descoberta UDP ─► │   herdr (events.subscribe)  │
+                                  (:9375, auto)     └─────────────────────────────┘
 ```
 
 **Painel → ponte:** `hello` (token, obrigatório na 1ª linha), depois `read_pane`
@@ -150,6 +150,20 @@ sem ele, a ponte desconecta em 5 s). Além disso: só teclas de uma allowlist pa
 tem limite de tamanho, e comandos só valem para panes que existem. O token é gerado na
 primeira subida do plugin (0600 no config-dir); a ação `Show panel token`, no Herdr,
 exibe o valor.
+
+### Descoberta de host (modo auto)
+
+DHCP muda os hosts de endereço, então um slot pareado a partir do plugin 0.4 **não
+guarda IP nenhum**: o painel encontra a ponte por broadcast UDP (`herdr-find` →
+`herdr-here`, mesma porta 9375) no boot e sempre que a conexão cai, mantendo o endereço
+descoberto só em RAM. O handshake prova posse do token sem nunca colocá-lo no ar — a
+resposta carrega `h = HMAC-SHA256(token, "nonce|ip|port|name")`, e o painel adota o
+ip/port **assinados**, nunca o remetente do datagrama, para um vizinho não conseguir
+redirecionar o painel reaproveitando probes. Digitar um endereço no editor de host
+desliga a descoberta daquele slot (modo estático) — use em redes que filtram broadcast.
+O modo auto exige plugin ≥ 0.4 no host; a descoberta compartilha os requisitos do
+pareamento (mesmo segmento L2, broadcast liberado) e requer o `BRIDGE_BIND` padrão
+`0.0.0.0` (bind num endereço específico fica surdo a broadcast).
 
 ## Usando a tela de administração
 

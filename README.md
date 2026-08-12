@@ -126,8 +126,8 @@ starts along with the session — one plugin per machine you want to drive from 
 │ herdr-assist               │ ◄── TCP + JSON ───►  │ herdr-assist plugin (:9375) │
 │ ESP-IDF 5.2 + LVGL 8.4     │    one message       │          │ unix socket      │
 │ UI: list, terminal, actions│    per line          │          ▼                  │
-└────────────────────────────┘                      │   herdr (events.subscribe)  │
-                                                    └─────────────────────────────┘
+└────────────────────────────┘ ◄── UDP discovery ─► │   herdr (events.subscribe)  │
+                                  (:9375, auto)     └─────────────────────────────┘
 ```
 
 **Panel → bridge:** `hello` (token, mandatory on the 1st line), then `read_pane` (which
@@ -148,6 +148,20 @@ without it the bridge disconnects in 5 s). On top of that: only keys from an all
 through, text has a size cap, and commands only apply to panes that exist. The token is
 generated on the plugin's first start (0600 in the config dir); the `Show panel token`
 action in Herdr displays the value.
+
+### Host discovery (auto mode)
+
+DHCP moves hosts around, so a slot paired since plugin 0.4 stores **no IP at all**: the
+panel finds the bridge by UDP broadcast (`herdr-find` → `herdr-here`, same port 9375) at
+boot and whenever the connection drops, keeping the discovered address in RAM only. The
+handshake proves possession of the token without ever putting it on the wire — the reply
+carries `h = HMAC-SHA256(token, "nonce|ip|port|name")`, and the panel adopts the **signed**
+ip/port, never the datagram sender, so a neighbor cannot redirect the panel by replaying
+probes. Typing an address in the host editor turns discovery off for that slot (static
+mode) — use it on networks that filter broadcast. Auto mode needs plugin ≥ 0.4 on the
+host; discovery shares the pairing's requirements (same L2 segment, broadcast allowed)
+and requires the default `BRIDGE_BIND` `0.0.0.0` (a specific bind address goes deaf to
+broadcast).
 
 ## Using the admin screen
 
