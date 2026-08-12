@@ -139,3 +139,13 @@ int net_wifi_scan(net_ap_t *out, int max)
     }
     return count;
 }
+
+uint32_t net_subnet_broadcast(void)
+{
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ip;
+    if (!sta || esp_netif_get_ip_info(sta, &ip) != ESP_OK || ip.ip.addr == 0) {
+        return 0;
+    }
+    return ip.ip.addr | ~ip.netmask.addr;
+}

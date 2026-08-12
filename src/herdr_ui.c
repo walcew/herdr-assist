@@ -101,7 +101,7 @@ static const char *host_label(int host)
         return "?";
     }
     const panel_host_t *h = &panel_cfg_get()->hosts[host];
-    return h->name[0] ? h->name : h->host;
+    return h->name[0] ? h->name : (h->host[0] ? h->host : "auto");
 }
 
 /** Ordem de urgência para o modo prioridade: bloqueado primeiro. */

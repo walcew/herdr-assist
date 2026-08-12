@@ -6,15 +6,19 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <netdb.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 
 #include "cJSON.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_mac.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "discovery.h"
 #include "herdr_model.h"
 #include "net.h"
 #include "panel_cfg.h"
@@ -33,6 +37,15 @@ static const char *TAG = "herdr_conn";
 #define RECV_TIMEOUT_S  5
 #define RECONNECT_MS    3000
 
+/* Descoberta por broadcast (só slots auto): janela curta de probe+respostas.
+   O reenvio repete o nonce — a ponte deduplica em 300ms, o reenvio sai a 400.
+   Após DISC_FAST_FAILS falhas seguidas o probe desacelera, para não poluir a
+   LAN por causa de um host desligado. */
+#define DISC_WINDOW_MS       1200
+#define DISC_RECV_TIMEOUT_MS 400
+#define DISC_FAST_FAILS      5
+#define DISC_SLOW_MS         30000
+
 /* Uma conexão independente por host habilitado. Os buffers de parse vivem no
    slot (não na stack) porque as tasks rodam em paralelo — um scratch static
    compartilhado seria corrida entre hosts. */
@@ -47,9 +60,14 @@ typedef struct {
     herdr_agent_t parse_agents[HERDR_MAX_AGENTS];
     herdr_limits_t parse_limits[HERDR_MAX_PROVIDERS];
     bool used;
+    bool auto_mode;            /* slot sem host na NVS: endereço vem do probe */
+    bool addr_ok;              /* cfg.host/port em RAM valem (descobertos) */
+    bool token_shared;         /* outro slot habilitado tem o mesmo token */
+    uint8_t disc_fails;        /* falhas seguidas de descoberta (backoff) */
 } conn_slot_t;
 
 static conn_slot_t s_slots[CFG_MAX_HOSTS];
+static char s_disc_id[7];      /* 3 últimos bytes do MAC, id do probe */
 
 static conn_slot_t *slot_for(int host)
 {
@@ -358,6 +376,121 @@ static int connect_bridge(const panel_host_t *hc)
     return sock;
 }
 
+/* ---------- descoberta por broadcast (slots auto) ---------- */
+
+static void send_probe_to(int sock, const char *probe, int len, uint16_t port)
+{
+    struct sockaddr_in to = {
+        .sin_family = AF_INET,
+        .sin_port = htons(port),
+        .sin_addr.s_addr = INADDR_BROADCAST,
+    };
+    sendto(sock, probe, len, 0, (struct sockaddr *)&to, sizeof(to));
+    /* também no broadcast da sub-rede: lwIP nem sempre encaminha o global */
+    uint32_t bc = net_subnet_broadcast();
+    if (bc && bc != INADDR_BROADCAST) {
+        to.sin_addr.s_addr = bc;
+        sendto(sock, probe, len, 0, (struct sockaddr *)&to, sizeof(to));
+    }
+}
+
+/* Com token compartilhado entre slots, uma resposta cujo name é o de OUTRO
+   slot habilitado pertence àquele slot — adotá-la aqui conectaria os dois na
+   mesma ponte quando a outra máquina estivesse desligada. */
+static bool reply_is_other_slots(const conn_slot_t *s, const disc_reply_t *r)
+{
+    const panel_cfg_t *cfg = panel_cfg_get();
+    for (int i = 0; i < CFG_MAX_HOSTS; i++) {
+        const panel_host_t *h = &cfg->hosts[i];
+        if (i != s->idx && h->enabled &&
+            strcmp(h->token, s->cfg.token) == 0 &&
+            strcmp(h->name, r->name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Descobre o endereço da ponte de um slot auto: broadcast do probe (nonce
+   novo), janela curta de respostas, e adota o ip/port ASSINADOS pela ponte —
+   nunca o remetente do datagrama (anti-relay; ver discovery.h). Preenche
+   s->cfg.host/port e devolve true se achou. */
+static bool discover_slot(conn_slot_t *s)
+{
+    char nonce[33];
+    snprintf(nonce, sizeof(nonce), "%08x%08x%08x%08x",
+             (unsigned)esp_random(), (unsigned)esp_random(),
+             (unsigned)esp_random(), (unsigned)esp_random());
+    char probe[96];
+    int plen = discovery_build_probe(probe, sizeof(probe), s_disc_id, nonce);
+    if (plen < 0) {
+        return false;
+    }
+
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) {
+        return false;
+    }
+    int one = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+    struct timeval tv = { .tv_usec = DISC_RECV_TIMEOUT_MS * 1000 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    disc_reply_t best;
+    bool found = false;
+    bool candidate = false;
+    bool resent = false;
+    TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(DISC_WINDOW_MS);
+    send_probe_to(sock, probe, plen, s->cfg.port);
+    while (xTaskGetTickCount() < deadline && !found) {
+        char rx[512];
+        struct sockaddr_in from;
+        socklen_t fromlen = sizeof(from);
+        int got = recvfrom(sock, rx, sizeof(rx), 0,
+                           (struct sockaddr *)&from, &fromlen);
+        if (got <= 0) {
+            /* timeout do recv: um reenvio (mesmo nonce) contra perda */
+            if (!resent) {
+                send_probe_to(sock, probe, plen, s->cfg.port);
+                resent = true;
+            }
+            continue;
+        }
+        disc_reply_t r;
+        if (!discovery_check_reply(rx, (size_t)got, s->cfg.token, nonce, &r) ||
+            reply_is_other_slots(s, &r)) {
+            continue;
+        }
+        char src[16];
+        inet_ntoa_r(from.sin_addr, src, sizeof(src));
+        if (strcmp(src, r.ip) != 0) {
+            ESP_LOGW(TAG, "[%s] resposta veio de %s mas assina %s — usando o assinado",
+                     s->label, src, r.ip);
+        }
+        /* token único no painel (ou name exato): primeira válida decide;
+           compartilhado sem name exato: guarda e espera a janela */
+        if (!s->token_shared || strcmp(r.name, s->cfg.name) == 0) {
+            best = r;
+            found = true;
+        } else if (!candidate) {
+            best = r;
+            candidate = true;
+        }
+    }
+    close(sock);
+    if (!found && candidate) {
+        found = true;
+    }
+    if (found) {
+        strlcpy(s->cfg.host, best.ip, sizeof(s->cfg.host));
+        s->cfg.port = best.port;
+        ESP_LOGI(TAG, "[%s] ponte descoberta em %s:%u (%s), stack livre %u",
+                 s->label, best.ip, best.port, best.name,
+                 (unsigned)uxTaskGetStackHighWaterMark(NULL));
+    }
+    return found;
+}
+
 static void conn_task(void *arg)
 {
     conn_slot_t *s = arg;
@@ -367,9 +500,28 @@ static void conn_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(1000));
         }
         herdr_model_set_conn(s->idx, HERDR_CONN_CONNECTING);
+        if (s->auto_mode && !s->addr_ok) {
+            if (discover_slot(s)) {
+                s->addr_ok = true;
+                s->disc_fails = 0;
+            } else {
+                if (s->disc_fails < DISC_FAST_FAILS) {
+                    s->disc_fails++;
+                }
+                vTaskDelay(pdMS_TO_TICKS(s->disc_fails >= DISC_FAST_FAILS
+                                         ? DISC_SLOW_MS : RECONNECT_MS));
+                continue;
+            }
+        }
         ESP_LOGI(TAG, "[%s] conectando em %s:%u", s->label, s->cfg.host, s->cfg.port);
         int sock = connect_bridge(&s->cfg);
         if (sock < 0) {
+            /* endereço descoberto que não conecta pode ter mudado: re-proba
+               na próxima volta (queda de conexão NÃO invalida — ponte
+               reiniciada no mesmo IP volta sem probe) */
+            if (s->auto_mode) {
+                s->addr_ok = false;
+            }
             vTaskDelay(pdMS_TO_TICKS(RECONNECT_MS));
             continue;
         }
@@ -441,6 +593,10 @@ static void conn_task(void *arg)
 esp_err_t herdr_conn_start(void)
 {
     const panel_cfg_t *cfg = panel_cfg_get();
+    /* id do probe de descoberta: 3 últimos bytes do MAC, como no pareamento */
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(s_disc_id, sizeof(s_disc_id), "%02x%02x%02x", mac[3], mac[4], mac[5]);
     int started = 0;
     for (int i = 0; i < CFG_MAX_HOSTS; i++) {
         if (!cfg->hosts[i].enabled) {
@@ -449,7 +605,21 @@ esp_err_t herdr_conn_start(void)
         conn_slot_t *s = &s_slots[i];
         s->idx = i;
         s->cfg = cfg->hosts[i];
-        s->label = s->cfg.name[0] ? s->cfg.name : s->cfg.host;
+        s->label = s->cfg.name[0] ? s->cfg.name
+                 : (s->cfg.host[0] ? s->cfg.host : "auto");
+        s->auto_mode = panel_host_is_auto(&cfg->hosts[i]);
+        s->addr_ok = false;
+        s->disc_fails = 0;
+        /* token repetido em outro slot muda a decisão da janela de descoberta
+           (ver discover_slot); computado uma vez — a config é imutável */
+        s->token_shared = false;
+        for (int j = 0; j < CFG_MAX_HOSTS; j++) {
+            if (j != i && cfg->hosts[j].enabled &&
+                strcmp(cfg->hosts[j].token, cfg->hosts[i].token) == 0) {
+                s->token_shared = true;
+                break;
+            }
+        }
         s->sock = -1;
         s->tx_mutex = xSemaphoreCreateMutex();
         /* buffer grande e sem pressa: PSRAM, poupando a SRAM interna */

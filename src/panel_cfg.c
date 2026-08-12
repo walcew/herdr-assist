@@ -56,7 +56,9 @@ esp_err_t panel_cfg_init(void)
         uint8_t en = 0;
         snprintf(key, sizeof(key), "h%de", i);
         nvs_get_u8(h, key, &en);
-        hh->enabled = en && hh->host[0] && hh->port;
+        /* auto (host vazio + token) também é utilizável: o endereço vem da
+           descoberta por broadcast em runtime */
+        hh->enabled = en && hh->port && (hh->host[0] || hh->token[0]);
     }
     nvs_close(h);
 

@@ -36,6 +36,7 @@ static lv_obj_t *s_ta_name;
 static lv_obj_t *s_ta_host;
 static lv_obj_t *s_ta_port;
 static lv_obj_t *s_ta_token;
+static lv_obj_t *s_sw_auto;         /* switch de descoberta automática do editor */
 static lv_obj_t *s_lbl_lang;        /* valor da linha de idioma, na tela principal */
 static lv_obj_t *s_pair_status;
 static lv_timer_t *s_pair_timer;
@@ -297,15 +298,30 @@ static void host_apply_cb(lv_event_t *e)
 {
     (void)e;
     panel_host_t *h = &s_edit.hosts[s_edit_host];
-    bool was_empty = h->host[0] == '\0';
+    bool was_empty = panel_host_is_free(h);
+    bool auto_on = lv_obj_has_state(s_sw_auto, LV_STATE_CHECKED);
     strlcpy(h->name, lv_textarea_get_text(s_ta_name), CFG_NAME_LEN);
     strlcpy(h->host, lv_textarea_get_text(s_ta_host), CFG_HOST_LEN);
     strlcpy(h->token, lv_textarea_get_text(s_ta_token), CFG_TOKEN_LEN);
     h->port = (uint16_t)atoi(lv_textarea_get_text(s_ta_port));
-    if (!h->host[0] || !h->port) {
+    if (auto_on) {
+        /* modo auto: endereço fora da NVS (a descoberta resolve em runtime);
+           a porta zerada assume o padrão da ponte e vira o destino do probe */
+        h->host[0] = '\0';
+        if (!h->port) {
+            h->port = 9375;
+        }
+    }
+    bool complete = h->port && (auto_on ? h->token[0] != '\0' : h->host[0] != '\0');
+    if (!complete) {
         h->enabled = false;             /* incompleto não conecta */
     } else if (was_empty) {
         h->enabled = true;              /* host novo entra habilitado */
+    }
+    if (panel_host_is_free(h)) {
+        /* sem endereço e sem token o slot é livre de fato: some inteiro, para
+           um nome fantasma não reaparecer no próximo "adicionar" */
+        memset(h, 0, sizeof(*h));
     }
     hide_kb();
     show_main();
@@ -317,6 +333,28 @@ static void host_remove_cb(lv_event_t *e)
     memset(&s_edit.hosts[s_edit_host], 0, sizeof(panel_host_t));
     hide_kb();
     show_main();
+}
+
+/* No modo auto, endereço e porta saem de cena: a resposta assinada da
+   descoberta fornece ambos (a porta da NVS segue como destino do probe). */
+static void apply_auto_visibility(void)
+{
+    bool on = lv_obj_has_state(s_sw_auto, LV_STATE_CHECKED);
+    lv_obj_t *rows[] = { lv_obj_get_parent(s_ta_host), lv_obj_get_parent(s_ta_port) };
+    for (size_t i = 0; i < 2; i++) {
+        if (on) {
+            lv_obj_add_flag(rows[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(rows[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void host_auto_cb(lv_event_t *e)
+{
+    (void)e;
+    hide_kb();            /* o foco estava num campo que pode ter sumido */
+    apply_auto_visibility();
 }
 
 static void show_host(int idx)
@@ -336,10 +374,30 @@ static void show_host(int idx)
     }
 
     s_ta_name  = make_field(T(STR_FIELD_NAME), h->name, T(STR_FIELD_NAME_PH));
+
+    /* switch de descoberta automática, entre o nome e o endereço */
+    lv_obj_t *arow = ui_plain(s_content);
+    lv_obj_set_size(arow, LV_PCT(100), 44);
+    lv_obj_t *al = lv_label_create(arow);
+    lv_label_set_text(al, T(STR_FIELD_AUTO));
+    lv_obj_set_style_text_font(al, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(al, UI_MUTED, 0);
+    lv_obj_align(al, LV_ALIGN_LEFT_MID, 0, 0);
+    s_sw_auto = lv_switch_create(arow);
+    lv_obj_set_size(s_sw_auto, 48, 26);
+    lv_obj_set_ext_click_area(s_sw_auto, 12);
+    lv_obj_align(s_sw_auto, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(s_sw_auto, UI_SWITCH_OFF, 0);
+    if (panel_host_is_auto(h)) {
+        lv_obj_add_state(s_sw_auto, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(s_sw_auto, host_auto_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
     s_ta_host  = make_field(T(STR_FIELD_ADDR), h->host, T(STR_FIELD_ADDR_PH));
     s_ta_port  = make_field(T(STR_FIELD_PORT), port, "9375");
     /* token da ponte deste host (ação show-token do plugin exibe no Herdr) */
     s_ta_token = make_field(T(STR_FIELD_TOKEN), h->token, T(STR_FIELD_TOKEN_PH));
+    apply_auto_visibility();
 
     lv_obj_t *rm = lv_btn_create(s_content);
     lv_obj_set_size(rm, LV_PCT(100), 40);
@@ -380,17 +438,32 @@ static void back_from_pair_cb(lv_event_t *e)
  * salva (não de s_edit) porque o pareamento é uma ação completa em si — o que
  * estiver pendente de salvar continua pendente, sem virar efeito colateral.
  */
-static void pair_apply(const panel_host_t *h)
+static void pair_apply(const panel_host_t *h, bool auto_mode)
 {
     panel_cfg_t cfg = *panel_cfg_get();
+    panel_host_t inc = *h;
+    if (auto_mode) {
+        /* slot auto fica sem endereço na NVS: a descoberta por broadcast o
+           resolve em runtime (e o IP recebido morreria no esp_restart) */
+        inc.host[0] = '\0';
+    }
     int slot = -1;
-    for (int i = 0; i < CFG_MAX_HOSTS; i++) {
-        /* reparear o mesmo endereço atualiza o slot em vez de duplicar */
-        if (strcmp(cfg.hosts[i].host, h->host) == 0 && cfg.hosts[i].host[0]) {
+    /* reparear a mesma máquina atualiza o slot em vez de duplicar: o nome
+       (hostname do host) é estável mesmo quando o IP muda */
+    for (int i = 0; i < CFG_MAX_HOSTS && slot < 0; i++) {
+        if (cfg.hosts[i].name[0] && strcmp(cfg.hosts[i].name, inc.name) == 0) {
             slot = i;
-            break;
         }
-        if (slot < 0 && cfg.hosts[i].host[0] == '\0') {
+    }
+    /* config legada (pareada por IP, sem name igual): mesmo endereço */
+    for (int i = 0; i < CFG_MAX_HOSTS && slot < 0; i++) {
+        if (inc.host[0] && cfg.hosts[i].host[0] &&
+            strcmp(cfg.hosts[i].host, inc.host) == 0) {
+            slot = i;
+        }
+    }
+    for (int i = 0; i < CFG_MAX_HOSTS && slot < 0; i++) {
+        if (panel_host_is_free(&cfg.hosts[i])) {
             slot = i;
         }
     }
@@ -399,9 +472,9 @@ static void pair_apply(const panel_host_t *h)
         lv_obj_set_style_text_color(s_pair_status, UI_BLOCKED, 0);
         return;
     }
-    cfg.hosts[slot] = *h;
+    cfg.hosts[slot] = inc;
     panel_cfg_save(&cfg);
-    lv_label_set_text_fmt(s_pair_status, T(STR_PAIRED_FMT), h->name);
+    lv_label_set_text_fmt(s_pair_status, T(STR_PAIRED_FMT), inc.name);
     lv_obj_set_style_text_color(s_pair_status, UI_IDLE, 0);
     lv_refr_now(NULL);            /* pinta o aviso antes de sumir a tela */
     esp_restart();
@@ -411,11 +484,12 @@ static void pair_tick_cb(lv_timer_t *t)
 {
     (void)t;
     panel_host_t h;
+    bool auto_mode;
     switch (pairing_state()) {
     case PAIRING_DONE:
-        if (pairing_result(&h)) {
+        if (pairing_result(&h, &auto_mode)) {
             pair_leave();
-            pair_apply(&h);
+            pair_apply(&h, auto_mode);
         }
         break;
     case PAIRING_WAITING:
@@ -514,7 +588,7 @@ static void add_host_cb(lv_event_t *e)
 {
     (void)e;
     for (int i = 0; i < CFG_MAX_HOSTS; i++) {
-        if (s_edit.hosts[i].host[0] == '\0') {
+        if (panel_host_is_free(&s_edit.hosts[i])) {
             show_host(i);
             return;
         }
@@ -612,20 +686,25 @@ static void show_main(void)
     bool has_free = false;
     for (int i = 0; i < CFG_MAX_HOSTS; i++) {
         const panel_host_t *h = &s_edit.hosts[i];
-        if (h->host[0] == '\0') {
+        if (panel_host_is_free(h)) {
             has_free = true;
             continue;
         }
         lv_obj_t *row = make_row(host_row_cb, (void *)(intptr_t)i, 48);
 
         lv_obj_t *nm = lv_label_create(row);
-        lv_label_set_text(nm, h->name[0] ? h->name : h->host);
+        lv_label_set_text(nm, h->name[0] ? h->name
+                              : (h->host[0] ? h->host : T(STR_AUTO_SHORT)));
         lv_obj_set_style_text_font(nm, &lv_font_ui_14, 0);
         lv_obj_set_style_text_color(nm, UI_TEXT, 0);
         lv_obj_align(nm, LV_ALIGN_LEFT_MID, 0, -9);
 
         lv_obj_t *ad = lv_label_create(row);
-        lv_label_set_text_fmt(ad, "%s:%u", h->host, h->port);
+        if (h->host[0]) {
+            lv_label_set_text_fmt(ad, "%s:%u", h->host, h->port);
+        } else {
+            lv_label_set_text(ad, T(STR_AUTO_SHORT));
+        }
         lv_obj_set_style_text_font(ad, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(ad, UI_MUTED, 0);
         lv_obj_align(ad, LV_ALIGN_LEFT_MID, 0, 10);

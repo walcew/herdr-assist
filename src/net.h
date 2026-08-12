@@ -39,6 +39,12 @@ bool net_wifi_is_up(void);
  */
 int net_wifi_scan(net_ap_t *out, int max);
 
+/**
+ * Broadcast IPv4 da sub-rede atual (ip | ~mask), em ordem de rede; 0 sem IP.
+ * Usado pela descoberta de pontes em herdr_conn.
+ */
+uint32_t net_subnet_broadcast(void);
+
 #ifdef __cplusplus
 }
 #endif

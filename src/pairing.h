@@ -47,9 +47,12 @@ const char *pairing_device_id(void);
 
 /**
  * Configuração recebida, válida quando o estado é PAIRING_DONE.
- * Quem consome grava na NVS (a task da LVGL), não esta.
+ * Quem consome grava na NVS (a task da LVGL), não esta. auto_mode true
+ * quando o host pediu descoberta automática: o consumidor zera o endereço
+ * antes de gravar (o campo host recebido segue preenchido — ele valida o
+ * payload e serve de fallback para painéis antigos).
  */
-bool pairing_result(panel_host_t *out);
+bool pairing_result(panel_host_t *out, bool *auto_mode);
 
 #ifdef __cplusplus
 }

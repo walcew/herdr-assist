@@ -94,6 +94,8 @@ typedef enum {
     X(FIELD_PORT,      "Port",                        "Porta")                               \
     X(FIELD_TOKEN,     "Token",                       "Token")                               \
     X(FIELD_TOKEN_PH,  "32 hex from the bridge",      "32 hex da ponte")                     \
+    X(FIELD_AUTO,      "Auto discovery",              "Descoberta automática")               \
+    X(AUTO_SHORT,      "auto",                        "auto")                                \
     X(REMOVE,          LV_SYMBOL_TRASH "  Remove",    LV_SYMBOL_TRASH "  Remover")           \
     /* --- configurações: pareamento --- */                                                  \
     X(PAIR_TITLE,      "Pair",                        "Parear")                              \

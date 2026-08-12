@@ -26,6 +26,7 @@ static volatile bool s_stop;
 static TickType_t s_deadline;
 static char s_id[7];
 static panel_host_t s_result;
+static bool s_auto;             /* host pediu descoberta automática */
 
 static void set_state(pairing_state_t st)
 {
@@ -40,7 +41,7 @@ static void set_state(pairing_state_t st)
  * Rejeita o que não dá para usar depois: sem endereço, porta ou token, o
  * painel ficaria com um host que nunca conecta — pior que não parear.
  */
-static bool parse_pair(const char *json, size_t len, panel_host_t *out)
+static bool parse_pair(const char *json, size_t len, panel_host_t *out, bool *auto_out)
 {
     cJSON *root = cJSON_ParseWithLength(json, len);
     if (!root) {
@@ -65,6 +66,9 @@ static bool parse_pair(const char *json, size_t len, panel_host_t *out)
                            ? name->valuestring : host->valuestring, CFG_NAME_LEN);
         out->port = (uint16_t)port->valueint;
         out->enabled = true;
+        /* o host continua preenchido mesmo com auto: valida o payload e é o
+           que um firmware sem descoberta gravaria — quem zera é o pair_apply */
+        *auto_out = cJSON_IsTrue(cJSON_GetObjectItem(root, "auto"));
         ok = true;
     }
     cJSON_Delete(root);
@@ -92,12 +96,15 @@ static bool serve_client(int fd)
     }
 
     panel_host_t cfg;
-    bool ok = used > 0 && parse_pair(buf, used, &cfg);
+    bool auto_mode = false;
+    bool ok = used > 0 && parse_pair(buf, used, &cfg, &auto_mode);
     if (ok) {
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_result = cfg;
+        s_auto = auto_mode;
         xSemaphoreGive(s_mutex);
-        ESP_LOGI(TAG, "pareado com \"%s\" (%s:%u)", cfg.name, cfg.host, cfg.port);
+        ESP_LOGI(TAG, "pareado com \"%s\" (%s:%u%s)", cfg.name, cfg.host, cfg.port,
+                 auto_mode ? ", auto" : "");
         send(fd, "{\"t\":\"paired\",\"ok\":true}\n", 25, 0);
     } else {
         ESP_LOGW(TAG, "configuração inválida recebida");
@@ -208,6 +215,7 @@ esp_err_t pairing_start(void)
         snprintf(s_id, sizeof(s_id), "%02X%02X%02X", mac[3], mac[4], mac[5]);
     }
     memset(&s_result, 0, sizeof(s_result));
+    s_auto = false;
     s_stop = false;
     s_deadline = xTaskGetTickCount() + pdMS_TO_TICKS(PAIRING_TIMEOUT_S * 1000);
     set_state(PAIRING_WAITING);
@@ -245,13 +253,14 @@ const char *pairing_device_id(void)
     return s_id;
 }
 
-bool pairing_result(panel_host_t *out)
+bool pairing_result(panel_host_t *out, bool *auto_mode)
 {
     if (s_state != PAIRING_DONE) {
         return false;
     }
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     *out = s_result;
+    *auto_mode = s_auto;
     xSemaphoreGive(s_mutex);
     return out->host[0] != '\0';
 }

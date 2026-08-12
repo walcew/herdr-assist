@@ -33,6 +33,20 @@ typedef struct {
     bool     enabled;
 } panel_host_t;
 
+/* Host vazio distingue dois estados pelo token: com token é um slot em
+   descoberta automática (endereço resolvido por broadcast, só em RAM);
+   sem token é um slot livre. Todo teste de "vazio" deve usar estes
+   helpers — comparar só o host confunde auto com livre. */
+static inline bool panel_host_is_auto(const panel_host_t *h)
+{
+    return h->host[0] == '\0' && h->token[0] != '\0';
+}
+
+static inline bool panel_host_is_free(const panel_host_t *h)
+{
+    return h->host[0] == '\0' && h->token[0] == '\0';
+}
+
 typedef struct {
     char         wifi_ssid[CFG_SSID_LEN];
     char         wifi_pass[CFG_PASS_LEN];
