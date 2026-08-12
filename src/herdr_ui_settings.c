@@ -41,6 +41,7 @@ static lv_obj_t *s_ta_port;
 static lv_obj_t *s_ta_token;
 static lv_obj_t *s_sw_auto;         /* switch de descoberta automática do editor */
 static lv_obj_t *s_lbl_lang;        /* valor da linha de idioma, na tela principal */
+static lv_obj_t *s_lbl_wifi;        /* status vivo do Wi-Fi, na tela principal */
 static lv_obj_t *s_pair_status;
 static lv_timer_t *s_pair_timer;
 static lv_obj_t *s_fwup_status;     /* label de estado da tela de atualização */
@@ -857,6 +858,45 @@ static void fw_open_cb(lv_event_t *e)
     show_update();
 }
 
+/**
+ * Pinta o estado real da associação Wi-Fi (não o SSID salvo).
+ *
+ * Faixas de RSSI no critério usual de 2.4GHz: acima de -60 dBm a conexão é
+ * confortável, entre -60 e -70 ainda serve, abaixo disso começa a cair.
+ */
+static void refresh_wifi_status(void)
+{
+    if (!s_lbl_wifi) {
+        return;
+    }
+    int8_t rssi;
+    if (!net_wifi_is_up()) {
+        lv_label_set_text(s_lbl_wifi, T(STR_WIFI_DISCONNECTED));
+        lv_obj_set_style_text_color(s_lbl_wifi, UI_BLOCKED, 0);
+    } else if (!net_wifi_rssi(&rssi)) {
+        /* tem IP mas o driver não deu o registro (scan em curso, por ex.) */
+        lv_label_set_text(s_lbl_wifi, T(STR_WIFI_CONNECTED));
+        lv_obj_set_style_text_color(s_lbl_wifi, UI_IDLE, 0);
+    } else {
+        str_id_t nota = rssi >= -60 ? STR_WIFI_GOOD
+                      : (rssi >= -70 ? STR_WIFI_FAIR : STR_WIFI_WEAK);
+        lv_color_t cor = rssi >= -60 ? UI_IDLE
+                       : (rssi >= -70 ? UI_WORKING : UI_BLOCKED);
+        lv_label_set_text_fmt(s_lbl_wifi, T(STR_WIFI_SIGNAL_FMT), rssi, T(nota));
+        lv_obj_set_style_text_color(s_lbl_wifi, cor, 0);
+    }
+}
+
+/** Mantém o status vivo enquanto a tela principal estiver à vista. */
+static void wifi_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_view != VIEW_MAIN) {
+        return;              /* o label foi destruído junto com a tela */
+    }
+    refresh_wifi_status();
+}
+
 /** O aviso de pendência só existe na tela principal, e só quando há mudança. */
 static void update_toast(void)
 {
@@ -877,13 +917,24 @@ static void show_main(void)
     hide_kb();
     lv_obj_clean(s_content);
 
+    /* Sem SSID salvo a linha é uma só (nada a reportar); com rede configurada
+       ela vira dupla, e a de baixo é o estado real da associação — o SSID
+       sozinho não distingue "conectado" de "senha errada". */
     make_section_label(T(STR_SEC_WIFI));
-    lv_obj_t *wrow = make_row(wifi_change_cb, NULL, 44);
+    bool wifi_set = s_edit.wifi_ssid[0] != '\0';
+    lv_obj_t *wrow = make_row(wifi_change_cb, NULL, wifi_set ? 48 : 44);
     lv_obj_t *wl = lv_label_create(wrow);
-    lv_label_set_text(wl, s_edit.wifi_ssid[0] ? s_edit.wifi_ssid : T(STR_NOT_CONFIGURED));
+    lv_label_set_text(wl, wifi_set ? s_edit.wifi_ssid : T(STR_NOT_CONFIGURED));
     lv_obj_set_style_text_font(wl, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(wl, UI_TEXT, 0);
-    lv_obj_align(wl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(wl, LV_ALIGN_LEFT_MID, 0, wifi_set ? -9 : 0);
+    s_lbl_wifi = NULL;
+    if (wifi_set) {
+        s_lbl_wifi = lv_label_create(wrow);
+        lv_obj_set_style_text_font(s_lbl_wifi, &lv_font_ui_12, 0);
+        lv_obj_align(s_lbl_wifi, LV_ALIGN_LEFT_MID, 0, 10);
+        refresh_wifi_status();       /* pinta antes do primeiro tick */
+    }
     lv_obj_t *wc = lv_label_create(wrow);
     lv_label_set_text(wc, T(STR_CHANGE));
     lv_obj_set_style_text_font(wc, &lv_font_ui_12, 0);
@@ -1100,6 +1151,7 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     lv_obj_align(f2, LV_ALIGN_LEFT_MID, 32, 10);
 
     lv_timer_create(fw_notify_tick_cb, 5000, NULL);
+    lv_timer_create(wifi_tick_cb, 2000, NULL);
 }
 
 void herdr_ui_settings_show(void)

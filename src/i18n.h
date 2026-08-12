@@ -64,6 +64,12 @@ typedef enum {
     X(TAB_SETTINGS,    "Settings",                    "Configurações")                       \
     X(SEC_WIFI,        "Wi-Fi network",               "Rede Wi-Fi")                          \
     X(NOT_CONFIGURED,  "Not configured",              "Não configurada")                     \
+    X(WIFI_CONNECTED,  "Connected",                   "Conectado")                           \
+    X(WIFI_DISCONNECTED, "Disconnected",              "Desconectado")                        \
+    X(WIFI_SIGNAL_FMT, "Connected · %d dBm (%s)",     "Conectado · %d dBm (%s)")             \
+    X(WIFI_GOOD,       "good",                        "bom")                                 \
+    X(WIFI_FAIR,       "fair",                        "razoável")                            \
+    X(WIFI_WEAK,       "weak",                        "fraco")                               \
     X(CHANGE,          "Change " LV_SYMBOL_RIGHT,     "Trocar " LV_SYMBOL_RIGHT)             \
     X(SEC_HOSTS,       "herdr hosts",                 "Hosts herdr")                         \
     X(PAIR_WITH_HOST,  LV_SYMBOL_WIFI "  Pair with a host",                                  \

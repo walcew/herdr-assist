@@ -91,6 +91,21 @@ bool net_wifi_is_up(void)
     return s_up;
 }
 
+bool net_wifi_rssi(int8_t *out_rssi)
+{
+    /* durante o scan o driver desassocia de propósito (net_wifi_scan), então
+       o registro do AP não vale — melhor dizer "não sei" que piscar erro */
+    if (!s_up || s_scanning) {
+        return false;
+    }
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) {
+        return false;
+    }
+    *out_rssi = ap.rssi;
+    return true;
+}
+
 int net_wifi_scan(net_ap_t *out, int max)
 {
     s_scanning = true;

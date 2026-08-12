@@ -63,6 +63,13 @@ senha. Deixe os hosts em branco por enquanto — o passo 3 preenche para você.
 >     write_flash 0x10000 herdr-assist-v0.5.0-update.bin
 > ```
 
+> **Se a gravação cair no meio, coloque a placa em modo download antes**:
+> segure o BOOT, toque no RST e solte o BOOT (a tela fica apagada — é o
+> esperado). Um painel sem app bootável reseta cerca de uma vez por segundo, e
+> cada reset reenumera o dispositivo USB, o que corta o esptool no meio da
+> escrita e deixa o slot pela metade — a falha se realimenta. Em modo download
+> o chip não reseta sozinho e a gravação vai até o fim.
+
 ### 2. Instalando a ponte no host
 
 A ponte é um plugin do Herdr. Rode em cada máquina que você quiser alcançar pelo painel:

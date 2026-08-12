@@ -34,6 +34,14 @@ void net_wifi_connect(const char *ssid, const char *pass);
 bool net_wifi_is_up(void);
 
 /**
+ * RSSI (dBm) do AP associado; false se não houver associação.
+ *
+ * Consulta direta ao driver (não varre nada, retorna em microssegundos), então
+ * pode ser chamada da task da LVGL — ao contrário de net_wifi_scan().
+ */
+bool net_wifi_rssi(int8_t *out_rssi);
+
+/**
  * Varre redes 2.4GHz (bloqueia ~2s) e devolve até max redes, mais forte
  * primeiro, sem SSIDs repetidos. Retorna a quantidade, ou -1 em erro.
  */

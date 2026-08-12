@@ -60,6 +60,13 @@ type the password. Leave the hosts alone for now — step 3 fills them in for yo
 >     write_flash 0x10000 herdr-assist-v0.5.0-update.bin
 > ```
 
+> **If a write keeps dropping mid-transfer, put the board in download mode
+> first**: hold BOOT, tap RST, release BOOT (the screen stays dark — that is
+> the point). A panel with no bootable app resets about once a second, and each
+> reset re-enumerates the USB device, which can cut esptool off mid-write and
+> leave the slot half-written — the failure feeds itself. In download mode the
+> chip never resets on its own and the write runs to completion.
+
 ### 2. Install the bridge on the host
 
 The bridge is a Herdr plugin. Run this on every machine you want to reach from the panel:
