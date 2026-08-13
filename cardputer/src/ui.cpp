@@ -18,6 +18,7 @@
 #include "panel_cfg.h"
 #include "theme.h"
 #include "ui_term.h"
+#include "update.h"
 
 #include "assets/logo_boot.h"
 
@@ -41,6 +42,7 @@ enum Screen {
     SCR_HOSTS,
     SCR_INFO,
     SCR_LOGO,
+    SCR_UPDATE,
     SCR_INPUT,
 };
 
@@ -869,6 +871,97 @@ static void key_term_menu(const KeyEvent &e)
     }
 }
 
+/* ------------------------------------------------------- atualizacao ----- */
+
+static void draw_update(void)
+{
+    draw_status_bar("ATUALIZAR");
+
+    char l1[44], l2[44];
+    const char *dica = "` volta";
+    update_state_t st = update_state();
+
+    switch (st) {
+    case UPD_CHECKING:
+        snprintf(l1, sizeof(l1), "consultando o GitHub...");
+        l2[0] = ' ';
+        break;
+    case UPD_UPTODATE:
+        snprintf(l1, sizeof(l1), "ja esta na ultima versao");
+        snprintf(l2, sizeof(l2), "%s", update_latest());
+        break;
+    case UPD_AVAILABLE:
+        snprintf(l1, sizeof(l1), "versao nova: %s", update_latest());
+        snprintf(l2, sizeof(l2), "OK baixa para o cartao");
+        dica = "OK baixa   ` volta";
+        break;
+    case UPD_DOWNLOADING:
+        snprintf(l1, sizeof(l1), "baixando %s", update_latest());
+        snprintf(l2, sizeof(l2), "%d%%", update_progress());
+        break;
+    case UPD_READY:
+        snprintf(l1, sizeof(l1), "pronto no cartao");
+        snprintf(l2, sizeof(l2), "%s", update_file());
+        break;
+    case UPD_ERROR:
+        snprintf(l1, sizeof(l1), "falhou");
+        snprintf(l2, sizeof(l2), "%s", update_error());
+        dica = "OK tenta de novo   ` volta";
+        break;
+    default:
+        snprintf(l1, sizeof(l1), "versao instalada");
+        snprintf(l2, sizeof(l2), "%s", HERDR_ASSIST_VERSION);
+        dica = "OK consulta   ` volta";
+        break;
+    }
+
+    /* a assinatura inclui o progresso, entao so o que muda vai ao display */
+    char sig[80];
+    snprintf(sig, sizeof(sig), "upd|%d|%s|%s", (int)st, l1, l2);
+    if (changed(s_row_cache[0], sizeof(s_row_cache[0]), sig)) {
+        clear_body();
+        auto &d = M5Cardputer.Display;
+        d.setFont(&fonts::Font0);
+        d.setTextDatum(middle_center);
+        d.setTextColor(st == UPD_ERROR ? C_BLOCKED
+                       : (st == UPD_AVAILABLE || st == UPD_READY) ? C_ACCENT : C_TEXT,
+                       C_BG);
+        d.drawString(l1, SCR_W / 2, BODY_Y + 34);
+        if (l2[0]) {
+            d.setTextColor(C_MUTED, C_BG);
+            d.drawString(l2, SCR_W / 2, BODY_Y + 50);
+        }
+        d.setTextDatum(top_left);
+
+        if (st == UPD_DOWNLOADING) {
+            const int bx = 24, bw = SCR_W - 2 * bx;
+            d.drawRect(bx, BODY_Y + 62, bw, 8, C_BORDER);
+            d.fillRect(bx + 1, BODY_Y + 63, (bw - 2) * update_progress() / 100, 6,
+                       C_ACCENT);
+        }
+        if (st == UPD_READY) {
+            d.setTextDatum(middle_center);
+            d.setTextColor(C_MUTED, C_BG);
+            d.drawString("instale pelo M5Launcher", SCR_W / 2, BODY_Y + 68);
+            d.setTextDatum(top_left);
+        }
+    }
+    draw_footer(dica);
+}
+
+static void key_update(const KeyEvent &e)
+{
+    if (!e.enter) {
+        return;
+    }
+    switch (update_state()) {
+    case UPD_AVAILABLE: update_download(); break;
+    case UPD_DOWNLOADING: break;              /* deixa terminar */
+    default: update_check(); break;
+    }
+    s_dirty = true;
+}
+
 /* ------------------------------------------------------- tela apagada ---- */
 
 /**
@@ -904,6 +997,7 @@ enum {
     ROOT_SESSIONS = 0,
     ROOT_DASH,
     ROOT_SETTINGS,
+    ROOT_UPDATE,
     ROOT_LOGO,
     ROOT_OFF,
     ROOT_INFO,
@@ -914,6 +1008,7 @@ static const char *const ROOT_MENU[ROOT_COUNT] = {
     "Sessoes",
     "Dashboards",
     "Configuracoes",
+    "Atualizar",
     "Ver a logo",
     "Desligar a tela",
     "Sobre este aparelho",
@@ -933,9 +1028,18 @@ static void draw_logo_screen(void)
 static void draw_root(void)
 {
     static int top;
-    char titulo[24];
-    snprintf(titulo, sizeof(titulo), "HERDR-ASSIST");
-    draw_list_menu(titulo, ROOT_MENU, ROOT_COUNT, s_root_sel, &top,
+    /* o item ganha marca quando ha versao nova: o aviso tem que estar onde a
+       pessoa ja olha, nao escondido dentro da tela de atualizacao */
+    static const char *itens[ROOT_COUNT];
+    char rotulo_upd[32];
+    for (int i = 0; i < ROOT_COUNT; i++) {
+        itens[i] = ROOT_MENU[i];
+    }
+    if (update_available()) {
+        snprintf(rotulo_upd, sizeof(rotulo_upd), "Atualizar  * %s", update_latest());
+        itens[ROOT_UPDATE] = rotulo_upd;
+    }
+    draw_list_menu("HERDR-ASSIST", itens, ROOT_COUNT, s_root_sel, &top,
                    "; . navega   OK entra");
 }
 
@@ -952,6 +1056,15 @@ static void key_root(const KeyEvent &e)
     case ROOT_SESSIONS: s_screen = SCR_SESSIONS; break;
     case ROOT_DASH:     s_screen = SCR_DASH;     break;
     case ROOT_SETTINGS: s_screen = SCR_SETTINGS; break;
+    case ROOT_UPDATE:
+        s_back = SCR_MENU;
+        s_screen = SCR_UPDATE;
+        /* checa ao entrar: quem abriu a tela quer saber agora, e uma checagem
+           custa um GET de 200 bytes */
+        if (update_state() == UPD_IDLE || update_state() == UPD_ERROR) {
+            update_check();
+        }
+        break;
     case ROOT_LOGO:
         s_back = SCR_MENU;
         s_screen = SCR_LOGO;
@@ -1573,6 +1686,7 @@ static void handle_key(const KeyEvent &e)
     }
 
     switch (s_screen) {
+    case SCR_UPDATE:   key_update(e);   break;
     case SCR_SESSIONS: key_sessions(e); break;
     case SCR_SETTINGS: key_settings(e); break;
     case SCR_HOSTS:    key_hosts(e);    break;
@@ -1611,6 +1725,7 @@ static void draw(void)
     case SCR_HOSTS:    draw_hosts();    break;
     case SCR_INFO:     draw_info();     break;
     case SCR_LOGO:     draw_logo_screen(); break;
+    case SCR_UPDATE:   draw_update();   break;
     case SCR_INPUT:    draw_input();    break;
     default:           draw_sessions(); break;
     }
@@ -1767,6 +1882,16 @@ void ui_tick(void)
                     break;
                 }
             }
+        }
+    }
+
+    /* o progresso do download anda sem ninguém tocar em tecla */
+    if (s_screen == SCR_UPDATE) {
+        static int s_upd_last = -1;
+        int agora = (int)update_state() * 1000 + update_progress();
+        if (agora != s_upd_last) {
+            s_upd_last = agora;
+            s_dirty = true;
         }
     }
 
