@@ -17,6 +17,7 @@ próximo build. Edite ../src.
 
 import os
 import shutil
+import subprocess
 
 Import("env")  # noqa: F821  (injetado pelo PlatformIO/SCons)
 
@@ -51,3 +52,35 @@ for name in FILES:
     if not os.path.isfile(dst) or os.path.getmtime(src) > os.path.getmtime(dst):
         shutil.copy2(src, dst)
         print("sync_shared: %s atualizado" % name)
+
+# módulo que saiu da lista não pode continuar compilando pela cópia velha
+for name in os.listdir(DEST):
+    if name not in FILES:
+        os.remove(os.path.join(DEST, name))
+        print("sync_shared: %s removido (fora da lista)" % name)
+
+
+def _version():
+    """Mesma resolução do painel: o version.txt que o CI grava na raiz (== tag)
+    vence; num clone de desenvolvimento vale o git describe; sem git, "dev".
+    É o que a tela Sobre e o splash exibem — antes era um literal no
+    platformio.ini, que divergiria da tag de qualquer release."""
+    try:
+        with open(os.path.join(PANEL_SRC, "..", "version.txt"),
+                  encoding="utf-8") as fh:
+            v = fh.read().strip()
+        if v:
+            return v
+    except OSError:
+        pass
+    try:
+        return subprocess.run(
+            ["git", "describe", "--tags", "--always", "--dirty"],
+            cwd=PANEL_SRC, capture_output=True, text=True,
+            check=True).stdout.strip() or "dev"
+    except (OSError, subprocess.CalledProcessError):
+        return "dev"
+
+
+# este é o único extra_script do projeto, então o carimbo de versão mora aqui
+env.Append(CPPDEFINES=[("HERDR_ASSIST_VERSION", '\\"%s\\"' % _version())])
