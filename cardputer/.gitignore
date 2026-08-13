@@ -1,0 +1,4 @@
+.pio/
+.vscode/
+# gerado pelo sync_shared.py a cada build (originais em ../src)
+src/shared/

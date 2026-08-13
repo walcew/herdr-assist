@@ -10,10 +10,24 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* Dimensionado para o painel de 3,5" (grid em PSRAM). Portes com tela menor —
+   e sem PSRAM — reduzem pelo build; daí os guards. */
+#ifndef TERM_MAX_LINES
 #define TERM_MAX_LINES 48
+#endif
+#ifndef TERM_MAX_COLS
 #define TERM_MAX_COLS  220
+#endif
+#ifndef TERM_MAX_RUNS
 #define TERM_MAX_RUNS  1536   /* 48 linhas x 32 runs (amostra real: máx 31) */
+#endif
+#ifndef TERM_TEXT_CAP
 #define TERM_TEXT_CAP  16384  /* texto limpo + 1 NUL por run */
+#endif
 
 #define TERM_F_BOLD      0x01
 #define TERM_F_DIM       0x02
@@ -56,5 +70,9 @@ typedef struct {
 /* Parseia o snapshot inteiro; devolve line_count. Estado SGR atravessa
  * linhas; escapes truncados no fim do buffer são descartados em silêncio. */
 int term_parse(const char *ansi, term_grid_t *g, const term_palette_t *pal);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

@@ -1,0 +1,11 @@
+# Tabela de partições do herdr-assist no Cardputer — flash de 8MB, dois slots
+# OTA de 3MB. Mesmo layout canônico do painel (app em 0x10000), só que na
+# metade do tamanho: o binário do Cardputer não passa de ~1,5MB.
+# Só vale ao gravar pelo USB; carregado pelo M5Launcher, quem manda é a tabela
+# que o launcher já escreveu na placa.
+# Name,   Type, SubType, Offset,   Size,  Flags
+nvs,      data, nvs,     0x9000,   0x4000,
+otadata,  data, ota,     0xd000,   0x2000,
+phy_init, data, phy,     0xf000,   0x1000,
+ota_0,    app,  ota_0,   0x10000,  3M,
+ota_1,    app,  ota_1,   0x310000, 3M,

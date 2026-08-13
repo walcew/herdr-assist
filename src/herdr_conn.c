@@ -26,8 +26,13 @@
 static const char *TAG = "herdr_conn";
 
 /* Maior mensagem esperada é o pane_content (com SGR: a ponte capa a linha
-   JSON em 20000); o resto é bem menor. */
-#define RX_BUF_LEN      24576
+   JSON em 20000); o resto é bem menor. Um por host e sem PSRAM para onde
+   empurrar, o porte do Cardputer reduz isto pelo build — lá a tela trava o
+   pane em 40 colunas, e o que não couber vira linha descartada. */
+#ifndef HERDR_RX_BUF_LEN
+#define HERDR_RX_BUF_LEN 24576
+#endif
+#define RX_BUF_LEN      HERDR_RX_BUF_LEN
 #define PING_PERIOD_S   20
 /* Sem tráfego por este tempo a conexão é dada como morta. Precisa ser bem maior
    que o intervalo de ping para não derrubar uma conexão apenas ociosa. */
