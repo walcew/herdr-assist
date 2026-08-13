@@ -76,6 +76,7 @@ static int      s_ap_sel, s_ap_top;
 static int s_menu_sel;       /* configurações */
 static int s_host_sel;       /* tela de hosts */
 static int s_root_sel;       /* menu raiz */
+static bool s_display_off;   /* tela apagada para carregar (qualquer tecla volta) */
 static int s_tm_sel, s_tm_top;  /* menu de ações da sessão */
 
 /* --- sessão aberta --- */
@@ -868,16 +869,55 @@ static void key_term_menu(const KeyEvent &e)
     }
 }
 
+/* ------------------------------------------------------- tela apagada ---- */
+
+/**
+ * Apaga a tela para deixar o aparelho carregando.
+ *
+ * Só o backlight, e não o sleep() do painel: o backlight é quase toda a energia
+ * que a tela consome, então o ganho é praticamente o mesmo — e um painel que
+ * não acorda direito deixaria o aparelho sem saída a não ser reiniciar. O preto
+ * por baixo é para o caso de o brilho zero ainda vazar alguma coisa.
+ */
+static void display_off(void)
+{
+    s_display_off = true;
+    M5Cardputer.Display.fillScreen(TFT_BLACK);
+    M5Cardputer.Display.setBrightness(0);
+}
+
+static void display_on(void)
+{
+    s_display_off = false;
+    M5Cardputer.Display.setBrightness(UI_BRIGHTNESS);
+    /* o que estava desenhado não vale mais: força repintura completa */
+    ui_invalidate();
+    s_drawn_screen = (Screen)-1;
+    s_dirty = true;
+}
+
 /* ------------------------------------------------------------ menu raiz -- */
 
-static const char *const ROOT_MENU[] = {
+/* enum e tabela lado a lado: com índice solto, acrescentar um item no meio
+   muda o destino de todos os seguintes sem aviso do compilador */
+enum {
+    ROOT_SESSIONS = 0,
+    ROOT_DASH,
+    ROOT_SETTINGS,
+    ROOT_LOGO,
+    ROOT_OFF,
+    ROOT_INFO,
+    ROOT_COUNT,
+};
+
+static const char *const ROOT_MENU[ROOT_COUNT] = {
     "Sessoes",
     "Dashboards",
     "Configuracoes",
     "Ver a logo",
+    "Desligar a tela",
     "Sobre este aparelho",
 };
-#define ROOT_COUNT ((int)(sizeof(ROOT_MENU) / sizeof(ROOT_MENU[0])))
 
 /* definida junto do splash, lá embaixo */
 static void paint_logo(bool com_versao);
@@ -909,13 +949,16 @@ static void key_root(const KeyEvent &e)
         return;
     }
     switch (s_root_sel) {
-    case 0: s_screen = SCR_SESSIONS; break;
-    case 1: s_screen = SCR_DASH;     break;
-    case 2: s_screen = SCR_SETTINGS; break;
-    case 3:
+    case ROOT_SESSIONS: s_screen = SCR_SESSIONS; break;
+    case ROOT_DASH:     s_screen = SCR_DASH;     break;
+    case ROOT_SETTINGS: s_screen = SCR_SETTINGS; break;
+    case ROOT_LOGO:
         s_back = SCR_MENU;
         s_screen = SCR_LOGO;
         break;
+    case ROOT_OFF:
+        display_off();
+        return;                  /* nada a redesenhar: a tela está apagada */
     default:
         s_back = SCR_MENU;
         s_screen = SCR_INFO;
@@ -1670,7 +1713,13 @@ void ui_tick(void)
 {
     KeyEvent ev;
     if (keys_poll(&ev)) {
-        handle_key(ev);
+        if (s_display_off) {
+            /* a tecla que acorda não age: quem apagou a tela para carregar não
+               quer que o primeiro toque no bolso abra uma sessão */
+            display_on();
+        } else {
+            handle_key(ev);
+        }
     }
 
     /* dados novos da ponte (agentes, limites, estado da conexão) */
@@ -1730,7 +1779,7 @@ void ui_tick(void)
         }
     }
 
-    if (s_dirty) {
+    if (s_dirty && !s_display_off) {
         s_dirty = false;
         draw();
     }

@@ -19,6 +19,7 @@
 #include "herdr_model.h"
 #include "net.h"
 #include "panel_cfg.h"
+#include "theme.h"
 #include "sd_cfg.h"
 #include "ui.h"
 
@@ -53,7 +54,7 @@ void setup()
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);          /* true: liga o teclado */
     M5Cardputer.Display.setRotation(1);    /* 240x135, teclado para baixo */
-    M5Cardputer.Display.setBrightness(140);
+    M5Cardputer.Display.setBrightness(UI_BRIGHTNESS);
 
     /* a logo entra antes do trabalho pesado: montar o cartão e subir o Wi-Fi
        levam quase um segundo, e assim ela ocupa essa espera em vez de somar */

@@ -35,6 +35,10 @@ static inline uint16_t rgb565(uint32_t c)
 #define C_TERM_FG_888 0xaebfa0
 #define C_TERM_BG     rgb565(C_TERM_BG_888)
 
+/* Brilho de trabalho. Mora aqui porque o boot e o "acordar" da tela precisam
+   usar o mesmo valor — dois números soltos divergem na primeira alteração. */
+#define UI_BRIGHTNESS 140
+
 /* --- medidas --- */
 #define SCR_W        240
 #define SCR_H        135
