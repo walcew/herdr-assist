@@ -137,6 +137,12 @@ ponte, pareia do mesmo jeito e divide com o painel os módulos de protocolo — 
 por ter teclado, responde os agentes com texto livre, não só com as teclas da
 allowlist. Veja [`cardputer/README.md`](cardputer/README.md).
 
+
+| ![Menu raiz](cardputer/docs/images/cardputer-menu.jpg) | ![Sessões](cardputer/docs/images/cardputer-sessions.jpg) | ![Terminal](cardputer/docs/images/cardputer-terminal.jpg) |
+|:---:|:---:|:---:|
+
+🎬 [Veja rodando](https://youtube.com/shorts/AlCFoE3ng9Y)
+
 ## Arquitetura
 
 O Herdr expõe sua API num unix socket local, que um dispositivo na rede não alcança.

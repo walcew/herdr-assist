@@ -134,6 +134,12 @@ the same bridge, pairs the same way and shares the protocol modules with the
 panel — and, having a keyboard, it answers agents with free text instead of the
 allowlisted keys alone. See [`cardputer/README.md`](cardputer/README.md).
 
+
+| ![Root menu](cardputer/docs/images/cardputer-menu.jpg) | ![Sessions](cardputer/docs/images/cardputer-sessions.jpg) | ![Terminal](cardputer/docs/images/cardputer-terminal.jpg) |
+|:---:|:---:|:---:|
+
+🎬 [Watch it running](https://youtube.com/shorts/AlCFoE3ng9Y)
+
 ## Architecture
 
 Herdr exposes its API on a local unix socket, which a device on the network cannot reach.

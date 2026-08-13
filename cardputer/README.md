@@ -6,6 +6,14 @@ teclado. O que o painel de mesa faz com o dedo, aqui se faz digitando — e é i
 que muda o proveito da coisa: **dá para responder o agente com texto livre**, não
 só com as teclas da allowlist.
 
+
+| Menu | Sessões | Terminal | Dashboards |
+|:---:|:---:|:---:|:---:|
+| ![Menu raiz navegável](docs/images/cardputer-menu.jpg) | ![Lista de sessões com estado](docs/images/cardputer-sessions.jpg) | ![Sessão aberta, terminal colorido](docs/images/cardputer-terminal.jpg) | ![Limites de uso](docs/images/cardputer-dash.jpg) |
+| Tudo por setas e enter | Estado em cor; bloqueada pisca | SGR fiel, com digitação | Limites do Claude e do Codex |
+
+> 🎬 **Vídeo:** [o herdr-assist rodando no Cardputer](https://youtube.com/shorts/AlCFoE3ng9Y)
+
 > Este diretório é um projeto PlatformIO independente. O firmware do painel
 > continua na raiz do repositório (ESP-IDF + LVGL) e não é afetado.
 
