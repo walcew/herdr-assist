@@ -82,5 +82,11 @@ def _version():
         return "dev"
 
 
+# O sufixo entra aqui, e não dentro de _version(): assim vale de uma vez para
+# os três caminhos (version.txt do CI, git describe e o fallback "dev") — a
+# origem da versão é do projeto, a marca é de quem publica.
+MARCA = "-nimbcorp"
+
 # este é o único extra_script do projeto, então o carimbo de versão mora aqui
-env.Append(CPPDEFINES=[("HERDR_ASSIST_VERSION", '\\"%s\\"' % _version())])
+env.Append(CPPDEFINES=[("HERDR_ASSIST_VERSION",
+                        '\\"%s%s\\"' % (_version(), MARCA))])
