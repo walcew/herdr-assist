@@ -26,6 +26,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 
 from i18n import t
@@ -96,7 +97,13 @@ def poll_status() -> dict:
 
 
 def bridge_restart() -> str:
-    r = subprocess.run([os.path.join(ROOT, "start.sh"), "--restart"],
+    """Recicla a ponte pelo mesmo lançador que o manifest usa.
+
+    sys.executable e não o shebang: no Windows não há `sh`, e mesmo no POSIX
+    chamar o script direto dependeria do bit de execução ter sobrevivido ao
+    checkout.
+    """
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "start.py"), "--restart"],
                        capture_output=True, text=True)
     return (r.stdout + r.stderr).strip()
 
@@ -595,7 +602,7 @@ def main_screen(scr) -> None:
             put(scr, hy, 2, " " * 70)
             put(scr, hy, 2, t("restarting"), curses.color_pair(C_WARN))
             scr.refresh()
-            out = bridge_restart()  # bloqueia ~1,5 s (start.sh dorme 1 s)
+            out = bridge_restart()  # bloqueia ~1,5 s (start.py dorme 1 s)
             note = (out, time.time() + 5)
         st_at = 0.0  # força releitura do status ao voltar
 

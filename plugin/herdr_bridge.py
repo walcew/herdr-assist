@@ -14,7 +14,7 @@ pane.list local por segundo enquanto houver painel conectado, com broadcast
 só quando o estado de fato mudou.
 
 Sem dependências externas: só a stdlib, compatível com o python3 de fábrica do
-macOS (3.9). Roda como plugin do Herdr (ver start.sh), que fornece as variáveis
+macOS (3.9). Roda como plugin do Herdr (ver start.py), que fornece as variáveis
 HERDR_SOCKET_PATH e HERDR_PLUGIN_CONFIG_DIR; para rodar avulsa:
 
     BRIDGE_TOKEN=... python3 plugin/herdr_bridge.py
@@ -141,7 +141,92 @@ def load_token() -> str:
     return tok
 
 
+# No Windows o socket do Herdr é um named pipe cujo NOME é o caminho inteiro
+# (\\.\pipe\C:\Users\...\herdr.sock): open() normaliza o caminho e tropeça no
+# "C:" do meio, CreateFileW devolve erro 123, e o CPython nem expõe AF_UNIX ali.
+# A CLI devolve o mesmo JSON, é o caminho que a documentação do Herdr indica
+# para automação, e custa ~19ms por chamada — barato o bastante para o ritmo
+# desta ponte. Só o transporte muda: o protocolo com o painel é idêntico.
+USE_CLI = os.name == "nt" or not hasattr(socket, "AF_UNIX")
+# Sem isto cada chamada pisca um console: a ponte roda destacada, sem console
+# próprio, e um flash por segundo seria insuportável.
+NO_WINDOW = 0x08000000 if os.name == "nt" else 0
+
+
+async def cli_run(args: list[str], timeout: float = 10) -> str | None:
+    """Roda o herdr e devolve o stdout. None em qualquer falha.
+
+    Decodifica aqui, em utf-8: deixar o Python decidir pelo locale (cp1252 no
+    Windows) estoura na primeira caixa ou seta que a tela do terminal trouxer,
+    e a saída volta vazia sem erro visível.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            HERDR_BIN, *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            creationflags=NO_WINDOW)
+    except (OSError, ValueError) as exc:
+        log.warning("herdr %s: %s", args[0] if args else "?", exc)
+        return None
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+    except asyncio.TimeoutError:
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        return None
+    if proc.returncode != 0:
+        return None
+    return out.decode("utf-8", "replace")
+
+
+async def cli_request(method: str, params: dict) -> dict | None:
+    """Traduz um método da API para a CLI, devolvendo a MESMA forma de result.
+
+    Quem chama não sabe qual transporte está em uso — é isso que mantém o resto
+    da ponte com um caminho só.
+    """
+    pane = params.get("pane_id", "")
+    if method == "pane.list":
+        out = await cli_run(["pane", "list"])
+        if not out:
+            return None
+        try:
+            return json.loads(out).get("result")
+        except (ValueError, AttributeError):
+            return None
+    if method == "pane.read":
+        # a CLI devolve o ANSI cru no stdout, não JSON
+        args = ["pane", "read", pane,
+                "--source", params.get("source", "visible"),
+                "--format", params.get("format", "ansi")]
+        if params.get("lines"):
+            args += ["--lines", str(params["lines"])]
+        out = await cli_run(args)
+        return None if out is None else {"read": {"text": out}}
+    if method == "pane.send_keys":
+        keys = params.get("keys", [])
+        out = await cli_run(["pane", "send-keys", pane, *keys])
+        return None if out is None else {}
+    if method == "pane.send_text":
+        out = await cli_run(["pane", "send-text", pane, params.get("text", "")])
+        return None if out is None else {}
+    if method == "pane.focus":
+        # a CLI separa: `pane focus` é por direção; focar por id é `agent focus`
+        out = await cli_run(["agent", "focus", pane])
+        return None if out is None else {}
+    log.warning("metodo sem equivalente na CLI: %s", method)
+    return None
+
+
 async def herdr_request(method: str, params: dict | None = None) -> dict | None:
+    """Um request ao Herdr, pelo transporte que a plataforma permite."""
+    if USE_CLI:
+        return await cli_request(method, params or {})
+    return await sock_request(method, params)
+
+
+async def sock_request(method: str, params: dict | None = None) -> dict | None:
     """Um request ao Herdr. O socket atende um por conexão, então abre e fecha."""
     global _req_id
     _req_id += 1
@@ -339,6 +424,21 @@ async def push_agents() -> set[str] | None:
         last_snapshot = snapshot
         await broadcast_line(snapshot)
     return {p["pane_id"] for p in panes}
+
+
+async def poll_loop() -> None:
+    """Reconciliação pura, para quando o transporte é a CLI (ver USE_CLI).
+
+    A CLI não assina eventos, então aqui não há o disparo imediato do
+    event_loop — só o piso de latência do `pane.list`. Na prática a diferença é
+    menor do que parece: o Herdr 0.8.0 já não emite evento nas transições de
+    agent_status (é derivado do conteúdo do terminal), então mesmo com socket
+    quem garante o teto é esta mesma reconciliação. O que se perde é a reação
+    instantânea a pane criado/fechado.
+    """
+    while True:
+        await push_agents()
+        await asyncio.sleep(RECONCILE_BUSY_S if clients else RECONCILE_IDLE_S)
 
 
 async def event_loop() -> None:
@@ -770,11 +870,16 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
 
 async def main() -> None:
     global TOKEN
-    if not os.path.exists(SOCK):
+    if USE_CLI:
+        if not HERDR_BIN or not shutil.which(HERDR_BIN) and not os.path.isfile(HERDR_BIN):
+            log.error("binário do herdr não encontrado (%s)", HERDR_BIN)
+            sys.exit(1)
+        log.info("falando com o Herdr pela CLI (%s)", HERDR_BIN)
+    elif not os.path.exists(SOCK):
         log.error("socket do Herdr não encontrado: %s", SOCK)
         sys.exit(1)
     TOKEN = load_token()
-    asyncio.create_task(event_loop())
+    asyncio.create_task(poll_loop() if USE_CLI else event_loop())
     asyncio.create_task(limits_loop())
     # porta UDP ocupada não pode derrubar a ponte: sem descoberta ela ainda
     # serve os painéis que já sabem o endereço

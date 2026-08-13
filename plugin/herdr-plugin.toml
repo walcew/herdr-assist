@@ -6,18 +6,21 @@
 
 id = "herdr-assist"
 name = "herdr-assist bridge"
-version = "0.4.0"
+version = "0.5.0"
 min_herdr_version = "0.8.0"
 # Os títulos e descrições abaixo ficam em inglês: o manifest é lido pelo Herdr
 # uma vez, sem campo por idioma, então não há como acompanhar o idioma do painel
 # nem o locale do host. Inglês é o denominador comum de um repo público.
 description = "Bridge for the herdr-assist desk panel — session state, live terminals and usage limits on an ESP32-S3 touchscreen, over authenticated TCP"
-platforms = ["macos", "linux"]
+# windows entrou na 0.5.0: lá a ponte fala com o Herdr pela CLI, porque o
+# socket é um named pipe que o Python não alcança (ver USE_CLI na ponte).
+platforms = ["macos", "linux", "windows"]
 
 # Roda quando o Herdr sobe a sessão; o script destaca a ponte e sai
-# (startup de plugin não é daemon — precisa terminar).
+# (startup de plugin não é daemon — precisa terminar). Python e não shell: o
+# Windows não tem sh nem nohup, e a ponte já exige python3 de qualquer forma.
 [[startup]]
-command = ["./start.sh"]
+command = ["python3", "start.py"]
 
 # Tela de administração: status, token, pareamento e reinício num lugar só.
 # É a superfície principal — as ações abaixo são atalhos para casos pontuais.
@@ -45,16 +48,16 @@ command = ["python3", "admin.py"]
 id = "admin"
 title = "Open admin panel"
 contexts = ["global", "workspace", "tab", "pane"]
-command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin herdr-assist --entrypoint admin"]
+command = ["python3", "open_admin.py"]
 
 [[actions]]
 id = "show-token"
 title = "Show panel token"
 contexts = ["global"]
-command = ["sh", "-c", "cat \"$HERDR_PLUGIN_CONFIG_DIR/token\""]
+command = ["python3", "show_token.py"]
 
 [[actions]]
 id = "restart-bridge"
 title = "Restart the bridge"
 contexts = ["global"]
-command = ["./start.sh", "--restart"]
+command = ["python3", "start.py", "--restart"]
