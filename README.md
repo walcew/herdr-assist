@@ -126,6 +126,14 @@ and friends, or `HERDR_ASSIST_LANG` to force it).
 
 Relevant pinout in `src/esp_bsp.h`; schematics and datasheets in `docs/`.
 
+### Other boards: M5Stack Cardputer
+
+`cardputer/` holds a port to the **M5Stack Cardputer** (240×135 plus a 56-key
+keyboard), a separate PlatformIO project built on Arduino + M5GFX. It talks to
+the same bridge, pairs the same way and shares the protocol modules with the
+panel — and, having a keyboard, it answers agents with free text instead of the
+allowlisted keys alone. See [`cardputer/README.md`](cardputer/README.md).
+
 ## Architecture
 
 Herdr exposes its API on a local unix socket, which a device on the network cannot reach.
@@ -154,6 +162,13 @@ Herdr, via `pane.read format:"ansi"`, and the panel only parses SGR and paints),
 usage endpoints using the credentials those CLIs keep refreshed in
 `~/.claude/.credentials.json` and `~/.codex/auth.json`; no token leaves the Mac, only
 percentages), `pong`.
+
+**Windows.** From plugin 0.5.0 the bridge also runs on a Windows host. There
+the Herdr socket is a named pipe whose *name* is the whole path
+(`\\.\pipe\C:\Users\...\herdr.sock`), which Python cannot open — so the bridge talks to
+Herdr through the CLI instead, and reconciles by polling rather than by
+`events.subscribe`. Pairing is done with `plugin/pair.py`; the curses admin
+screen stays macOS/Linux only.
 
 The bridge is where the security decisions happen, because anyone on the LAN can reach
 that port. **Every connection requires a token** (`hello` handshake on the first line;
@@ -272,7 +287,8 @@ for testing the flow.
 | File | Role |
 |---|---|
 | `plugin/herdr-plugin.toml` | Herdr plugin manifest (startup, admin pane, actions) |
-| `plugin/start.sh` | Plugin startup: starts the bridge detached, idempotent, generates the token |
+| `plugin/start.py` | Plugin startup: starts the bridge detached, idempotent, cross-platform |
+| `plugin/pair.py` | Pairing from the command line, no curses — the Windows path |
 | `plugin/herdr_bridge.py` | Bridge: Herdr socket ↔ TCP, token handshake, allowlist, sanitizing, usage-limit collection (Claude/Codex) |
 | `plugin/admin.py` | Admin screen in Herdr: status, token, pairing, keybinding install |
 | `plugin/i18n.py` | Admin screen strings (en/pt), language taken from the host locale |
@@ -333,7 +349,7 @@ for testing the flow.
   together, measured on the `.o`), and the only RAM cost is the `uint8_t` of the active
   language. pt_BR and en_US fit in the Latin-1 the UI fonts already cover, so nothing had
   to be regenerated. Left out of the bilingual scope, in fixed English: `herdr-plugin.toml`
-  (the manifest is read by Herdr with no per-language field) and the two `start.sh`
+  (the manifest is read by Herdr with no per-language field) and the two `start.py`
   messages the admin screen echoes when restarting the bridge — a shell script cannot
   follow the locale without carrying a table just for that, and English is the same
   criterion as the manifest.

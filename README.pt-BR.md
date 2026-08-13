@@ -129,6 +129,14 @@ para forçar).
 
 Pinout relevante em `src/esp_bsp.h`; esquemáticos e datasheets em `docs/`.
 
+### Outras placas: M5Stack Cardputer
+
+Em `cardputer/` há um porte para o **M5Stack Cardputer** (240×135 e um teclado de
+56 teclas), um projeto PlatformIO à parte, em Arduino + M5GFX. Fala com a mesma
+ponte, pareia do mesmo jeito e divide com o painel os módulos de protocolo — e,
+por ter teclado, responde os agentes com texto livre, não só com as teclas da
+allowlist. Veja [`cardputer/README.md`](cardputer/README.md).
+
 ## Arquitetura
 
 O Herdr expõe sua API num unix socket local, que um dispositivo na rede não alcança.
@@ -157,6 +165,13 @@ Herdr, via `pane.read format:"ansi"`, e o painel só parseia SGR e pinta), `limi
 do Claude Code e do Codex com as credenciais que os próprios CLIs mantêm renovadas em
 `~/.claude/.credentials.json` e `~/.codex/auth.json`; nenhum token sai do Mac, só
 percentuais), `pong`.
+
+**Windows.** Da versão 0.5.0 do plugin em diante a ponte também roda num host
+Windows. Lá o socket do Herdr é um named pipe cujo *nome* é o caminho inteiro
+(`\\.\pipe\C:\Users\...\herdr.sock`), que o Python não consegue abrir — então a ponte fala
+com o Herdr pela CLI e reconcilia por polling em vez de `events.subscribe`. O
+pareamento é pelo `plugin/pair.py`; a tela de administração, que é curses,
+segue só no macOS e no Linux.
 
 A ponte é o ponto onde as decisões de segurança acontecem, porque qualquer um na LAN
 alcança essa porta. **Toda conexão exige um token** (handshake `hello` na primeira linha;
@@ -276,7 +291,8 @@ testar o fluxo.
 | Arquivo | Papel |
 |---|---|
 | `plugin/herdr-plugin.toml` | Manifest do plugin do Herdr (startup, pane de administração, ações) |
-| `plugin/start.sh` | Startup do plugin: sobe a ponte destacada, idempotente, gera token |
+| `plugin/start.py` | Startup do plugin: sobe a ponte destacada, idempotente, multiplataforma |
+| `plugin/pair.py` | Pareamento por linha de comando, sem curses — o caminho do Windows |
 | `plugin/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização, coleta de uso de limites (Claude/Codex) |
 | `plugin/admin.py` | Tela de administração no Herdr: status, token, pareamento, instalação do atalho |
 | `plugin/i18n.py` | Textos da tela de administração (en/pt), idioma vindo do locale do host |
@@ -337,7 +353,7 @@ testar o fluxo.
   único custo em RAM é o `uint8_t` do idioma em vigor. pt_BR e en_US
   cabem no Latin-1 que as fontes de UI já cobrem, então nada precisou ser regerado.
   Ficam fora do bilíngue, em inglês fixo, o `herdr-plugin.toml` (o manifest é lido pelo
-  Herdr sem campo por idioma) e as duas mensagens do `start.sh` que a tela de
+  Herdr sem campo por idioma) e as duas mensagens do `start.py` que a tela de
   administração ecoa ao reiniciar a ponte — um shell script não acompanha o locale sem
   carregar uma tabela só para isso, e inglês é o mesmo critério do manifest.
 - **A interface segue o projeto "herdr-assist" no Claude Design** — paleta neutra (cor só
