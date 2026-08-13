@@ -1,0 +1,79 @@
+# Builda os dois firmwares e roda o teste de host a cada push/PR, em jobs
+# paralelos. O job do Cardputer é o que torna seguro o esquema de cópia do
+# sync_shared.py: uma mudança em src/ que quebre o porte aparece aqui, no PR,
+# e não semanas depois no primeiro build local de alguém.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  panel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Mesma chave do release.yml de propósito: o toolchain é o mesmo e o
+      # cache é reaproveitado entre os dois workflows.
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build
+        run: pio run
+
+  cardputer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Chave própria: a plataforma aqui é o pioarduino (Arduino core 3.x),
+      # que não divide pacotes com o espidf do painel.
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-cardputer-${{ runner.os }}-${{ hashFiles('cardputer/platformio.ini') }}
+          restore-keys: pio-cardputer-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      - name: Build
+        run: pio run -d cardputer
+
+  # Só o term_parse: é C11 puro e roda em qualquer host. O discovery_test fica
+  # de fora porque o backend de HMAC no host é CommonCrypto (macOS) e o cJSON
+  # viria do pacote espidf — segue como teste manual (comando no cabeçalho dele).
+  host-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: term_parse_test
+        run: |
+          cc -std=c11 -Wall -Wextra -Isrc -o /tmp/tpt \
+            scripts/term_parse_test.c src/term_parse.c
+          /tmp/tpt

@@ -1,25 +1,36 @@
 # Builds the firmware on a version tag and publishes it as a GitHub release,
 # so nobody needs a PlatformIO toolchain just to flash a panel.
 #
-# Two binaries go out, and the difference matters: the install image spans
-# 0x0-0x10000, which covers the NVS partition (0x9000-0xD000) and therefore
-# wipes Wi-Fi, hosts, tokens and language — and also otadata (0xD000-0xF000),
-# so the panel boots clean from ota_0. The update image is the app alone at
-# 0x10000, leaving the config untouched. Publishing only the merged image would
-# make every upgrade a factory reset. A manifest.json with a fixed name lets
-# the panel discover the newest version for OTA (see fw_update.c).
+# Two binaries go out per device, and the difference matters: the install image
+# spans 0x0-0x10000, which covers the NVS partition (0x9000-0xD000) and
+# therefore wipes Wi-Fi, hosts, tokens and language — and also otadata
+# (0xD000-0xF000), so the device boots clean from ota_0. The update image is
+# the app alone at 0x10000, leaving the config untouched. Publishing only the
+# merged image would make every upgrade a factory reset. A manifest.json with
+# a fixed name lets the panel discover the newest version for OTA (see
+# fw_update.c).
+#
+# Trem único de versão: a mesma tag vX.Y.Z builda e publica o painel de 3,5" E
+# o Cardputer, em jobs paralelos. O manifest.json de nome fixo é PARA SEMPRE o
+# do painel — os painéis em campo fazem GET em releases/latest/download/
+# manifest.json e flashariam sem reclamar qualquer imagem S3 apontada ali
+# (o rollback salvaria, mas é incidente). O Cardputer tem o seu
+# manifest-cardputer.json; o job publish trava a publicação se a URL do
+# manifest do painel não bater com o asset do painel.
 name: release
 
 on:
   push:
-    tags: ['v*']
+    # Só vX.Y.Z: uma tag com sufixo (ex.: v1.0.0-cardputer) não deve virar
+    # release — todo release publica os DOIS firmwares a partir da mesma tag.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
   workflow_dispatch:      # lets you dry-run the build without cutting a tag
 
 permissions:
   contents: write         # required to create the release
 
 jobs:
-  release:
+  build-panel:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +79,6 @@ jobs:
             0x8000  "$BUILD/partitions.bin" \
             0x10000 "$BUILD/firmware.bin"
           cp "$BUILD/firmware.bin" "dist/herdr-assist-${GITHUB_REF_NAME}-update.bin"
-          cd dist && sha256sum *.bin > SHA256SUMS && cat SHA256SUMS
 
       # O manifest tem nome fixo, então o painel resolve a versão mais nova com
       # um único GET em releases/latest/download/manifest.json — sem tocar na
@@ -84,13 +94,117 @@ jobs:
             "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" "$SIZE" "$SHA" > dist/manifest.json
           cat dist/manifest.json
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-panel
+          path: dist/
+
+  build-cardputer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Chave própria: a plataforma aqui é o pioarduino, que não divide pacotes
+      # com o espidf do painel.
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-cardputer-${{ runner.os }}-${{ hashFiles('cardputer/platformio.ini') }}
+          restore-keys: pio-cardputer-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: pip install --upgrade platformio
+
+      # Mesmo mecanismo do painel: o sync_shared.py lê ../version.txt e carimba
+      # HERDR_ASSIST_VERSION — a tela Sobre e o splash exibem a versão da tag.
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: echo "${GITHUB_REF_NAME}" > version.txt
+
+      - name: Build
+        run: pio run -d cardputer
+
+      # Mesmo layout canônico do painel (partitions.csv do Cardputer: otadata em
+      # 0xD000, app em 0x10000), só que em flash de 8MB. As lacunas (NVS,
+      # otadata) saem preenchidas com 0xFF — otadata apagada faz o bootloader
+      # subir pelo ota_0, exatamente como no install do painel.
+      # esptool via pip, pinado na série 4 (mesma sintaxe do job do painel): o
+      # tool-esptoolpy do pioarduino é o v5 e só roda dentro do penv da
+      # plataforma (depende de rich_click) — o `pio pkg exec` não o alcança.
+      # O firmware.factory.bin que o pioarduino gera não serve: ele grava o
+      # boot_app0 em 0xE000, offset do layout Arduino padrão, não desta tabela.
+      - name: Merge install image
+        run: |
+          pip install "esptool~=4.8"
+          BUILD=cardputer/.pio/build/cardputer
+          mkdir -p dist
+          esptool.py --chip esp32s3 merge_bin \
+            -o "dist/herdr-assist-cardputer-${GITHUB_REF_NAME}-install.bin" \
+            --flash_mode dio --flash_freq 80m --flash_size 8MB \
+            0x0     "$BUILD/bootloader.bin" \
+            0x8000  "$BUILD/partitions.bin" \
+            0x10000 "$BUILD/firmware.bin"
+          cp "$BUILD/firmware.bin" "dist/herdr-assist-cardputer-${GITHUB_REF_NAME}-update.bin"
+
+      # Ainda sem consumidor — o firmware do Cardputer não tem OTA (grava-se
+      # por USB ou microSD/M5Launcher) — mas publicar o manifest próprio desde
+      # já fecha a porta para alguém um dia reusar o manifest.json do painel.
+      - name: Write OTA manifest
+        run: |
+          BUILD=cardputer/.pio/build/cardputer
+          SIZE=$(stat -c%s "$BUILD/firmware.bin")
+          SHA=$(sha256sum "$BUILD/firmware.bin" | cut -d' ' -f1)
+          printf '{"device":"cardputer","version":"%s","url":"https://github.com/walcew/herdr-assist/releases/download/%s/herdr-assist-cardputer-%s-update.bin","size":%s,"sha256":"%s"}\n' \
+            "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" "$GITHUB_REF_NAME" "$SIZE" "$SHA" > dist/manifest-cardputer.json
+          cat dist/manifest-cardputer.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-cardputer
+          path: dist/
+
+  publish:
+    needs: [build-panel, build-cardputer]
+    if: startsWith(github.ref, 'refs/tags/')   # dispatch é dry-run de verdade
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # A trava que protege a frota: se o manifest.json (o de nome fixo, que
+      # TODOS os painéis de 3,5" leem) não apontar para o update do painel
+      # desta tag, nada é publicado.
+      - name: Guard panel manifest
+        run: |
+          jq -e '.version and .url and .size' dist/manifest.json
+          URL=$(jq -r .url dist/manifest.json)
+          case "$URL" in
+            *"/herdr-assist-${GITHUB_REF_NAME}-update.bin") ;;
+            *) echo "manifest.json aponta para asset errado: $URL"; exit 1;;
+          esac
+
+      - name: Checksums
+        run: cd dist && sha256sum *.bin > SHA256SUMS && cat SHA256SUMS
+
       # gh is preinstalled on the runner — no third-party action needed to publish.
       # Idempotente: se o release já existe (criado à mão antes do CI terminar,
       # como aconteceu no v0.4.0), só substitui os assets em vez de falhar.
+      # GH_REPO porque este job não faz checkout — sem clone o gh não teria de
+      # onde inferir o repositório.
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')   # dispatch é dry-run de verdade
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           cat > notes.md <<'EOF'
           ## Updating
@@ -117,15 +231,25 @@ jobs:
           esptool.py --chip esp32s3 write_flash 0x10000 herdr-assist-VERSION-update.bin
           ```
 
+          ## M5Stack Cardputer
+
+          The `herdr-assist-cardputer-*` binaries are for the Cardputer port
+          (no OTA — flash over USB, or drop the update binary on a microSD for
+          M5Launcher):
+
+          ```sh
+          esptool.py --chip esp32s3 write_flash 0x0 herdr-assist-cardputer-VERSION-install.bin
+          ```
+
           Full step-by-step, including the Herdr plugin, in the [README](https://github.com/walcew/herdr-assist#readme).
           EOF
           sed -i "s/VERSION/${GITHUB_REF_NAME}/g" notes.md
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.bin dist/SHA256SUMS dist/manifest.json --clobber
+            gh release upload "$GITHUB_REF_NAME" dist/*.bin dist/SHA256SUMS dist/manifest.json dist/manifest-cardputer.json --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "$GITHUB_REF_NAME" \
               --notes-file notes.md \
               --generate-notes \
-              dist/*.bin dist/SHA256SUMS dist/manifest.json
+              dist/*.bin dist/SHA256SUMS dist/manifest.json dist/manifest-cardputer.json
           fi
