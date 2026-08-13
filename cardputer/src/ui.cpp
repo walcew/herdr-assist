@@ -413,6 +413,8 @@ static void center_msg(const char *l1, const char *l2)
     if (!changed(s_row_cache[0], sizeof(s_row_cache[0]), sig)) {
         return;
     }
+    /* o corpo passa a ser do recado; a lista limpa antes de retomá-lo */
+    s_rows_drawn = -1;
     auto &d = M5Cardputer.Display;
     clear_body();
     d.setFont(&fonts::Font0);
@@ -491,6 +493,13 @@ static void draw_sessions(void)
     int rows = body_rows();
     if (rows > (int)(sizeof(s_row_cache) / sizeof(s_row_cache[0]))) {
         rows = (int)(sizeof(s_row_cache) / sizeof(s_row_cache[0]));
+    }
+    /* s_rows_drawn < 0 significa "não sei o que está no corpo": ou acabamos de
+       entrar na tela, ou quem pintou por último foi o estado vazio, cujo texto
+       fica no meio e não é coberto por linha nenhuma. Nos dois casos a lista
+       precisa assumir o corpo limpo antes de desenhar. */
+    if (s_rows_drawn < 0) {
+        clear_body();
     }
     bool show_host = multi_host();
     int desenhadas = 0;
@@ -1167,9 +1176,12 @@ static void draw_info(void)
     {
         auto &c = rowc();
         c.fillSprite(C_BG);
-        c.drawFastHLine(6, 3, SCR_W - 12, C_BORDER);
+        /* filete rente ao topo e texto em y=3: com 8px de fonte, ocupa 3..10 e
+           cabe nos 11 da linha. Em y=6 ele ia até 13 e era cortado pelo clip —
+           o que sobrava a linha de baixo comia. */
+        c.drawFastHLine(6, 0, SCR_W - 12, C_BORDER);
         c.setTextColor(C_MUTED);
-        c.setCursor(6, 6);
+        c.setCursor(6, 3);
         c.print("desenvolvido por");
         push_row(c, 6);
     }
