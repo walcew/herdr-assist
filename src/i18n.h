@@ -142,7 +142,24 @@ typedef enum {
     X(FW_DONE,         "Installed. Restarting...",    "Instalado. Reiniciando...")           \
     X(FW_ERR_CHECK,    "Check failed. Is Wi-Fi up?",  "Falha ao verificar. Wi-Fi ok?")       \
     X(FW_ERR_DOWNLOAD, "Download failed. Try again.", "Falha no download. Tente de novo.")   \
-    X(FW_TOAST_SUB,    "Tap to update",               "Toque para atualizar")
+    X(FW_TOAST_SUB,    "Tap to update",               "Toque para atualizar")                 \
+    /* --- configurações: bloqueio de tela --- */                                             \
+    X(LOCK_ROW,        "Screen lock",                 "Bloqueio de tela")                     \
+    X(LOCK_ON,         "On",                          "Ativado")                              \
+    X(LOCK_OFF,        "Off",                         "Desativado")                           \
+    X(LOCK_ENABLE,     "Enable lock",                 "Habilitar bloqueio")                   \
+    X(LOCK_TIMEOUT,    "Unlock timeout",              "Tempo de desbloqueio")                 \
+    X(LOCK_TMO_FMT,    "%d min",                      "%d min")                               \
+    X(LOCK_SET_PAT,    "Set pattern",                 "Definir padrão")                       \
+    X(LOCK_CHANGE_PAT, "Change pattern",              "Alterar padrão")                       \
+    X(LOCK_UNLOCK,     "Unlock",                      "Desbloquear")                          \
+    X(LOCK_DRAW,       "Draw your pattern",           "Desenhe seu padrão")                   \
+    X(LOCK_DRAW_NEW,   "Draw the new pattern",        "Desenhe o novo padrão")                \
+    X(LOCK_CONFIRM,    "Draw again to confirm",       "Desenhe de novo para confirmar")       \
+    X(LOCK_WRONG,      "Wrong pattern",               "Padrão incorreto")                     \
+    X(LOCK_MISMATCH,   "Doesn't match, start over",   "Não confere, comece de novo")          \
+    X(LOCK_MIN_DOTS,   "Connect at least 4 dots",     "Ligue pelo menos 4 pontos")            \
+    X(LOCK_SAVED,      "Pattern saved",               "Padrão salvo")
 
 typedef enum {
 #define X(id, en, pt) STR_##id,

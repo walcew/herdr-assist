@@ -17,6 +17,7 @@
 #include "herdr_conn.h"
 #include "herdr_kb.h"
 #include "herdr_ui_settings.h"
+#include "lockscreen.h"
 #include "panel_cfg.h"
 #include "term_view.h"
 #include "ui_theme.h"
@@ -38,6 +39,8 @@ static lv_obj_t *s_clock;
 static lv_obj_t *s_date;
 static lv_obj_t *s_beacon;      /* sino: alguma sessão espera decisão */
 static lv_obj_t *s_beacon_lbl;
+static lv_obj_t *s_lock_icon;   /* cadeado: terminal exige o padrão */
+static bool s_lock_shown;
 static lv_obj_t *s_host_area;
 
 typedef struct {
@@ -162,7 +165,7 @@ void herdr_ui_show_settings(void)
     show_tab(UI_TAB_SETTINGS);
 }
 
-static void open_detail(const herdr_agent_t *agent)
+static void do_open_detail(const herdr_agent_t *agent)
 {
     strlcpy(s_detail_pane, agent->pane_id, HERDR_ID_LEN);
     s_detail_host = agent->host;
@@ -174,6 +177,40 @@ static void open_detail(const herdr_agent_t *agent)
     term_view_clear(s_term_view, T(STR_LOADING));
     lv_obj_clear_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_detail);
+}
+
+/* Sessão que espera o desbloqueio. Guardada por valor porque s_ui_agents é
+   recopiado a cada geração do modelo enquanto o padrão está sendo desenhado. */
+static herdr_agent_t s_pending_agent;
+static bool s_pending_valid;
+
+static void unlock_then_open_cb(void)
+{
+    if (!s_pending_valid) {
+        return;
+    }
+    s_pending_valid = false;
+    for (int i = 0; i < s_ui_agent_count; i++) {
+        if (s_ui_agents[i].host == s_pending_agent.host &&
+            strcmp(s_ui_agents[i].pane_id, s_pending_agent.pane_id) == 0) {
+            do_open_detail(&s_ui_agents[i]);   /* título e status frescos */
+            return;
+        }
+    }
+    /* a sessão morreu durante o desbloqueio: destrava e fica onde está */
+}
+
+/* Único caminho para o terminal, e por isso o ponto onde o bloqueio de tela
+   entra: bloqueado, pede o padrão e abre a sessão tocada no acerto. */
+static void open_detail(const herdr_agent_t *agent)
+{
+    if (lockscreen_is_locked()) {
+        s_pending_agent = *agent;
+        s_pending_valid = true;
+        lockscreen_request_unlock(unlock_then_open_cb);
+        return;
+    }
+    do_open_detail(agent);
 }
 
 static void close_detail(void)
@@ -212,6 +249,14 @@ static void beacon_clicked_cb(lv_event_t *e)
             return;
         }
     }
+}
+
+/* Cadeado da home: desbloquear por aqui só arma o prazo de tolerância; sem
+   prazo configurado, o padrão volta a ser pedido na próxima sessão aberta. */
+static void lock_icon_cb(lv_event_t *e)
+{
+    (void)e;
+    lockscreen_request_unlock(NULL);
 }
 
 /* Arraste vertical no terminal: rola a sessão no host (o app decide o que
@@ -348,6 +393,25 @@ static void update_beacon(int n)
     lv_anim_start(&a);
 }
 
+/**
+ * Cadeado da home: aparece enquanto o terminal exigir o padrão e some quando o
+ * prazo de tolerância está valendo. Com ele visível o sino anda para o lado.
+ */
+static void refresh_lock_icon(void)
+{
+    bool locked = lockscreen_is_locked();
+    if (locked == s_lock_shown) {
+        return;
+    }
+    s_lock_shown = locked;
+    if (locked) {
+        lv_obj_clear_flag(s_lock_icon, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_lock_icon, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_align(s_beacon, LV_ALIGN_RIGHT_MID, locked ? -(UI_ICON_BTN + 10) : 0, -8);
+}
+
 static void build_host_cards(lv_obj_t *parent)
 {
     const panel_cfg_t *cfg = panel_cfg_get();
@@ -433,6 +497,12 @@ static void build_home(void)
     s_beacon_lbl = lv_obj_get_child(s_beacon, 0);
     lv_obj_set_style_text_color(s_beacon_lbl, UI_BLOCKED, 0);
     lv_obj_add_flag(s_beacon, LV_OBJ_FLAG_HIDDEN);
+
+    /* mesmo canto: quando os dois aparecem, o cadeado fica na ponta */
+    s_lock_icon = ui_icon_btn(hero, UI_ICON_LOCK, lock_icon_cb, NULL);
+    lv_obj_align(s_lock_icon, LV_ALIGN_RIGHT_MID, 0, -8);
+    lv_obj_set_style_text_color(lv_obj_get_child(s_lock_icon, 0), UI_MUTED, 0);
+    lv_obj_add_flag(s_lock_icon, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *avatar_slot = ui_plain(s_home);
     lv_obj_set_size(avatar_slot, AVATAR_SLOT_W, AVATAR_SLOT_H);
@@ -1101,6 +1171,7 @@ static void ui_timer_cb(lv_timer_t *timer)
     /* antes do early-out por geração: o cronômetro corre com o relógio, não
        com as mudanças de estado, e esse return é o caminho da maioria dos ticks */
     refresh_session_timers();
+    refresh_lock_icon();   /* o prazo vence pelo tempo, não pelo modelo */
 
     if (s_detail_open && ++s_poll_tick >= DETAIL_POLL_TICKS) {
         s_poll_tick = 0;
@@ -1131,6 +1202,7 @@ static void ui_timer_cb(lv_timer_t *timer)
 void herdr_ui_init(void)
 {
     ui_theme_init();
+    lockscreen_init();
 
     build_home();
     build_sessions();
@@ -1141,6 +1213,7 @@ void herdr_ui_init(void)
 
     rebuild_session_rows();
     refresh_home();
+    refresh_lock_icon();
     show_tab(UI_TAB_HOME);
 
     /* 150ms: o tick quase sempre sai no early-out por geração; o que importa

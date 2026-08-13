@@ -12,6 +12,7 @@
 #include "herdr_kb.h"
 #include "herdr_ui.h"
 #include "i18n.h"
+#include "lockscreen.h"
 #include "net.h"
 #include "pairing.h"
 #include "panel_cfg.h"
@@ -27,6 +28,7 @@ typedef enum {
     VIEW_HOST,
     VIEW_PAIR,
     VIEW_UPDATE,
+    VIEW_LOCK,
 } view_t;
 
 static lv_obj_t *s_panel;
@@ -42,6 +44,9 @@ static lv_obj_t *s_ta_port;
 static lv_obj_t *s_ta_token;
 static lv_obj_t *s_sw_auto;         /* switch de descoberta automática do editor */
 static lv_obj_t *s_lbl_lang;        /* valor da linha de idioma, na tela principal */
+static lv_obj_t *s_row_lock_tmo;    /* linhas que só valem com o bloqueio ligado */
+static lv_obj_t *s_row_lock_pat;
+static lv_obj_t *s_lbl_lock_tmo;
 static lv_obj_t *s_lbl_wifi;        /* status vivo do Wi-Fi, na tela principal */
 static lv_obj_t *s_pair_status;
 static lv_timer_t *s_pair_timer;
@@ -67,6 +72,7 @@ static void show_pass(const char *ssid);
 static void show_host(int idx);
 static void show_pair(void);
 static void show_update(void);
+static void show_lock(void);
 static void update_toast(void);
 
 /* ---------- teclado ---------- */
@@ -729,6 +735,141 @@ static void show_update(void)
     fwup_tick_cb(NULL);           /* primeira pintura sem esperar o tick */
 }
 
+/* ---------- view: bloqueio de tela ---------- */
+
+/* Opções do prazo de tolerância; 0 = pedir o padrão toda vez. */
+static const uint8_t k_lock_timeouts[] = { 0, 5, 15, 30, 60, 120 };
+#define LOCK_TMO_COUNT ((int)(sizeof(k_lock_timeouts) / sizeof(k_lock_timeouts[0])))
+
+static void lock_tmo_label(void)
+{
+    uint8_t min = lockscreen_timeout_min();
+    if (min == 0) {
+        lv_label_set_text(s_lbl_lock_tmo, T(STR_LOCK_OFF));
+    } else {
+        lv_label_set_text_fmt(s_lbl_lock_tmo, T(STR_LOCK_TMO_FMT), min);
+    }
+}
+
+/* Com o bloqueio desligado, prazo e padrão não têm efeito nenhum: somem em vez
+   de ficarem à toa. Alternar aqui evita reconstruir a tela de dentro do próprio
+   evento do switch, que destruiria o widget no meio do callback. */
+static void apply_lock_visibility(void)
+{
+    bool on = lockscreen_enabled();
+    lv_obj_t *rows[] = { s_row_lock_tmo, s_row_lock_pat };
+    for (size_t i = 0; i < 2; i++) {
+        if (on) {
+            lv_obj_clear_flag(rows[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(rows[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+/* Volta do overlay de captura: repintar a tela inteira é seguro aqui (o evento
+   veio de outra árvore de objetos, não do switch que seria destruído). */
+static void lock_capture_done_cb(bool saved)
+{
+    if (saved && !lockscreen_enabled()) {
+        lockscreen_set_enabled(true);
+    }
+    show_lock();
+}
+
+static void lock_enable_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    if (on && !lockscreen_has_pattern()) {
+        /* ligar sem padrão: só vale depois de desenhar (o cancelamento volta
+           o switch ao repintar a tela) */
+        lockscreen_request_capture(lock_capture_done_cb);
+        return;
+    }
+    lockscreen_set_enabled(on);
+    apply_lock_visibility();
+}
+
+static void lock_tmo_cb(lv_event_t *e)
+{
+    (void)e;
+    uint8_t cur = lockscreen_timeout_min();
+    int i = 0;
+    while (i < LOCK_TMO_COUNT && k_lock_timeouts[i] != cur) {
+        i++;
+    }
+    i = (i + 1) % LOCK_TMO_COUNT;
+    lockscreen_set_timeout_min(k_lock_timeouts[i]);
+    lock_tmo_label();
+}
+
+static void lock_pattern_cb(lv_event_t *e)
+{
+    (void)e;
+    lockscreen_request_capture(lock_capture_done_cb);
+}
+
+static void show_lock(void)
+{
+    s_view = VIEW_LOCK;
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
+    build_bar(T(STR_LOCK_ROW), back_to_main_cb, NULL);   /* aplica na hora */
+    hide_kb();
+    lv_obj_clean(s_content);
+
+    lv_obj_t *erow = ui_plain(s_content);
+    lv_obj_set_size(erow, LV_PCT(100), 44);
+    lv_obj_t *el = lv_label_create(erow);
+    lv_label_set_text(el, T(STR_LOCK_ENABLE));
+    lv_obj_set_style_text_font(el, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(el, UI_TEXT, 0);
+    lv_obj_align(el, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *sw = lv_switch_create(erow);
+    lv_obj_set_size(sw, 48, 26);
+    lv_obj_set_ext_click_area(sw, 12);
+    lv_obj_align(sw, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(sw, UI_SWITCH_OFF, 0);
+    if (lockscreen_enabled()) {
+        lv_obj_add_state(sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(sw, lock_enable_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_row_lock_tmo = make_row(lock_tmo_cb, NULL, 44);
+    lv_obj_t *tl = lv_label_create(s_row_lock_tmo);
+    lv_label_set_text(tl, T(STR_LOCK_TIMEOUT));
+    lv_obj_set_style_text_font(tl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(tl, UI_TEXT, 0);
+    lv_obj_align(tl, LV_ALIGN_LEFT_MID, 0, 0);
+    s_lbl_lock_tmo = lv_label_create(s_row_lock_tmo);
+    lv_obj_set_style_text_font(s_lbl_lock_tmo, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(s_lbl_lock_tmo, UI_MUTED, 0);
+    lv_obj_align(s_lbl_lock_tmo, LV_ALIGN_RIGHT_MID, 0, 0);
+    lock_tmo_label();
+
+    s_row_lock_pat = make_row(lock_pattern_cb, NULL, 44);
+    lv_obj_t *pl = lv_label_create(s_row_lock_pat);
+    lv_label_set_text(pl, lockscreen_has_pattern() ? T(STR_LOCK_CHANGE_PAT)
+                                                   : T(STR_LOCK_SET_PAT));
+    lv_obj_set_style_text_font(pl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(pl, UI_TEXT, 0);
+    lv_obj_center(pl);
+
+    apply_lock_visibility();
+}
+
+/* Mexer na configuração do bloqueio exige provar o padrão, mesmo dentro do
+   prazo de tolerância — provar aqui não destrava o terminal. */
+static void lock_row_cb(lv_event_t *e)
+{
+    (void)e;
+    if (lockscreen_enabled() && lockscreen_has_pattern()) {
+        lockscreen_request_verify(show_lock);
+    } else {
+        show_lock();
+    }
+}
+
 void herdr_ui_settings_open_update(void)
 {
     show_update();
@@ -1017,6 +1158,18 @@ static void show_main(void)
     lv_obj_set_style_text_font(s_lbl_lang, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(s_lbl_lang, UI_MUTED, 0);
     lv_obj_align(s_lbl_lang, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_t *lkrow = make_row(lock_row_cb, NULL, 44);
+    lv_obj_t *lkl = lv_label_create(lkrow);
+    lv_label_set_text(lkl, T(STR_LOCK_ROW));
+    lv_obj_set_style_text_font(lkl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(lkl, UI_TEXT, 0);
+    lv_obj_align(lkl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *lkv = lv_label_create(lkrow);
+    lv_label_set_text(lkv, lockscreen_enabled() ? T(STR_LOCK_ON) : T(STR_LOCK_OFF));
+    lv_obj_set_style_text_font(lkv, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(lkv, UI_MUTED, 0);
+    lv_obj_align(lkv, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *rst = make_row(restart_cb, NULL, 44);
     lv_obj_t *rsl = lv_label_create(rst);

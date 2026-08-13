@@ -45,17 +45,17 @@ LATIN = ["0x20-0x7E", "0xA0-0xFF", "0x2010-0x2027", "0x2190-0x2193"]
 DEJAVU_EXTRA = [0x2713, 0x2717, 0x25CF, 0x26A0]
 
 # Símbolos usados pela UI e pelos widgets da LVGL (teclado, textarea).
-# Os cinco sem LV_SYMBOL_ estão em ui_theme.h: os dois pares de ícones de
-# agrupar e ordenar da tela de sessões e o velocímetro da aba Dash. O 0xF0F3
-# (bell) é o beacon de decisão pendente da home; o 0xF019 (download) é o aviso
-# de firmware novo.
+# Os seis sem LV_SYMBOL_ estão em ui_theme.h: os dois pares de ícones de
+# agrupar e ordenar da tela de sessões, o velocímetro da aba Dash e o cadeado
+# (0xF023) do bloqueio de tela. O 0xF0F3 (bell) é o beacon de decisão pendente
+# da home; o 0xF019 (download) é o aviso de firmware novo.
 # Ao acrescentar um codepoint aqui, confira no .c gerado que ele entrou: o
 # lv_font_conv descarta em silêncio o que a face não tem (dos pedidos acima de
 # 0x2010, 9 caem fora porque a Montserrat não os desenha).
-SYMBOLS = [0xF00B, 0xF00C, 0xF00D, 0xF013, 0xF015, 0xF019, 0xF053, 0xF054,
-           0xF067, 0xF06E, 0xF071, 0xF077, 0xF078, 0xF0C7, 0xF0F3, 0xF11C,
-           0xF1EB, 0xF2ED, 0xF55A, 0xF8A2, 0xF5FD, 0xF0C9, 0xF0DC, 0xF160,
-           0xF3FD]
+SYMBOLS = [0xF00B, 0xF00C, 0xF00D, 0xF013, 0xF015, 0xF019, 0xF023, 0xF053,
+           0xF054, 0xF067, 0xF06E, 0xF071, 0xF077, 0xF078, 0xF0C7, 0xF0F3,
+           0xF11C, 0xF1EB, 0xF2ED, 0xF55A, 0xF8A2, 0xF5FD, 0xF0C9, 0xF0DC,
+           0xF160, 0xF3FD]
 
 # (arquivo, peso, tamanho, ranges do texto, inclui símbolos)
 FONTS = [

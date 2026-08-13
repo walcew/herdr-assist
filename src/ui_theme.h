@@ -66,6 +66,7 @@ LV_FONT_DECLARE(lv_font_terminal_12);
 #define UI_ICON_SORT_NAT "\xEF\x83\x9C"   /* U+F0DC sort: ordem natural */
 #define UI_ICON_SORT_PRI "\xEF\x85\xA0"   /* U+F160 sort-amount-down: bloqueadas primeiro */
 #define UI_ICON_DASH     "\xEF\x8F\xBD"   /* U+F3FD tachometer-alt: aba Dash */
+#define UI_ICON_LOCK     "\xEF\x80\xA3"   /* U+F023 lock: bloqueio de tela */
 
 /* Abas do dock. O valor do enum É a posição no dock (ui_dock passa o índice
    do laço como user_data), então a ordem aqui define a ordem dos botões. */
