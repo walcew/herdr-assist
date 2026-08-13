@@ -9,6 +9,7 @@
 #include "esp_system.h"
 
 #include "fw_update.h"
+#include "herdr_kb.h"
 #include "herdr_ui.h"
 #include "i18n.h"
 #include "net.h"
@@ -1113,7 +1114,8 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
 
     s_kb = lv_keyboard_create(s_panel);
     lv_obj_set_size(s_kb, LV_HOR_RES, KB_H);
-    lv_obj_set_style_text_font(s_kb, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_font(s_kb, &lv_font_ui_16, 0);
+    herdr_kb_setup(s_kb);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_kb, kb_cb, LV_EVENT_CANCEL, NULL);

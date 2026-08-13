@@ -15,6 +15,7 @@
 #include "i18n.h"
 #include "herdr_model.h"
 #include "herdr_conn.h"
+#include "herdr_kb.h"
 #include "herdr_ui_settings.h"
 #include "panel_cfg.h"
 #include "term_view.h"
@@ -248,6 +249,8 @@ static void open_keyboard(int host, const char *pane_id)
     s_kb_host = host;
     strlcpy(s_kb_pane, pane_id, HERDR_ID_LEN);
     lv_textarea_set_text(s_kb_ta, "");
+    /* sempre reabre na página de letras, como o teclado de celular */
+    lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
     lv_obj_clear_flag(s_kb_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_kb_overlay);
 }
@@ -1082,7 +1085,8 @@ static void build_keyboard_overlay(void)
 
     s_keyboard = lv_keyboard_create(s_kb_overlay);
     lv_obj_set_size(s_keyboard, LV_HOR_RES, LV_VER_RES / 2);
-    lv_obj_set_style_text_font(s_keyboard, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_font(s_keyboard, &lv_font_ui_16, 0);
+    herdr_kb_setup(s_keyboard);
     lv_keyboard_set_textarea(s_keyboard, s_kb_ta);
     lv_obj_add_event_cb(s_keyboard, kb_event_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_keyboard, kb_event_cb, LV_EVENT_CANCEL, NULL);
