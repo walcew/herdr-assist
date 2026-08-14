@@ -519,8 +519,17 @@ static void pair_tick_cb(lv_timer_t *t)
         }
         break;
     case PAIRING_WAITING:
-        lv_label_set_text_fmt(s_pair_status, T(STR_PAIR_WAITING),
-                              pairing_seconds_left());
+        /* sem rede o anúncio não sai — avisar vale mais que a contagem
+           (o modo segue ligado: o beacon é reenviado a cada segundo e
+           passa a alcançar a LAN assim que o Wi-Fi conectar) */
+        if (!net_wifi_is_up()) {
+            lv_label_set_text(s_pair_status, T(STR_PAIR_NO_WIFI));
+            lv_obj_set_style_text_color(s_pair_status, UI_BLOCKED, 0);
+        } else {
+            lv_label_set_text_fmt(s_pair_status, T(STR_PAIR_WAITING),
+                                  pairing_seconds_left());
+            lv_obj_set_style_text_color(s_pair_status, UI_WORKING, 0);
+        }
         break;
     default:
         lv_label_set_text(s_pair_status, T(STR_PAIR_CLOSED));
@@ -530,8 +539,43 @@ static void pair_tick_cb(lv_timer_t *t)
     }
 }
 
+/* Parágrafo do passo a passo: 12px apagado, quebrando na largura da tela. */
+static void pair_text(const char *text)
+{
+    lv_obj_t *l = lv_label_create(s_content);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(l, UI_MUTED, 0);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+}
+
+/* Comando pronto para digitar, tipografado como terminal. */
+static void pair_code(const char *cmd)
+{
+    lv_obj_t *c = ui_card(s_content, 6);
+    lv_obj_set_size(c, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(c, UI_TERM_BG, 0);
+    lv_obj_set_style_pad_all(c, 8, 0);
+    lv_obj_t *l = lv_label_create(c);
+    lv_label_set_text(l, cmd);
+    lv_obj_set_style_text_font(l, &lv_font_terminal_12, 0);
+    lv_obj_set_style_text_color(l, UI_TERM_TEXT, 0);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+}
+
+/* Lado do QR: módulos de 4px na URL pt-BR (a maior), legível de perto. */
+#define PAIR_QR_PX 180
+
 static void show_pair(void)
 {
+    /* Os comandos não são tradução — iguais nos dois idiomas. */
+    static const char CMD_INSTALL[] =
+        "herdr plugin install walcew/herdr-assist/plugin";
+    static const char CMD_ADMIN[] =
+        "herdr plugin pane open --plugin herdr-assist --entrypoint admin";
+
     s_view = VIEW_PAIR;
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
     update_toast();
@@ -568,12 +612,47 @@ static void show_pair(void)
     lv_obj_set_width(s_pair_status, LV_PCT(100));
     lv_label_set_long_mode(s_pair_status, LV_LABEL_LONG_WRAP);
 
-    lv_obj_t *steps = lv_label_create(s_content);
-    lv_label_set_text(steps, T(STR_PAIR_STEPS));
-    lv_obj_set_style_text_font(steps, &lv_font_ui_12, 0);
-    lv_obj_set_style_text_color(steps, UI_MUTED, 0);
-    lv_obj_set_width(steps, LV_PCT(100));
-    lv_label_set_long_mode(steps, LV_LABEL_LONG_WRAP);
+    pair_text(T(STR_PAIR_STEPS_INSTALL));
+    pair_code(CMD_INSTALL);
+    pair_text(T(STR_PAIR_STEPS_ADMIN));
+    pair_code(CMD_ADMIN);
+    pair_text(T(STR_PAIR_STEPS_PICK));
+
+    /* Manual completo no GitHub, alcançável sem digitar URL: QR + endereço.
+       O QR fica numa moldura branca — é a zona de silêncio que o leitor
+       exige, e a única exceção à paleta escura (contraste de leitura). */
+    lv_obj_t *qcard = ui_card(s_content, 8);
+    lv_obj_set_size(qcard, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(qcard, 12, 0);
+    lv_obj_set_flex_flow(qcard, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(qcard, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(qcard, 10, 0);
+
+    lv_obj_t *qcap = lv_label_create(qcard);
+    lv_label_set_text(qcap, T(STR_PAIR_MANUAL));
+    lv_obj_set_style_text_font(qcap, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(qcap, UI_MUTED, 0);
+    lv_obj_set_width(qcap, LV_PCT(100));
+    lv_label_set_long_mode(qcap, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(qcap, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t *qbg = ui_card(qcard, 8);
+    lv_obj_set_size(qbg, PAIR_QR_PX + 28, PAIR_QR_PX + 28);
+    lv_obj_set_style_bg_color(qbg, lv_color_white(), 0);
+
+    lv_obj_t *qr = lv_qrcode_create(qbg, PAIR_QR_PX,
+                                    lv_color_black(), lv_color_white());
+    lv_qrcode_update(qr, T(STR_PAIR_MANUAL_URL), strlen(T(STR_PAIR_MANUAL_URL)));
+    lv_obj_center(qr);
+
+    lv_obj_t *qurl = lv_label_create(qcard);
+    lv_label_set_text(qurl, T(STR_PAIR_MANUAL_URL));
+    lv_obj_set_style_text_font(qurl, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(qurl, UI_MUTED, 0);
+    lv_obj_set_width(qurl, LV_PCT(100));
+    lv_label_set_long_mode(qurl, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(qurl, LV_TEXT_ALIGN_CENTER, 0);
 
     if (pairing_start() != ESP_OK) {
         lv_label_set_text(s_pair_status, T(STR_PAIR_PORT_FAIL));

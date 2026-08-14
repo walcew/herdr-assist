@@ -108,18 +108,32 @@ typedef enum {
     X(THIS_PANEL,      "This panel",                  "Este painel")                         \
     X(PICK_CODE,       "Pick this code on the host",  "Escolha este código no host")         \
     X(STARTING,        "Starting...",                 "Iniciando...")                        \
-    X(PAIR_STEPS,      "On the host, with Herdr open:\n\n"                                   \
-                       "1. Open the herdr-assist plugin panel\n"                             \
-                       "2. Choose \"Pair panel\"\n"                                          \
-                       "3. Select the code above\n\n"                                        \
-                       "The host sends name, address and token —\n"                          \
-                       "nothing needs to be typed here.",                                    \
-                       "No host, com o Herdr aberto:\n\n"                                    \
-                       "1. Abra o painel do plugin herdr-assist\n"                           \
-                       "2. Escolha \"Parear painel\"\n"                                      \
-                       "3. Selecione o código acima\n\n"                                     \
-                       "O host envia nome, endereço e token —\n"                             \
-                       "nada precisa ser digitado aqui.")                                    \
+    X(PAIR_STEPS_INSTALL, "On the host (the machine running Herdr, on the same "             \
+                       "Wi-Fi network as the panel):\n\n"                                    \
+                       "1. Install the bridge plugin — only once:",                          \
+                       "No host (a máquina com o Herdr, na mesma rede Wi-Fi "                \
+                       "do painel):\n\n"                                                     \
+                       "1. Instale o plugin da ponte — uma vez só:")                         \
+    X(PAIR_STEPS_ADMIN, "2. In a Herdr pane, open the admin screen:",                        \
+                       "2. Num pane do Herdr, abra a tela de administração:")                 \
+    X(PAIR_STEPS_PICK, "3. Press p (Pair panel) and pick the code shown above "              \
+                       "from the list.\n\n"                                                  \
+                       "The host sends name, address and token — nothing is "                \
+                       "typed on the panel. Windows or SSH without a TUI: "                  \
+                       "python3 pair.py (see the manual).",                                  \
+                       "3. Tecle p (Parear painel) e escolha na lista o código "             \
+                       "mostrado acima.\n\n"                                                 \
+                       "O host envia nome, endereço e token — nada é digitado "              \
+                       "no painel. Windows ou SSH sem TUI: python3 pair.py "                 \
+                       "(veja o manual).")                                                   \
+    X(PAIR_NO_WIFI,    "No Wi-Fi: connect to a network first (Settings " LV_SYMBOL_RIGHT     \
+                       " Wi-Fi network).",                                                   \
+                       "Sem Wi-Fi: conecte a uma rede antes (Configurações "                 \
+                       LV_SYMBOL_RIGHT " Rede Wi-Fi).")                                      \
+    X(PAIR_MANUAL,     "Full manual — point your phone camera here:",                        \
+                       "Manual completo — aponte a câmera do celular:")                      \
+    X(PAIR_MANUAL_URL, "https://github.com/walcew/herdr-assist/blob/main/docs/pairing.md",   \
+                       "https://github.com/walcew/herdr-assist/blob/main/docs/pairing.pt-BR.md") \
     X(PAIR_PORT_FAIL,  "Could not open the pairing port.",                                   \
                        "Não foi possível abrir a porta de pareamento.")                      \
     X(PAIR_NO_SLOT,    "No room: remove a host before pairing.",                             \

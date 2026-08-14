@@ -105,6 +105,11 @@ configuração se inverte: **o host manda a configuração pronta para o painel*
 O host envia nome, endereço, porta e token; o painel grava na NVS e reinicia já
 conectado. Nada é digitado no touch.
 
+Passo a passo com telas, pareamento no Windows/headless, cadastro manual para redes
+que filtram broadcast e resolução de problemas: **[manual de
+pareamento](docs/pairing.pt-BR.md)** — o mesmo guia que o QR code da tela Parear
+do painel abre.
+
 Pronto — o painel já lista suas sessões. O resto deste documento é referência.
 
 ## Idioma

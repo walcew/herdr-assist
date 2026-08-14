@@ -102,6 +102,10 @@ reversed: **the host sends the finished config to the panel.**
 The host sends name, address, port and token; the panel writes them to NVS and reboots
 already connected. Nothing is typed on the touchscreen.
 
+Step-by-step with screenshots, Windows/headless pairing, manual setup for networks
+that filter broadcast, and troubleshooting: **[pairing manual](docs/pairing.md)** —
+the same guide the QR code on the panel's Pair screen opens.
+
 That's it — the panel now lists your sessions. The rest of this document is reference.
 
 ## Language

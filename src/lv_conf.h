@@ -652,8 +652,8 @@
 /*GIF decoder library*/
 #define LV_USE_GIF 0
 
-/*QR code library*/
-#define LV_USE_QRCODE 0
+/*QR code library — tela de pareamento: link para o manual no GitHub*/
+#define LV_USE_QRCODE 1
 
 /*FreeType library*/
 #define LV_USE_FREETYPE 0
