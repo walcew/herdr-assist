@@ -66,7 +66,8 @@ FONTS = [
     ("src/lv_font_ui_20.c", mont, 20, LATIN, True),
     ("src/lv_font_ui_bold_16.c", bold, 16, LATIN, True),
     ("src/lv_font_ui_bold_20.c", bold, 20, LATIN, True),
-    ("src/lv_font_ui_clock_44.c", mont, 44, ["0x30-0x3A"], False), # relógio da home
+    # relógio da home + ID de pareamento (hex: precisa de A-F além dos dígitos)
+    ("src/lv_font_ui_clock_44.c", mont, 44, ["0x30-0x3A", "0x41-0x46"], False),
 ]
 
 for out, face, size, ranges, with_symbols in FONTS:

@@ -33,6 +33,17 @@ static void set_state(pairing_state_t st)
     s_state = st;
 }
 
+/* O id sai do eFuse, disponível desde o boot — calcular aqui (e não só no
+   pairing_start) permite à UI mostrá-lo antes de ligar o modo. */
+static void ensure_id(void)
+{
+    if (!s_id[0]) {
+        uint8_t mac[6] = { 0 };
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        snprintf(s_id, sizeof(s_id), "%02X%02X%02X", mac[3], mac[4], mac[5]);
+    }
+}
+
 /* ---------- recebimento da configuração ---------- */
 
 /**
@@ -209,11 +220,7 @@ esp_err_t pairing_start(void)
     if (!s_mutex) {
         s_mutex = xSemaphoreCreateMutex();
     }
-    if (!s_id[0]) {
-        uint8_t mac[6] = { 0 };
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        snprintf(s_id, sizeof(s_id), "%02X%02X%02X", mac[3], mac[4], mac[5]);
-    }
+    ensure_id();
     memset(&s_result, 0, sizeof(s_result));
     s_auto = false;
     s_stop = false;
@@ -250,6 +257,7 @@ int pairing_seconds_left(void)
 
 const char *pairing_device_id(void)
 {
+    ensure_id();
     return s_id;
 }
 
