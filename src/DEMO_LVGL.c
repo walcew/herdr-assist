@@ -25,16 +25,11 @@ static const char *TAG = "DEMO_LVGL";
 #define logSection(section) \
   ESP_LOGI(TAG, "\n\n************* %s **************\n", section);
 
-/**
- * @brief LVGL porting example
- * Set the rotation degree:
- *      - 0: 0 degree
- *      - 90: 90 degree
- *      - 180: 180 degree
- *      - 270: 270 degree
- *
- */
-#define LVGL_PORT_ROTATION_DEGREE (0)
+/* Rotação usada quando a config pede paisagem — qual das duas bordas vira o
+   topo depende de como o painel está montado: se a imagem sair de cabeça para
+   baixo na sua base, troque por LV_DISP_ROT_270. O BSP cuida do resto: troca
+   hres/vres, rotaciona o buffer no flush e remapeia as coordenadas do toque. */
+#define UI_LANDSCAPE_ROT LV_DISP_ROT_90
 
 
 void setup();
@@ -86,21 +81,17 @@ void setup()
   /* antes de montar a UI: as telas são construídas uma vez e não se retraduzem */
   i18n_set_lang((ui_lang_t)panel_cfg_get()->lang);
   ESP_LOGI(TAG, "idioma: %s", i18n_lang_name(i18n_lang()));
+  ESP_LOGI(TAG, "orientacao: %s",
+           panel_cfg_get()->orient == CFG_ORIENT_LANDSCAPE ? "paisagem" : "retrato");
 
   logSection("Initialize panel device");
   // ESP_LOGI(TAG, "Initialize panel device");
   bsp_display_cfg_t cfg = {
       .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
       .buffer_size = EXAMPLE_LCD_QSPI_H_RES * EXAMPLE_LCD_QSPI_V_RES,
-#if LVGL_PORT_ROTATION_DEGREE == 90
-      .rotate = LV_DISP_ROT_90,
-#elif LVGL_PORT_ROTATION_DEGREE == 270
-      .rotate = LV_DISP_ROT_270,
-#elif LVGL_PORT_ROTATION_DEGREE == 180
-      .rotate = LV_DISP_ROT_180,
-#elif LVGL_PORT_ROTATION_DEGREE == 0
-      .rotate = LV_DISP_ROT_NONE,
-#endif
+      /* a orientação vem da NVS, lida logo acima em panel_cfg_init() */
+      .rotate = panel_cfg_get()->orient == CFG_ORIENT_LANDSCAPE
+                    ? UI_LANDSCAPE_ROT : LV_DISP_ROT_NONE,
   };
   /* O padrão do port são 4KB, apertado para renderizar o texto do terminal */
   cfg.lvgl_port_cfg.task_stack = 8192;

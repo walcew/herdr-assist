@@ -38,6 +38,7 @@ esp_err_t panel_cfg_init(void)
     /* chave ausente (config gravada antes do idioma existir) deixa o zero do
        memset, que é o padrão de fábrica */
     nvs_get_u8(h, "lang", &s_cfg.lang);
+    nvs_get_u8(h, "orient", &s_cfg.orient);
 
     for (int i = 0; i < CFG_MAX_HOSTS; i++) {
         panel_host_t *hh = &s_cfg.hosts[i];
@@ -86,6 +87,7 @@ esp_err_t panel_cfg_save(const panel_cfg_t *cfg)
     nvs_set_str(h, "ssid", cfg->wifi_ssid);
     nvs_set_str(h, "pass", cfg->wifi_pass);
     nvs_set_u8(h, "lang", cfg->lang);
+    nvs_set_u8(h, "orient", cfg->orient);
     for (int i = 0; i < CFG_MAX_HOSTS; i++) {
         const panel_host_t *hh = &cfg->hosts[i];
         char key[8];

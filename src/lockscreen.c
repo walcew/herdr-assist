@@ -17,12 +17,10 @@
 #define PAT_MAX     9
 #define PAT_MIN     4
 
-/* Grade de 3x88 px centrada na área útil: célula folgada o bastante para o
+/* Grade de 3 células centrada na área útil: célula folgada o bastante para o
    dedo, com o raio de captura menor que a metade dela (senão pontos vizinhos
-   disputariam o mesmo toque). */
-#define CELL        88
-#define GRID        (3 * CELL)
-#define HIT_R       28
+   disputariam o mesmo toque). Ver cell_size(). */
+#define CELL        88   /* lado de projeto da célula; encolhe se não couber */
 #define DOT_R       8
 #define DOT_SEL_R   16
 #define LINE_W      4
@@ -156,6 +154,20 @@ static void seq_to_str(char *out)
 
 /* ---------- geometria ---------- */
 
+/**
+ * Lado da célula da grade: os 88 de projeto, ou o que couber.
+ *
+ * Em retrato a área útil é 320x376 e sobra espaço; deitado ela cai para 480x216
+ * e a grade de 264 não entra na vertical, então a célula encolhe junto.
+ */
+static lv_coord_t cell_size(void)
+{
+    lv_area_t a;
+    lv_obj_get_coords(s_pad, &a);
+    lv_coord_t m = LV_MIN(lv_area_get_width(&a), lv_area_get_height(&a));
+    return LV_MIN(CELL, m / 3);
+}
+
 /* Centros dos 9 pontos em coordenadas absolutas. O widget ocupa a área útil
    inteira (a grade é só o miolo dele) para que a linha até o dedo não seja
    cortada pelo clip do próprio objeto. */
@@ -163,11 +175,12 @@ static void dot_centers(lv_point_t *c)
 {
     lv_area_t a;
     lv_obj_get_coords(s_pad, &a);
-    lv_coord_t gx = a.x1 + (lv_area_get_width(&a) - GRID) / 2;
-    lv_coord_t gy = a.y1 + (lv_area_get_height(&a) - GRID) / 2;
+    lv_coord_t cell = cell_size();
+    lv_coord_t gx = a.x1 + (lv_area_get_width(&a) - 3 * cell) / 2;
+    lv_coord_t gy = a.y1 + (lv_area_get_height(&a) - 3 * cell) / 2;
     for (int i = 0; i < 9; i++) {
-        c[i].x = gx + CELL / 2 + CELL * (i % 3);
-        c[i].y = gy + CELL / 2 + CELL * (i / 3);
+        c[i].x = gx + cell / 2 + cell * (i % 3);
+        c[i].y = gy + cell / 2 + cell * (i / 3);
     }
 }
 
@@ -175,10 +188,12 @@ static int dot_at(lv_coord_t x, lv_coord_t y)
 {
     lv_point_t c[9];
     dot_centers(c);
+    /* raio de acerto proporcional à célula: 88/3 dá os 28 de sempre em retrato */
+    lv_coord_t r = cell_size() / 3;
     for (int i = 0; i < 9; i++) {
         lv_coord_t dx = x - c[i].x;
         lv_coord_t dy = y - c[i].y;
-        if (dx * dx + dy * dy <= HIT_R * HIT_R) return i;
+        if (dx * dx + dy * dy <= r * r) return i;
     }
     return -1;
 }

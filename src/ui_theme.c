@@ -73,8 +73,8 @@ lv_obj_t *ui_topbar(lv_obj_t *parent, const char *title, lv_obj_t **out_title)
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_left(bar, 12, 0);
-    lv_obj_set_style_pad_right(bar, 12, 0);
+    lv_obj_set_style_pad_left(bar, UI_TOPBAR_PAD, 0);
+    lv_obj_set_style_pad_right(bar, UI_TOPBAR_PAD, 0);
     lv_obj_set_style_pad_column(bar, 10, 0);
 
     if (title) {
@@ -97,28 +97,39 @@ lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
     static const char *icons[] = { LV_SYMBOL_HOME, LV_SYMBOL_LIST, UI_ICON_DASH,
                                    LV_SYMBOL_SETTINGS };
 
+    /* Deitado embaixo em retrato; em pé à esquerda em paisagem, que é onde
+       sobra largura e o polegar alcança sem cobrir o conteúdo. */
+    bool land = ui_landscape();
+
     lv_obj_t *dock = lv_obj_create(parent);
     lv_obj_set_size(dock, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     /* o dock flutua: sem isto, numa tela com flex (a home) ele entraria no
        fluxo da coluna e o alinhamento central seria ignorado */
     lv_obj_add_flag(dock, LV_OBJ_FLAG_IGNORE_LAYOUT);
-    lv_obj_align(dock, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_align(dock, land ? LV_ALIGN_LEFT_MID : LV_ALIGN_BOTTOM_MID,
+                 land ? 10 : 0, land ? 0 : -10);
     lv_obj_set_style_bg_color(dock, UI_PANEL, 0);
     lv_obj_set_style_border_width(dock, 1, 0);
     lv_obj_set_style_border_color(dock, UI_BORDER, 0);
     lv_obj_set_style_radius(dock, 22, 0);
     lv_obj_set_style_pad_all(dock, 5, 0);
+    /* o gap fica no eixo do fluxo: coluna usa pad_row, linha usa pad_column */
+    lv_obj_set_style_pad_row(dock, 4, 0);
     lv_obj_set_style_pad_column(dock, 4, 0);
     lv_obj_set_style_shadow_width(dock, 24, 0);
     lv_obj_set_style_shadow_color(dock, lv_color_black(), 0);
-    lv_obj_set_style_shadow_ofs_y(dock, 10, 0);
-    lv_obj_set_flex_flow(dock, LV_FLEX_FLOW_ROW);
+    /* a sombra cai para longe da borda em que o dock está encostado */
+    lv_obj_set_style_shadow_ofs_x(dock, land ? 10 : 0, 0);
+    lv_obj_set_style_shadow_ofs_y(dock, land ? 0 : 10, 0);
+    lv_obj_set_flex_flow(dock, land ? LV_FLEX_FLOW_COLUMN : LV_FLEX_FLOW_ROW);
     lv_obj_clear_flag(dock, LV_OBJ_FLAG_SCROLLABLE);
 
     for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
         bool on = (i == (int)active);
         lv_obj_t *item = lv_btn_create(dock);
-        lv_obj_set_size(item, 62, 38);
+        /* em pé o item é mais alto e mais estreito: 4 deles somam 200px, que
+           cabem folgados nos 320 de altura da paisagem */
+        lv_obj_set_size(item, land ? 48 : 62, land ? 44 : 38);
         lv_obj_set_style_radius(item, 17, 0);
         lv_obj_set_style_shadow_width(item, 0, 0);
         lv_obj_set_style_bg_color(item, on ? UI_TEXT : UI_PANEL, 0);

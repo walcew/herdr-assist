@@ -116,6 +116,18 @@ takes effect on the next reboot, together with the rest of the config. A factory
 panel boots in English. The admin screen on the host follows the machine locale (`LANG`
 and friends, or `HERDR_ASSIST_LANG` to force it).
 
+## Orientation
+
+The panel runs **portrait (320×480) or landscape (480×320)**, set in **Settings → Device →
+Orientation**, which toggles on tap and takes effect on the next reboot — same as the
+language. Portrait is the factory default and the panel's native mode.
+
+Standing up, the dock moves from the bottom edge to the left one and the home screen splits
+in two columns: clock and mascot on the left, host cards on the right. Everything else —
+lists, the terminal, the keyboard, the lock pattern — resizes to the new proportion. The
+terminal in particular trades height for width, going from roughly 43×19 to 66×10 cells,
+and the bridge is told the new geometry.
+
 ## Hardware
 
 **JC3248W535EN** (Guition/Sunton), around US$ 25 on AliExpress:
@@ -329,10 +341,12 @@ for testing the flow.
   window it just defined. That works for sequential scanning, which is what full refresh
   does; with arbitrary areas, each region lands in the wrong place and the screen
   scrambles. Enabling partial also requires swapping that RAMWRC for RAMWR — untested.
-- **Rotation is always done in software.** The panel ignores MADCTL, so runtime rotation
-  does not work on any stack; `LVGL_PORT_ROTATION_DEGREE` in `DEMO_LVGL.c` settles it at
-  compile time. The app uses 0° (native 320×480 portrait), which avoids the rotation copy
-  in the flush — if the image comes out upside down on your stand, use 180°.
+- **Rotation is always done in software.** The panel ignores MADCTL, so it cannot be
+  changed while running: the orientation is read from NVS at boot and picked in
+  `DEMO_LVGL.c`, and switching it in Settings → Device → Orientation saves and restarts,
+  like every other config change. Portrait (0°, native 320×480) skips the rotation copy in
+  the flush; landscape pays for it and gives 480×320. If landscape comes out upside down on
+  your stand, swap `UI_LANDSCAPE_ROT` for `LV_DISP_ROT_270`.
 - **Touch is capacitive and needs no calibration** — what matters is remapping the
   coordinates according to rotation, done in `lv_port.c`.
 - **Fonts**: none of the fonts shipping with LVGL work here — Montserrat and unscii cover

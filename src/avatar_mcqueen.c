@@ -104,10 +104,8 @@ static void play(int anim)
     lv_img_set_src(s_img, &s_dsc);   /* refaz pivot/tamanho e invalida */
     lv_img_set_zoom(s_img, s_zoom);
 
-    /* zoom cresce em torno do centro; compensar metade do crescimento deixa
-       o carro apoiado na base do slot em todas as animações */
     lv_coord_t grow = a->height * s_zoom / 256 - a->height;
-    lv_obj_align(s_img, LV_ALIGN_BOTTOM_MID, 0, -(PAD + grow / 2));
+    avatar_place(s_img, PAD, grow);
 }
 
 static void mcqueen_create(lv_obj_t *parent)
@@ -122,8 +120,8 @@ static void mcqueen_create(lv_obj_t *parent)
     s_zoom = 0xFFFF;
     for (int i = 0; i < ANIM_COUNT; i++) {
         const mcqueen_anim_t *a = &s_anims[i];
-        uint16_t z = LV_MIN(256 * (AVATAR_SLOT_W - 2 * PAD) / a->width,
-                            256 * (AVATAR_SLOT_H - 2 * PAD) / a->height);
+        uint16_t z = LV_MIN(256 * (avatar_slot_w() - 2 * PAD) / a->width,
+                            256 * (avatar_slot_h() - 2 * PAD) / a->height);
         s_zoom = LV_MIN(s_zoom, z);
         max_px = LV_MAX(max_px, (uint32_t)a->width * a->height);
     }

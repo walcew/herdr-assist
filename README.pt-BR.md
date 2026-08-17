@@ -120,6 +120,18 @@ reinício, junto com o resto da config. De fábrica o painel liga em inglês. A 
 administração no host segue o locale da máquina (`LANG` e afins, ou `HERDR_ASSIST_LANG`
 para forçar).
 
+## Orientação
+
+O painel roda **em pé (320×480) ou deitado (480×320)**, escolha feita em **Settings →
+Device → Orientation**, que alterna no toque e vale a partir do reinício — igual ao idioma.
+Retrato é o padrão de fábrica e o modo nativo do painel.
+
+Deitado, o dock sai da borda de baixo e vai para a esquerda, e a home se divide em duas
+colunas: relógio e mascote à esquerda, cards de host à direita. O resto — listas, terminal,
+teclado, padrão de bloqueio — se redimensiona para a nova proporção. O terminal em especial
+troca altura por largura, saindo de ~43×19 para 66×10 células, e a ponte é avisada da nova
+geometria.
+
 ## Hardware
 
 **JC3248W535EN** (Guition/Sunton), ~R$ 120 no AliExpress:
@@ -334,10 +346,12 @@ testar o fluxo.
   acabou de definir. Funciona para varredura sequencial, que é o padrão do refresh completo;
   com áreas arbitrárias, cada região vai parar no lugar errado e a tela embaralha. Habilitar
   parcial exige também trocar esse RAMWRC por RAMWR — não testado.
-- **Rotação é sempre por software.** O painel ignora MADCTL, então rotação em runtime não
-  funciona em nenhuma stack; `LVGL_PORT_ROTATION_DEGREE` em `DEMO_LVGL.c` resolve em tempo
-  de compilação. O app usa 0° (portrait nativo 320×480), que dispensa a cópia de rotação
-  no flush — se a imagem ficar de cabeça para baixo na sua base, use 180°.
+- **Rotação é sempre por software.** O painel ignora MADCTL, então ela não muda com o
+  aparelho ligado: a orientação é lida da NVS no boot e escolhida em `DEMO_LVGL.c`, e
+  trocá-la em Configurações → Dispositivo → Orientação salva e reinicia, como toda mudança
+  de config. Retrato (0°, 320×480 nativo) dispensa a cópia de rotação no flush; paisagem
+  paga por ela e entrega 480×320. Se a paisagem sair de cabeça para baixo na sua base,
+  troque `UI_LANDSCAPE_ROT` por `LV_DISP_ROT_270`.
 - **O touch é capacitivo e não precisa de calibração** — o que importa é o remapeamento de
   coordenadas conforme a rotação, feito em `lv_port.c`.
 - **Fontes**: nenhuma fonte que acompanha a LVGL serve aqui — Montserrat e unscii cobrem

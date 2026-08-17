@@ -67,6 +67,15 @@ static void tick_cb(lv_timer_t *timer)
     s_drivers[s_cur]->tick(lv_tick_get());
 }
 
+void avatar_place(lv_obj_t *img, lv_coord_t pad, lv_coord_t grow)
+{
+    if (ui_landscape()) {
+        lv_obj_align(img, LV_ALIGN_CENTER, 0, 0);
+    } else {
+        lv_obj_align(img, LV_ALIGN_BOTTOM_MID, 0, -(pad + grow / 2));
+    }
+}
+
 void avatar_create(lv_obj_t *slot)
 {
     s_slot = slot;

@@ -4,7 +4,8 @@
  *
  * Espelha o design aprovado (projeto "herdr-assist" no Claude Design): fundos
  * quase pretos e sólidos, cor reservada para status, topbar sem barra sólida
- * (título + botões circulares) e dock flutuante nas telas de topo.
+ * (título + botões circulares) e dock flutuante nas telas de topo — deitado
+ * embaixo em retrato, em pé à esquerda em paisagem.
  */
 
 #pragma once
@@ -37,16 +38,36 @@ extern "C" {
 #define UI_TERM_TEXT   lv_color_hex(UI_TERM_TEXT_HEX)
 #define UI_SWITCH_OFF  lv_color_hex(0x2a2a2e)
 
+/* --- orientação --- */
+/**
+ * true quando a tela está deitada (paisagem).
+ *
+ * A orientação é escolhida na NVS e aplicada no boot: o BSP já entrega
+ * LV_HOR_RES/LV_VER_RES trocados, então derivar daí — e não da config — evita
+ * que os dois divirjam. Só pode ser chamada depois do display iniciado.
+ */
+static inline bool ui_landscape(void)
+{
+    return LV_HOR_RES > LV_VER_RES;
+}
+
 /* --- medidas --- */
 /* 44px é o alvo de toque confortável num painel de 3,5"; a topbar acompanha */
 #define UI_TOPBAR_H    64
 #define UI_ICON_BTN    44
 #define UI_ROW_H       52
-/* Espaço a reservar embaixo para o dock flutuante. O dock tem 50px (item de 38
-   + pad 5 + borda 1, dos dois lados) e sobe 10px da base, mas a sombra sai mais
-   14px por cima (width 24, ofs_y 10): 74px no total, +6 de folga. */
+/* Faixa a reservar para o dock flutuante. Deitado ele tem 50px (item de 38 +
+   pad 5 + borda 1, dos dois lados) e sobe 10px da base; em pé tem 60px (item de
+   48) e afasta 10px da esquerda. Nos dois casos a sombra sai mais 14px (width
+   24, ofs 10): 74px no total, +6 de folga. */
 #define UI_DOCK_SPACE  80
+/* O mesmo espaço projetado em cada eixo: 0 naquele em que o dock não está.
+   Entra direto nas contas de largura e padding, como UI_TOPBAR_H já faz. */
+#define UI_DOCK_W      (ui_landscape() ? UI_DOCK_SPACE : 0)   /* dock em pé, à esquerda */
+#define UI_DOCK_H      (ui_landscape() ? 0 : UI_DOCK_SPACE)   /* dock deitado, embaixo */
 #define UI_PAD         8
+/* Recuo lateral interno da topbar (some com UI_DOCK_W nas telas com dock). */
+#define UI_TOPBAR_PAD  12
 
 /* --- fontes --- */
 LV_FONT_DECLARE(lv_font_ui_12);

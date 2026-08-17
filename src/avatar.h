@@ -11,16 +11,31 @@
 
 #include <lvgl.h>
 
+#include "ui_theme.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Área reservada ao avatar na home: largura útil da tela (320 menos as margens
-   de 12) por altura. Os drivers usam essas medidas para se dimensionar.
-   A altura é o que manda no tamanho do Clawd: os sprites reservam espaço em
-   volta dele para os efeitos, então quem cresce a faixa cresce o mascote. */
-#define AVATAR_SLOT_W 296
-#define AVATAR_SLOT_H 160
+/* Área reservada ao avatar na home. Os drivers usam essas medidas para se
+   dimensionar; a altura é o que manda no tamanho do Clawd, porque os sprites
+   reservam espaço em volta dele para os efeitos — quem cresce a faixa cresce o
+   mascote.
+
+   Em retrato o slot toma a largura útil da tela (menos as margens de 12). Em
+   paisagem a home vira duas colunas e o slot divide a faixa com os cards de
+   host: fica mais estreito, e mais alto porque nada vem abaixo dele. */
+static inline lv_coord_t avatar_slot_w(void)
+{
+    return ui_landscape() ? 174 : LV_HOR_RES - 24;
+}
+
+/* 214 = 320 de altura - 20 de pad_top da home - 62 do hero - 12 de pad_row
+   - 12 de folga na base. */
+static inline lv_coord_t avatar_slot_h(void)
+{
+    return ui_landscape() ? 214 : 160;
+}
 
 /* Estado global que o avatar reflete (derivado em refresh_home). */
 typedef enum {
@@ -51,6 +66,18 @@ typedef struct {
 extern const avatar_driver_t avatar_clawd_driver;    /* avatar_clawd.c */
 extern const avatar_driver_t avatar_sonic_driver;    /* avatar_sonic.c */
 extern const avatar_driver_t avatar_mcqueen_driver;  /* avatar_mcqueen.c */
+
+/**
+ * Posiciona o sprite no slot; `grow` é o quanto ele cresce por causa do zoom
+ * (que a LVGL aplica em torno do centro do objeto, sem mudar o tamanho dele).
+ *
+ * Em retrato quem limita o zoom é a altura: o mascote preenche a faixa e fica
+ * apoiado na base, na mesma altura em todas as animações. Em paisagem o slot é
+ * estreito e alto, quem limita passa a ser a largura e sobra altura — apoiar na
+ * base deixaria o mascote caído num canto, então ele centra e fica na mesma
+ * linha dos cards de host ao lado.
+ */
+void avatar_place(lv_obj_t *img, lv_coord_t pad, lv_coord_t grow);
 
 /** Monta o motor no slot da home (chamar uma vez, em build_home). */
 void avatar_create(lv_obj_t *slot);

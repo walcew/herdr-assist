@@ -47,11 +47,19 @@ static inline bool panel_host_is_free(const panel_host_t *h)
     return h->host[0] == '\0' && h->token[0] == '\0';
 }
 
+/** Orientação da tela; 0 (retrato) é o padrão de fábrica. Só o painel usa. */
+typedef enum {
+    CFG_ORIENT_PORTRAIT = 0,
+    CFG_ORIENT_LANDSCAPE,
+    CFG_ORIENT_COUNT,
+} cfg_orient_t;
+
 typedef struct {
     char         wifi_ssid[CFG_SSID_LEN];
     char         wifi_pass[CFG_PASS_LEN];
     panel_host_t hosts[CFG_MAX_HOSTS];
     uint8_t      lang;                  /* ui_lang_t; 0 (en_US) é o de fábrica */
+    uint8_t      orient;                /* cfg_orient_t; 0 (retrato) é o de fábrica */
 } panel_cfg_t;
 
 /** Inicializa a NVS e carrega a config salva (zerada se não houver). */

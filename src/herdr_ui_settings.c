@@ -44,6 +44,7 @@ static lv_obj_t *s_ta_port;
 static lv_obj_t *s_ta_token;
 static lv_obj_t *s_sw_auto;         /* switch de descoberta automática do editor */
 static lv_obj_t *s_lbl_lang;        /* valor da linha de idioma, na tela principal */
+static lv_obj_t *s_lbl_orient;      /* idem, linha de orientação */
 static lv_obj_t *s_row_lock_tmo;    /* linhas que só valem com o bloqueio ligado */
 static lv_obj_t *s_row_lock_pat;
 static lv_obj_t *s_lbl_lock_tmo;
@@ -172,8 +173,8 @@ static lv_obj_t *make_field(const char *label, const char *value, const char *pl
     lv_obj_set_style_border_color(ta, UI_SWITCH_OFF, 0);
     lv_obj_set_style_border_width(ta, 1, 0);
     lv_obj_set_style_radius(ta, 6, 0);
-    /* largura do conteúdo (tela - padding) menos o rótulo de 86px */
-    lv_obj_set_size(ta, LV_HOR_RES - 16 - 90, 40);
+    /* largura do conteúdo (tela - dock - padding) menos o rótulo de 86px */
+    lv_obj_set_size(ta, LV_HOR_RES - UI_DOCK_W - 16 - 90, 40);
     lv_obj_align(ta, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_event_cb(ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
     return ta;
@@ -287,7 +288,7 @@ static void scan_timer_cb(lv_timer_t *t)
         lv_obj_set_style_text_font(name, &lv_font_ui_14, 0);
         lv_obj_set_style_text_color(name, UI_TEXT, 0);
         /* SSID longo não pode invadir o RSSI à direita */
-        lv_obj_set_width(name, LV_HOR_RES - 150);
+        lv_obj_set_width(name, LV_HOR_RES - UI_DOCK_W - 150);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -1066,6 +1067,25 @@ static void lang_toggle_cb(lv_event_t *e)
     update_toast();
 }
 
+static const char *orient_name(uint8_t o)
+{
+    return T(o == CFG_ORIENT_LANDSCAPE ? STR_ORIENT_LANDSCAPE : STR_ORIENT_PORTRAIT);
+}
+
+/**
+ * Alterna a orientação na cópia em edição.
+ *
+ * Como o idioma, só vale a partir do reinício: girar em runtime exigiria
+ * reconfigurar o display e reconstruir todas as telas já montadas.
+ */
+static void orient_toggle_cb(lv_event_t *e)
+{
+    (void)e;
+    s_edit.orient = (uint8_t)((s_edit.orient + 1) % CFG_ORIENT_COUNT);
+    lv_label_set_text(s_lbl_orient, orient_name(s_edit.orient));
+    update_toast();
+}
+
 /** Reinício avulso: o que estiver pendente de salvar é descartado. */
 static void restart_cb(lv_event_t *e)
 {
@@ -1238,6 +1258,18 @@ static void show_main(void)
     lv_obj_set_style_text_color(s_lbl_lang, UI_MUTED, 0);
     lv_obj_align(s_lbl_lang, LV_ALIGN_RIGHT_MID, 0, 0);
 
+    lv_obj_t *orow = make_row(orient_toggle_cb, NULL, 44);
+    lv_obj_t *ol = lv_label_create(orow);
+    lv_label_set_text(ol, T(STR_ORIENTATION));
+    lv_obj_set_style_text_font(ol, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(ol, UI_TEXT, 0);
+    lv_obj_align(ol, LV_ALIGN_LEFT_MID, 0, 0);
+    s_lbl_orient = lv_label_create(orow);
+    lv_label_set_text(s_lbl_orient, orient_name(s_edit.orient));
+    lv_obj_set_style_text_font(s_lbl_orient, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(s_lbl_orient, UI_MUTED, 0);
+    lv_obj_align(s_lbl_orient, LV_ALIGN_RIGHT_MID, 0, 0);
+
     lv_obj_t *lkrow = make_row(lock_row_cb, NULL, 44);
     lv_obj_t *lkl = lv_label_create(lkrow);
     lv_label_set_text(lkl, T(STR_LOCK_ROW));
@@ -1297,13 +1329,18 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     s_panel = ui_screen();
 
     s_bar = ui_topbar(s_panel, NULL, NULL);
+    /* build_bar() só troca os filhos, então o recuo do dock em pé fica aqui */
+    lv_obj_set_style_pad_left(s_bar, UI_TOPBAR_PAD + UI_DOCK_W, 0);
 
     s_content = ui_plain(s_panel);
     lv_obj_set_size(s_content, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
     lv_obj_align(s_content, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
-    lv_obj_set_style_pad_left(s_content, UI_PAD, 0);
+    /* Em paisagem o recuo sai do dock em pé. Ele permanece nas subtelas, onde o
+       dock é escondido — custa 80px de largura útil e paga com o alinhamento
+       estável ao voltar para a tela principal. */
+    lv_obj_set_style_pad_left(s_content, UI_PAD + UI_DOCK_W, 0);
     lv_obj_set_style_pad_right(s_content, UI_PAD, 0);
-    lv_obj_set_style_pad_bottom(s_content, UI_DOCK_SPACE, 0);
+    lv_obj_set_style_pad_bottom(s_content, UI_DOCK_H, 0);
     lv_obj_set_style_pad_row(s_content, 6, 0);
     lv_obj_set_flex_flow(s_content, LV_FLEX_FLOW_COLUMN);
     lv_obj_add_flag(s_content, LV_OBJ_FLAG_SCROLLABLE);
@@ -1314,8 +1351,9 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     /* Flutua logo acima do dock: a edição fica só em memória até salvar, e sem
        este aviso não há como perceber que falta aplicar. Tocar salva e reinicia. */
     s_toast = lv_btn_create(s_panel);
-    lv_obj_set_size(s_toast, LV_HOR_RES - 24, 56);
-    lv_obj_align(s_toast, LV_ALIGN_BOTTOM_MID, 0, -68);
+    lv_obj_set_size(s_toast, LV_HOR_RES - 24 - UI_DOCK_W, 56);
+    /* em paisagem o dock não está embaixo: o toast só se afasta da borda */
+    lv_obj_align(s_toast, LV_ALIGN_BOTTOM_RIGHT, -12, ui_landscape() ? -12 : -68);
     lv_obj_set_style_bg_color(s_toast, UI_PANEL, 0);
     lv_obj_set_style_border_width(s_toast, 1, 0);
     lv_obj_set_style_border_color(s_toast, UI_WORKING, 0);
@@ -1345,7 +1383,9 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     lv_obj_align(t2, LV_ALIGN_LEFT_MID, 32, 10);
 
     s_kb = lv_keyboard_create(s_panel);
-    lv_obj_set_size(s_kb, LV_HOR_RES, KB_H);
+    /* encostado na direita: em paisagem o dock em pé ficaria por baixo dele */
+    lv_obj_set_size(s_kb, LV_HOR_RES - UI_DOCK_W, KB_H);
+    lv_obj_align(s_kb, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
     lv_obj_set_style_text_font(s_kb, &lv_font_ui_16, 0);
     herdr_kb_setup(s_kb);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
@@ -1355,8 +1395,8 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     /* Aviso de versão nova, no visual do toast de pendência mas em layer_top:
        precisa aparecer em qualquer aba, não só nas configurações. */
     s_fw_toast = lv_btn_create(lv_layer_top());
-    lv_obj_set_size(s_fw_toast, LV_HOR_RES - 24, 56);
-    lv_obj_align(s_fw_toast, LV_ALIGN_BOTTOM_MID, 0, -68);
+    lv_obj_set_size(s_fw_toast, LV_HOR_RES - 24 - UI_DOCK_W, 56);
+    lv_obj_align(s_fw_toast, LV_ALIGN_BOTTOM_RIGHT, -12, ui_landscape() ? -12 : -68);
     lv_obj_set_style_bg_color(s_fw_toast, UI_PANEL, 0);
     lv_obj_set_style_border_width(s_fw_toast, 1, 0);
     lv_obj_set_style_border_color(s_fw_toast, UI_WORKING, 0);

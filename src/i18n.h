@@ -78,6 +78,9 @@ typedef enum {
                        LV_SYMBOL_PLUS "  Adicionar manualmente")                             \
     X(SEC_DEVICE,      "Device",                      "Dispositivo")                         \
     X(LANGUAGE,        "Language",                    "Idioma")                              \
+    X(ORIENTATION,     "Orientation",                 "Orientação")                          \
+    X(ORIENT_PORTRAIT, "Portrait",                    "Retrato")                             \
+    X(ORIENT_LANDSCAPE, "Landscape",                  "Paisagem")                            \
     X(RESTART_DEVICE,  "Restart device",              "Reiniciar dispositivo")               \
     X(PENDING_TITLE,   "Pending changes",             "Configurações pendentes")             \
     X(PENDING_SUB,     "Tap to apply and restart",    "Toque para aplicar e reiniciar")      \

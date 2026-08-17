@@ -26,6 +26,14 @@
 #define SCROLL_POLL_TICKS 2    /* rolando, a tela nova vem em 300ms */
 #define HEAT_CELLS        12   /* células do mapa de calor por host */
 #define ACTION_BAR_H      48
+/* Medidas da home: as duas primeiras entram no cálculo do slot do avatar
+   (avatar_slot_h(), em avatar.h), então mexer aqui pede conferir lá. */
+#define HOME_PAD_TOP      20
+#define HOME_HERO_H       62   /* faixa do relógio, do sino e do cadeado */
+#define HOME_PAD_X        12
+#define HOME_GAP          12   /* respiro entre os blocos da home */
+#define HOST_CARD_H       60
+#define HOST_CARD_GAP     6
 
 /* --- telas --- */
 static lv_obj_t *s_home;
@@ -412,14 +420,40 @@ static void refresh_lock_icon(void)
     lv_obj_align(s_beacon, LV_ALIGN_RIGHT_MID, locked ? -(UI_ICON_BTN + 10) : 0, -8);
 }
 
-static void build_host_cards(lv_obj_t *parent)
+/**
+ * Monta os cards de host (nome, status e mapa de calor) numa faixa de largura w.
+ *
+ * A largura entra resolvida em pixels — e não como LV_PCT(100) — porque o passo
+ * das células do mapa de calor sai dela, e o layout ainda não foi calculado
+ * quando os cards nascem.
+ */
+static void build_host_cards(lv_obj_t *parent, lv_coord_t w)
 {
     const panel_cfg_t *cfg = panel_cfg_get();
+    /* Clampado no passo de projeto: em retrato sobra espaço e o tamanho de hoje
+       é o desejado; em paisagem a coluna é estreita e as células encolhem. */
+    lv_coord_t step = LV_MIN(21, (w - 24) / HEAT_CELLS);
+    lv_coord_t cell = step - 4;
+
+    lv_coord_t area_h = ui_landscape() ? avatar_slot_h() : 152;
+    int enabled = 0;
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        enabled += cfg->hosts[h].enabled;
+    }
+    /* Só em paisagem, onde a coluna é alta e os cards colados no topo destoariam
+       do mascote ao lado; centrados, os dois blocos ficam na mesma linha. Em
+       retrato a faixa é justa e a pilha segue do topo, como sempre foi. E com a
+       coluna cheia volta ao topo nas duas: centrar o que não cabe empurraria o
+       primeiro card para fora e a rolagem começaria no meio da lista. */
+    bool center = ui_landscape() &&
+                  enabled * HOST_CARD_H + (enabled - 1) * HOST_CARD_GAP <= area_h;
 
     s_host_area = ui_plain(parent);
-    lv_obj_set_size(s_host_area, LV_PCT(100), 152);
+    lv_obj_set_size(s_host_area, w, area_h);
     lv_obj_set_flex_flow(s_host_area, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_host_area, 6, 0);
+    lv_obj_set_flex_align(s_host_area, center ? LV_FLEX_ALIGN_CENTER : LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(s_host_area, HOST_CARD_GAP, 0);
     lv_obj_add_flag(s_host_area, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(s_host_area, LV_DIR_VER);
 
@@ -427,11 +461,11 @@ static void build_host_cards(lv_obj_t *parent)
         if (!cfg->hosts[h].enabled) {
             continue;
         }
-        host_widget_t *w = &s_hw[s_hw_count++];
-        w->host = h;
+        host_widget_t *hw = &s_hw[s_hw_count++];
+        hw->host = h;
 
         lv_obj_t *card = ui_card(s_host_area, 8);
-        lv_obj_set_size(card, LV_PCT(100), 60);
+        lv_obj_set_size(card, LV_PCT(100), HOST_CARD_H);
         lv_obj_set_style_pad_left(card, 12, 0);
         lv_obj_set_style_pad_right(card, 12, 0);
         lv_obj_set_style_pad_top(card, 10, 0);
@@ -442,20 +476,20 @@ static void build_host_cards(lv_obj_t *parent)
         lv_obj_set_style_text_color(name, UI_TEXT, 0);
         lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 0);
 
-        w->status = lv_label_create(card);
-        lv_label_set_text(w->status, "");
-        lv_obj_set_style_text_font(w->status, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(w->status, UI_MUTED, 0);
-        lv_obj_align(w->status, LV_ALIGN_TOP_RIGHT, 0, 0);
+        hw->status = lv_label_create(card);
+        lv_label_set_text(hw->status, "");
+        lv_obj_set_style_text_font(hw->status, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(hw->status, UI_MUTED, 0);
+        lv_obj_align(hw->status, LV_ALIGN_TOP_RIGHT, 0, 0);
 
         for (int c = 0; c < HEAT_CELLS; c++) {
-            w->cells[c] = lv_obj_create(card);
-            lv_obj_set_size(w->cells[c], 17, 17);
-            lv_obj_set_style_radius(w->cells[c], 4, 0);
-            lv_obj_set_style_border_width(w->cells[c], 0, 0);
-            lv_obj_set_style_bg_color(w->cells[c], UI_CELL, 0);
-            lv_obj_align(w->cells[c], LV_ALIGN_TOP_LEFT, c * 21, 23);
-            lv_obj_clear_flag(w->cells[c], LV_OBJ_FLAG_SCROLLABLE);
+            hw->cells[c] = lv_obj_create(card);
+            lv_obj_set_size(hw->cells[c], cell, cell);
+            lv_obj_set_style_radius(hw->cells[c], 4, 0);
+            lv_obj_set_style_border_width(hw->cells[c], 0, 0);
+            lv_obj_set_style_bg_color(hw->cells[c], UI_CELL, 0);
+            lv_obj_align(hw->cells[c], LV_ALIGN_TOP_LEFT, c * step, 23);
+            lv_obj_clear_flag(hw->cells[c], LV_OBJ_FLAG_SCROLLABLE);
         }
     }
 
@@ -469,15 +503,21 @@ static void build_host_cards(lv_obj_t *parent)
 
 static void build_home(void)
 {
+    /* A tela crua é o pai do dock, e por isso fica sem padding: lv_obj_align
+       resolve contra a área de conteúdo do pai, então um padding aqui empurraria
+       o próprio dock junto. As margens vivem na coluna, como nas outras telas. */
     s_home = ui_screen();
-    lv_obj_set_style_pad_top(s_home, 20, 0);
-    lv_obj_set_style_pad_left(s_home, 12, 0);
-    lv_obj_set_style_pad_right(s_home, 12, 0);
-    lv_obj_set_flex_flow(s_home, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_home, 12, 0);
 
-    lv_obj_t *hero = ui_plain(s_home);
-    lv_obj_set_size(hero, LV_PCT(100), 62);
+    lv_obj_t *col = ui_plain(s_home);
+    lv_obj_set_size(col, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_pad_top(col, HOME_PAD_TOP, 0);
+    lv_obj_set_style_pad_left(col, HOME_PAD_X + UI_DOCK_W, 0);
+    lv_obj_set_style_pad_right(col, HOME_PAD_X, 0);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, HOME_GAP, 0);
+
+    lv_obj_t *hero = ui_plain(col);
+    lv_obj_set_size(hero, LV_PCT(100), HOME_HERO_H);
 
     s_clock = lv_label_create(hero);
     lv_label_set_text(s_clock, "--:--");
@@ -504,11 +544,24 @@ static void build_home(void)
     lv_obj_set_style_text_color(lv_obj_get_child(s_lock_icon, 0), UI_MUTED, 0);
     lv_obj_add_flag(s_lock_icon, LV_OBJ_FLAG_HIDDEN);
 
-    lv_obj_t *avatar_slot = ui_plain(s_home);
-    lv_obj_set_size(avatar_slot, AVATAR_SLOT_W, AVATAR_SLOT_H);
+    /* Retrato: avatar e cards de host empilham na coluna da própria home.
+       Paisagem: o hero continua ocupando a largura toda e os dois blocos
+       dividem a faixa abaixo dele, lado a lado. */
+    lv_coord_t usable = LV_HOR_RES - UI_DOCK_W - 2 * HOME_PAD_X;
+    lv_obj_t *body = col;
+    if (ui_landscape()) {
+        body = ui_plain(col);
+        lv_obj_set_size(body, LV_PCT(100), avatar_slot_h());
+        lv_obj_set_flex_flow(body, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(body, HOME_GAP, 0);
+    }
+
+    lv_obj_t *avatar_slot = ui_plain(body);
+    lv_obj_set_size(avatar_slot, avatar_slot_w(), avatar_slot_h());
     avatar_create(avatar_slot);
 
-    build_host_cards(s_home);
+    build_host_cards(body, ui_landscape() ? usable - HOME_GAP - avatar_slot_w()
+                                          : usable);
     ui_dock(s_home, UI_TAB_HOME, dock_cb);
 }
 
@@ -598,6 +651,8 @@ static void build_sessions(void)
     s_sessions = ui_screen();
 
     lv_obj_t *bar = ui_topbar(s_sessions, T(STR_TAB_SESSIONS), NULL);
+    /* em paisagem o dock fica em pé à esquerda: título e lista saem de trás dele */
+    lv_obj_set_style_pad_left(bar, UI_TOPBAR_PAD + UI_DOCK_W, 0);
     s_lbl_group = lv_obj_get_child(ui_icon_btn(bar, "", toggle_group_cb, NULL), 0);
     s_lbl_sort = lv_obj_get_child(ui_icon_btn(bar, "", toggle_sort_cb, NULL), 0);
     update_toolbar_icons();
@@ -607,9 +662,9 @@ static void build_sessions(void)
     lv_obj_align(s_sess_list, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
     lv_obj_set_flex_flow(s_sess_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_sess_list, 4, 0);
-    lv_obj_set_style_pad_left(s_sess_list, UI_PAD, 0);
+    lv_obj_set_style_pad_left(s_sess_list, UI_PAD + UI_DOCK_W, 0);
     lv_obj_set_style_pad_right(s_sess_list, UI_PAD, 0);
-    lv_obj_set_style_pad_bottom(s_sess_list, UI_DOCK_SPACE, 0);
+    lv_obj_set_style_pad_bottom(s_sess_list, UI_DOCK_H, 0);
     lv_obj_add_flag(s_sess_list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(s_sess_list, LV_DIR_VER);
 
@@ -834,21 +889,22 @@ static void rebuild_session_rows(void)
 #define DASH_ROW_BLOCK  (11 + DASH_TXT_H + 6 + DASH_BAR_H)
 /* onde o primeiro bloco começa, logo abaixo do cabeçalho do card */
 #define DASH_ROWS_Y     (DASH_PAD_TOP + DASH_LOGO)
-#define DASH_BAR_W      (LV_HOR_RES - 2 * UI_PAD - 2 * DASH_PAD_X)
+#define DASH_BAR_W      (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD - 2 * DASH_PAD_X)
 
 static void build_dash(void)
 {
     s_dash = ui_screen();
-    ui_topbar(s_dash, T(STR_TAB_DASH), NULL);
+    lv_obj_t *bar = ui_topbar(s_dash, T(STR_TAB_DASH), NULL);
+    lv_obj_set_style_pad_left(bar, UI_TOPBAR_PAD + UI_DOCK_W, 0);
 
     s_dash_list = ui_plain(s_dash);
     lv_obj_set_size(s_dash_list, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
     lv_obj_align(s_dash_list, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
     lv_obj_set_flex_flow(s_dash_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_dash_list, 8, 0);
-    lv_obj_set_style_pad_left(s_dash_list, UI_PAD, 0);
+    lv_obj_set_style_pad_left(s_dash_list, UI_PAD + UI_DOCK_W, 0);
     lv_obj_set_style_pad_right(s_dash_list, UI_PAD, 0);
-    lv_obj_set_style_pad_bottom(s_dash_list, UI_DOCK_SPACE, 0);
+    lv_obj_set_style_pad_bottom(s_dash_list, UI_DOCK_H, 0);
     lv_obj_add_flag(s_dash_list, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_scroll_dir(s_dash_list, LV_DIR_VER);
 
