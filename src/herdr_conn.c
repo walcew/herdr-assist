@@ -116,6 +116,9 @@ static void handle_agents(conn_slot_t *s, const cJSON *root)
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "workspace_id")))) {
             strlcpy(a->workspace_id, f->valuestring, HERDR_ID_LEN);
         }
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "account")))) {
+            strncpy(a->account, f->valuestring, sizeof(a->account) - 1);
+        }
         /* valuedouble, não valueint: o epoch já está perto do teto de int */
         if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "since")))) {
             a->since = (uint32_t)f->valuedouble;
@@ -149,6 +152,9 @@ static void handle_limits(conn_slot_t *s, const cJSON *root)
         const cJSON *f;
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "plan")))) {
             strlcpy(l->plan, f->valuestring, sizeof(l->plan));
+        }
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "account")))) {
+            strncpy(l->account, f->valuestring, sizeof(l->account) - 1);
         }
         l->ok = cJSON_IsTrue(cJSON_GetObjectItem(item, "ok"));
         /* valuedouble, não valueint: o epoch já está perto do teto de int */
