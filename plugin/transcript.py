@@ -38,6 +38,8 @@ def session_metrics(jsonl_path: str):
                     o = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(o, dict):
+                    continue
                 msg = o.get("message")
                 if isinstance(msg, dict) and msg.get("role") == "assistant":
                     last = msg

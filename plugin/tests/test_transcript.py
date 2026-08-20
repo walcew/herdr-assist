@@ -1,5 +1,5 @@
 # cd plugin && python -m unittest tests.test_transcript -v
-import os, unittest
+import os, unittest, tempfile
 import transcript
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "transcript", "sample.jsonl")
@@ -35,6 +35,21 @@ class TestSessionMetrics(unittest.TestCase):
 
     def test_arquivo_ausente_devolve_none(self):
         self.assertIsNone(transcript.session_metrics("/naoexiste.jsonl"))
+
+    def test_sem_assistant_devolve_none(self):
+        p = os.path.join(os.path.dirname(__file__), "fixtures", "transcript", "no_assistant.jsonl")
+        self.assertIsNone(transcript.session_metrics(p))
+
+    def test_linha_json_nao_dict_nao_quebra(self):
+        # regressão: linha [1,2,3] não pode derrubar a leitura
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "t.jsonl")
+            with open(fp, "w", encoding="utf-8") as fh:
+                fh.write("[1,2,3]\n")
+                fh.write('{"type":"assistant","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":10,"output_tokens":5}}}\n')
+            m = transcript.session_metrics(fp)
+            self.assertIsNotNone(m)
+            self.assertEqual(m["model"], "Opus 4.8")
 
 
 if __name__ == "__main__":
