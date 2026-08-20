@@ -1115,6 +1115,9 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
 
         /* marcador do esperado: só quando conhecido e sem encostar nas pontas */
         if (has_window && expected > 0 && expected < 100) {
+            /* filhos são clipados ao retângulo do pai por padrão no LVGL;
+               sem isso a sangria de 2px do tracinho não aparece */
+            lv_obj_add_flag(bar, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
             lv_obj_t *mk = lv_obj_create(bar);
             lv_obj_remove_style_all(mk);
             lv_obj_set_size(mk, 2, DASH_BAR_H + 4);
