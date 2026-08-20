@@ -57,5 +57,19 @@ class TestWindowS(unittest.TestCase):
         self.assertEqual(ws, [18000, 604800])
 
 
+class TestLimitsOrgCorp(unittest.TestCase):
+    def test_provider_tem_org_corp(self):
+        with mock.patch.object(b, "fetch_json", fake_usage):
+            cur = b.collect_claude(os.path.join(FIX, "work"))
+        # collect_claude não faz org/corp; o enriquecimento é no payload.
+        # Testar a função de enriquecimento pura:
+        prov = {"name": "Claude", "account": "bruno@sosdocs.com.br"}
+        b.enrich_provider(prov, agents=3, working=2)
+        self.assertEqual(prov["org"], "sosdocs")
+        self.assertTrue(prov["corp"])
+        self.assertEqual(prov["agents"], 3)
+        self.assertEqual(prov["agents_working"], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
