@@ -873,6 +873,10 @@ def collect_limits(account_dirs) -> list:
             limits_last_good[key] = {"data": {k: cur[k] for k in
                                      ("name", "plan", "limits", "account")},
                                      "at": int(time.time())}
+            # _config_dir é interno: viaja com o provedor só para o limits_loop
+            # casar com pane_account (agent kind + config_dir) e chamar
+            # enrich_provider; nunca vai para o payload (pop antes do broadcast).
+            cur["_config_dir"] = cdir
             providers.append(cur)
             if limits_ok.get(key) is not True:
                 log.info("limites %s [%s]: ok (%d janelas)",
@@ -885,7 +889,7 @@ def collect_limits(account_dirs) -> list:
             good = limits_last_good.get(key)
             if good:
                 stale = dict(good["data"])
-                stale.update(ok=False, stale_since=good["at"])
+                stale.update(ok=False, stale_since=good["at"], _config_dir=cdir)
                 providers.append(stale)
             if limits_ok.get(key) is not False:
                 log.warning("limites %s [%s]: %s", agent, os.path.basename(cdir), reason)
@@ -895,6 +899,19 @@ def collect_limits(account_dirs) -> list:
                     len(providers), LIMITS_MAX_CARDS)
         providers = providers[:LIMITS_MAX_CARDS]
     return providers
+
+
+# name do provedor (collect_claude/collect_codex) -> kind usado em pane_account
+_PROVIDER_KIND = {"Claude": "claude", "Codex": "codex"}
+
+
+def enrich_provider(prov, agents, working):
+    """Anexa org/corp (do account) e contagem de agentes ao provedor."""
+    org, corp = accounts.org_and_corp(prov.get("account", ""))
+    if org:
+        prov["org"], prov["corp"] = org, corp
+    prov["agents"], prov["agents_working"] = int(agents), int(working)
+    return prov
 
 
 def _file_cost_cached(path):
@@ -970,6 +987,17 @@ async def limits_loop() -> None:
             loop = asyncio.get_running_loop()
             providers = await loop.run_in_executor(
                 None, collect_limits, set(account_dirs))
+            # org/corp + contagem de agentes por conta: casa cada provedor com
+            # os panes de pane_account cujo (agent kind, config_dir) bate com
+            # o de onde o provedor coletou (_config_dir, ver collect_limits).
+            for prov in providers:
+                kind = _PROVIDER_KIND.get(prov.get("name"), "")
+                cdir = prov.pop("_config_dir", None)
+                acc_key = (kind, cdir)
+                agents = sum(1 for acc in pane_account.values() if acc == acc_key)
+                working = sum(1 for pid, acc in pane_account.items()
+                              if acc == acc_key and pid in working_since)
+                enrich_provider(prov, agents, working)
             snapshot = json.dumps({"type": "limits", "providers": providers},
                                   separators=(",", ":"))
             if snapshot != last_limits_snapshot:
