@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime
+import glob
 import hmac
 import json
 import logging
@@ -43,6 +44,7 @@ import urllib.error
 import urllib.request
 
 import accounts
+import transcript
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
 from proc_env import read_process_env  # noqa: E402
 
@@ -137,6 +139,24 @@ acc_email_cache: dict = {}       # (agent, config_dir) -> e-mail (clipado)
 pane_pid_cache: dict = {}        # (pane_id, agent) -> pid do processo em 1º plano
 pid_env_cache: dict = {}         # pid -> env (só os config-dirs, já filtrado)
 _prev_agent_panes = [set()]      # {(pane_id, agent)} na última refresh_accounts
+
+# Métricas (model, context_pct) do transcript do pane claude ativo, cacheadas
+# por (path, mtime): só 1 sessão por pane é lida por vez, então o cache não
+# cresce — troca de pane ou nova mensagem invalida a entrada e relê.
+tx_cache: dict = {}   # (path, mtime) -> {"model","context_pct"}
+
+
+def _session_metrics_cached(path):
+    """Métricas do transcript em `path`, relendo só quando o arquivo muda."""
+    try:
+        mt = os.path.getmtime(path)
+    except OSError:
+        return None
+    key = (path, mt)
+    if key not in tx_cache:
+        tx_cache.clear()          # 1 sessão por pane; cache pequeno, sem crescer
+        tx_cache[key] = transcript.session_metrics(path)
+    return tx_cache[key]
 
 
 async def pane_pid(pane_id: str):
@@ -532,6 +552,16 @@ async def push_agents() -> set[str] | None:
         acc = pane_account.get(pid)
         if acc:
             a["account"] = acc_email_cache.get(acc, "")
+            org, corp = accounts.org_and_corp(a["account"])
+            if org:
+                a["org"], a["corp"] = org, corp
+        sess = (p.get("agent_session") or {}).get("value")
+        if p.get("agent") == "claude" and sess and acc:
+            hits = glob.glob(os.path.join(acc[1], "projects", "*", sess + ".jsonl"))
+            m = _session_metrics_cached(hits[0]) if hits else None
+            if m:
+                a["model"] = m["model"]
+                a["context_pct"] = m["context_pct"]
         if status == "working":
             # só o primeiro ciclo em working cria o carimbo; os seguintes o herdam
             new_since[pid] = working_since.get(pid, now)
