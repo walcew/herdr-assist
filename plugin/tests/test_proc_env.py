@@ -1,5 +1,7 @@
 import unittest
+from unittest import mock
 from proc_env import parse_proc_environ, parse_ps_env
+import proc_env
 
 
 class TestParseProcEnviron(unittest.TestCase):
@@ -23,6 +25,13 @@ class TestParsePsEnv(unittest.TestCase):
         text = "PATH=/usr/bin CODEX_HOME=/Users/u/.codex-work TERM=xterm"
         env = parse_ps_env(text)
         self.assertEqual(env["CODEX_HOME"], "/Users/u/.codex-work")
+
+
+class TestReadProcessEnvFalha(unittest.TestCase):
+    def test_retorna_vazio_quando_reader_do_so_levanta(self):
+        # o dispatcher nunca pode propagar exceção — contrato {} em qualquer falha
+        with mock.patch.object(proc_env, "_read_windows", side_effect=OSError("boom")):
+            self.assertEqual(proc_env.read_process_env(123), {})
 
 
 if __name__ == "__main__":
