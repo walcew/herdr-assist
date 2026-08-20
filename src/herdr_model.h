@@ -26,7 +26,7 @@ extern "C" {
 /* 40 linhas de terminal com SGR (cores) e box-drawing: ~6KB típicos na
  * amostra real; a ponte capa em 12000 antes de enviar. Buffer em PSRAM. */
 #define HERDR_CONTENT_LEN     12288
-#define HERDR_MAX_PROVIDERS   4    /* provedores de IA por host (aba Dash) */
+#define HERDR_MAX_PROVIDERS   8    /* cards de uso por host: provedor × conta */
 #define HERDR_MAX_LIMIT_ROWS  4    /* janelas de limite por provedor */
 
 typedef struct {
@@ -39,6 +39,7 @@ typedef struct {
     /* Epoch em que a ponte viu o agente entrar em "working"; 0 nos demais
      * status. A API do Herdr não expõe tempo algum, então quem carimba é ela. */
     uint32_t since;
+    char    account[33];   /* e-mail da conta (config-dir); "" se desconhecida */
 } herdr_agent_t;
 
 /* Uma janela de limite de uso ("5h", "7d", "7d Fable"...). Os 20 bytes do
@@ -59,6 +60,7 @@ typedef struct {
     uint8_t  row_count;
     herdr_limit_row_t rows[HERDR_MAX_LIMIT_ROWS];
     uint8_t  host;          /* índice em panel_cfg hosts[] */
+    char    account[33];   /* e-mail da conta; distingue contas do mesmo provedor */
 } herdr_limits_t;
 
 typedef enum {
