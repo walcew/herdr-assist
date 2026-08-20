@@ -2,11 +2,14 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <esp_heap_caps.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+
+#include "activity_log.h"
 
 static struct {
     herdr_agent_t agents[CFG_MAX_HOSTS][HERDR_MAX_AGENTS];
@@ -38,6 +41,7 @@ void herdr_model_init(void)
 {
     memset(&s_model, 0, sizeof(s_model));
     s_model.mutex = xSemaphoreCreateMutex();
+    activity_log_init();
     /* grande e sem pressa: PSRAM, poupando a SRAM interna */
     s_model.pane_content.content = heap_caps_malloc(HERDR_CONTENT_LEN, MALLOC_CAP_SPIRAM);
     if (!s_model.pane_content.content) {
@@ -57,6 +61,50 @@ void herdr_model_set_agents(int host, const herdr_agent_t *agents, int count)
         count = HERDR_MAX_AGENTS;
     }
     lock();
+
+    /* Log de atividade: diff por pane_id contra o snapshot anterior (antes de
+       sobrescrevê-lo) para registrar começou/bloqueou/terminou. */
+    {
+        uint32_t now = (uint32_t)time(NULL);
+        const herdr_agent_t *old = s_model.agents[host];
+        int old_count = s_model.agent_count[host];
+        for (int i = 0; i < count; i++) {
+            const char *os = "";
+            uint32_t osince = 0;
+            for (int j = 0; j < old_count; j++) {
+                if (strcmp(old[j].pane_id, agents[i].pane_id) == 0) {
+                    os = old[j].status;
+                    osince = old[j].since;
+                    break;
+                }
+            }
+            activity_type_t t = activity_classify(os, agents[i].status);
+            if (t != ACT_NONE) {
+                uint32_t dur = (t == ACT_DONE && osince && now > osince) ? now - osince : 0;
+                activity_log_note(t, (uint8_t)host, agents[i].agent,
+                                  agents[i].project, dur, now);
+            }
+        }
+        /* agentes que sumiram do snapshot: se estavam ativos, "terminou" */
+        for (int j = 0; j < old_count; j++) {
+            bool present = false;
+            for (int i = 0; i < count; i++) {
+                if (strcmp(old[j].pane_id, agents[i].pane_id) == 0) {
+                    present = true;
+                    break;
+                }
+            }
+            if (present) {
+                continue;
+            }
+            activity_type_t t = activity_classify(old[j].status, "");
+            if (t != ACT_NONE) {
+                uint32_t dur = (old[j].since && now > old[j].since) ? now - old[j].since : 0;
+                activity_log_note(t, (uint8_t)host, old[j].agent, old[j].project, dur, now);
+            }
+        }
+    }
+
     /* a ponte pode reenviar snapshot idêntico; só bumpa se mudou. O campo host
        é carimbado aqui, então a comparação precisa carimbá-lo antes. */
     bool changed = (count != s_model.agent_count[host]);

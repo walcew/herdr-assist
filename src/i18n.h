@@ -65,6 +65,12 @@ typedef enum {
     X(LOADING,         "loading...",                  "carregando...")                       \
     X(PROMPT_PH,       "Prompt for the agent...",     "Prompt para o agente...")             \
     /* --- configurações: tela principal --- */                                              \
+    X(TAB_ACTIVITY,    "Activity",                    "Atividade")                           \
+    X(NO_ACTIVITY,     "No activity yet.",            "Nada por aqui ainda.")                \
+    X(EV_STARTED,      "started",                     "começou")                             \
+    X(EV_BLOCKED,      "blocked",                     "bloqueou")                            \
+    X(EV_DONE,         "done",                        "terminou")                            \
+    X(TODAY,           "Today",                       "Hoje")                                \
     X(TAB_SETTINGS,    "Settings",                    "Configurações")                       \
     X(SEC_WIFI,        "Wi-Fi network",               "Rede Wi-Fi")                          \
     X(NOT_CONFIGURED,  "Not configured",              "Não configurada")                     \

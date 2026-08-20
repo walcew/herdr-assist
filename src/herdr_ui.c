@@ -11,6 +11,7 @@
 
 #include "assets/logo_claude.h"
 #include "assets/logo_codex.h"
+#include "activity_log.h"
 #include "avatar.h"
 #include "i18n.h"
 #include "herdr_model.h"
@@ -89,6 +90,10 @@ static lv_obj_t *s_detail_dot;
 static lv_obj_t *s_term_cont;
 static lv_obj_t *s_term_view;
 
+/* --- aba Atividade --- */
+static lv_obj_t *s_activity;
+static lv_obj_t *s_activity_list;
+
 /* --- teclado --- */
 static lv_obj_t *s_kb_ta;
 static lv_obj_t *s_keyboard;
@@ -132,6 +137,8 @@ static int status_rank(const char *status)
 
 static void rebuild_session_rows(void);
 static void rebuild_dash_cards(void);
+static void rebuild_activity(void);
+static bool fmt_when(char *buf, size_t size, time_t now, uint32_t t);
 
 static void show_tab(ui_tab_t tab)
 {
@@ -139,6 +146,7 @@ static void show_tab(ui_tab_t tab)
     lv_obj_add_flag(s_home, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sessions, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dash, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_activity, LV_OBJ_FLAG_HIDDEN);
     herdr_ui_settings_hide();
     switch (tab) {
     case UI_TAB_SESSIONS:
@@ -152,6 +160,11 @@ static void show_tab(ui_tab_t tab)
         rebuild_dash_cards();   /* mesmo motivo da lista de sessões */
         lv_obj_clear_flag(s_dash, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_dash);
+        break;
+    case UI_TAB_ACTIVITY:
+        rebuild_activity();     /* mesmo motivo das outras: monta o que chegou escondido */
+        lv_obj_clear_flag(s_activity, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_activity);
         break;
     case UI_TAB_SETTINGS:
         herdr_ui_settings_show();
@@ -999,6 +1012,115 @@ static void build_dash(void)
     ui_dock(s_dash, UI_TAB_DASH, dock_cb);
 }
 
+/* ---------- aba Atividade ---------- */
+
+static void build_activity(void)
+{
+    s_activity = ui_screen();
+    lv_obj_t *bar = ui_topbar(s_activity, T(STR_TAB_ACTIVITY), NULL);
+    lv_obj_set_style_pad_left(bar, UI_TOPBAR_PAD + UI_DOCK_W, 0);
+
+    s_activity_list = ui_plain(s_activity);
+    lv_obj_set_size(s_activity_list, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
+    lv_obj_align(s_activity_list, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
+    lv_obj_set_flex_flow(s_activity_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_activity_list, 6, 0);
+    lv_obj_set_style_pad_left(s_activity_list, UI_PAD + UI_DOCK_W, 0);
+    lv_obj_set_style_pad_right(s_activity_list, UI_PAD, 0);
+    lv_obj_set_style_pad_top(s_activity_list, 6, 0);
+    lv_obj_set_style_pad_bottom(s_activity_list, UI_DOCK_H, 0);
+    lv_obj_add_flag(s_activity_list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_activity_list, LV_DIR_VER);
+
+    ui_dock(s_activity, UI_TAB_ACTIVITY, dock_cb);
+}
+
+static void fmt_dur(char *buf, size_t size, uint32_t sec)
+{
+    if (sec == 0) {
+        buf[0] = '\0';
+    } else if (sec < 60) {
+        snprintf(buf, size, " (%us)", (unsigned)sec);
+    } else if (sec < 3600) {
+        snprintf(buf, size, " (%umin)", (unsigned)(sec / 60));
+    } else {
+        snprintf(buf, size, " (%uh%02u)", (unsigned)(sec / 3600),
+                 (unsigned)((sec % 3600) / 60));
+    }
+}
+
+static void rebuild_activity(void)
+{
+    lv_obj_clean(s_activity_list);
+
+    /* estático: só a task da LVGL mexe, e 64 eventos são ~3 KB fora da stack */
+    static activity_event_t ev[ACTIVITY_CAP];
+    int n = activity_log_get(ev, ACTIVITY_CAP);
+    if (n == 0) {
+        lv_obj_t *empty = lv_label_create(s_activity_list);
+        lv_label_set_text(empty, T(STR_NO_ACTIVITY));
+        lv_obj_set_style_text_font(empty, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(empty, UI_MUTED, 0);
+        return;
+    }
+
+    time_t now = time(NULL);
+
+    /* cabeçalho: totais do dia (desde a meia-noite local) */
+    struct tm tmd;
+    localtime_r(&now, &tmd);
+    tmd.tm_hour = 0;
+    tmd.tm_min = 0;
+    tmd.tm_sec = 0;
+    uint32_t day_start = (uint32_t)mktime(&tmd);
+    activity_summary_t sm = activity_summarize(ev, n, day_start);
+    char act[24];
+    if (sm.active_secs == 0) {
+        act[0] = '\0';
+    } else if (sm.active_secs < 3600) {
+        snprintf(act, sizeof(act), "  \xC2\xB7  %umin", (unsigned)(sm.active_secs / 60));
+    } else {
+        snprintf(act, sizeof(act), "  \xC2\xB7  %uh%02u", (unsigned)(sm.active_secs / 3600),
+                 (unsigned)((sm.active_secs % 3600) / 60));
+    }
+    lv_obj_t *sum = lv_label_create(s_activity_list);
+    lv_label_set_text_fmt(sum, "%s   \xE2\x97\x8F%u   " LV_SYMBOL_BELL "%u   " LV_SYMBOL_OK "%u%s",
+                          T(STR_TODAY), sm.started, sm.blocked, sm.done, act);
+    lv_obj_set_style_text_font(sum, &lv_font_ui_bold_16, 0);
+    lv_obj_set_style_text_color(sum, UI_TEXT, 0);
+    lv_obj_set_style_pad_bottom(sum, 4, 0);
+
+    for (int i = 0; i < n; i++) {
+        const activity_event_t *e = &ev[i];
+        const char *icon;
+        const char *verb;
+        lv_color_t color;
+        switch (e->type) {
+        case ACT_BLOCKED:
+            icon = LV_SYMBOL_BELL; color = UI_BLOCKED; verb = T(STR_EV_BLOCKED);
+            break;
+        case ACT_DONE:
+            icon = LV_SYMBOL_OK;   color = UI_IDLE;    verb = T(STR_EV_DONE);
+            break;
+        default:
+            icon = "\xE2\x97\x8F"; color = UI_WORKING; verb = T(STR_EV_STARTED);
+            break;
+        }
+        char when[16];
+        char dur[16];
+        fmt_when(when, sizeof(when), now, e->epoch);
+        fmt_dur(dur, sizeof(dur), e->dur);
+
+        lv_obj_t *row = lv_label_create(s_activity_list);
+        lv_label_set_text_fmt(row, "%s  %s  %s \xC2\xB7 %s %s%s",
+                              icon, when, e->agent, e->project, verb, dur);
+        lv_obj_set_style_text_font(row, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(row, color, 0);
+        lv_obj_set_width(row, lv_pct(100));
+        lv_label_set_long_mode(row, LV_LABEL_LONG_DOT);
+    }
+}
+
 /** Cor da barra por nível de uso: verde, âmbar, laranja, vermelho. */
 static lv_color_t limit_color(uint8_t pct)
 {
@@ -1477,6 +1599,9 @@ static void ui_timer_cb(lv_timer_t *timer)
     if (s_tab == UI_TAB_DASH) {
         rebuild_dash_cards();
     }
+    if (s_tab == UI_TAB_ACTIVITY) {
+        rebuild_activity();
+    }
     refresh_detail();
 }
 
@@ -1488,6 +1613,7 @@ void herdr_ui_init(void)
     build_home();
     build_sessions();
     build_dash();
+    build_activity();
     build_detail();
     build_keyboard_overlay();
     herdr_ui_settings_init(dock_cb);

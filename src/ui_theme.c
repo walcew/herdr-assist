@@ -95,7 +95,7 @@ lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
 {
     /* mesma ordem do enum ui_tab_t: o índice do laço vira a aba no callback */
     static const char *icons[] = { LV_SYMBOL_HOME, LV_SYMBOL_LIST, UI_ICON_DASH,
-                                   LV_SYMBOL_SETTINGS };
+                                   LV_SYMBOL_EYE_OPEN, LV_SYMBOL_SETTINGS };
 
     /* Deitado embaixo em retrato; em pé à esquerda em paisagem, que é onde
        sobra largura e o polegar alcança sem cobrir o conteúdo. */
