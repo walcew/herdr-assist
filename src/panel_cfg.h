@@ -60,6 +60,7 @@ typedef struct {
     panel_host_t hosts[CFG_MAX_HOSTS];
     uint8_t      lang;                  /* ui_lang_t; 0 (en_US) é o de fábrica */
     uint8_t      orient;                /* cfg_orient_t; 0 (retrato) é o de fábrica */
+    uint8_t      goku_mode;             /* goku_mode_t; 0 (ascendente) é o de fábrica */
 } panel_cfg_t;
 
 /** Inicializa a NVS e carrega a config salva (zerada se não houver). */
