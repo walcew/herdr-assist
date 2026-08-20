@@ -33,7 +33,7 @@ def message_cost(usage: dict, model_id: str) -> float:
 
 def fmt_usd(v: float) -> str:
     """"~US$ 4,20" / "~US$ 1.240" — vírgula decimal, ponto de milhar, prefixo ~."""
-    if v >= 100:                       # valores grandes: sem centavos
+    if round(v, 2) >= 100:             # valores grandes: sem centavos
         s = "%.0f" % v
     else:
         s = "%.2f" % v
