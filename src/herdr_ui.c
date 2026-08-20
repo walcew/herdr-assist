@@ -959,6 +959,16 @@ static lv_color_t limit_color(uint8_t pct)
     return UI_BLOCKED;
 }
 
+/* Cor da barra fundindo teto e ritmo. Sem janela conhecida, cai na cor por
+   % absoluto de limit_color (comportamento antigo). */
+static lv_color_t row_bar_color(uint8_t pct, int expected, bool has_window)
+{
+    if (!has_window) return limit_color(pct);
+    if (pct >= 90) return UI_BLOCKED;         /* perto do teto: aviso máximo */
+    if ((int)pct > expected) return UI_WORKING; /* adiantado no ritmo */
+    return UI_IDLE;                            /* no ritmo ou folgado */
+}
+
 /**
  * Escreve um instante de forma curta: hora se a menos de 24h, senão o dia da
  * semana. Devolve false (e buf vazio) sem SNTP sincronizado ou sem instante —
@@ -1054,6 +1064,15 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
         const herdr_limit_row_t *r = &l->rows[i];
         lv_coord_t y = (lv_coord_t)(DASH_ROWS_Y + 11 + i * DASH_ROW_BLOCK);
 
+        /* consumo esperado: onde a barra estaria no ritmo linear da janela */
+        bool has_window = (r->window_s > 0 && (time_t)r->resets_at > now);
+        int expected = 0;
+        if (has_window) {
+            uint32_t remaining = (uint32_t)((time_t)r->resets_at - now);
+            if (remaining > r->window_s) remaining = r->window_s;
+            expected = (int)(((uint32_t)(r->window_s - remaining) * 100u) / r->window_s);
+        }
+
         lv_obj_t *lab = lv_label_create(card);
         lv_label_set_text(lab, r->label);
         lv_obj_set_style_text_font(lab, &lv_font_ui_14, 0);
@@ -1089,10 +1108,23 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
         lv_obj_set_style_bg_color(bar, UI_BORDER, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_radius(bar, DASH_BAR_H / 2, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(bar, limit_color(r->pct), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(bar, row_bar_color(r->pct, expected, has_window), LV_PART_INDICATOR);
         lv_obj_set_style_radius(bar, DASH_BAR_H / 2, LV_PART_INDICATOR);
         lv_bar_set_range(bar, 0, 100);
         lv_bar_set_value(bar, r->pct, LV_ANIM_OFF);
+
+        /* marcador do esperado: só quando conhecido e sem encostar nas pontas */
+        if (has_window && expected > 0 && expected < 100) {
+            lv_obj_t *mk = lv_obj_create(bar);
+            lv_obj_remove_style_all(mk);
+            lv_obj_set_size(mk, 2, DASH_BAR_H + 4);
+            lv_obj_set_style_bg_color(mk, UI_TEXT, 0);
+            lv_obj_set_style_bg_opa(mk, LV_OPA_COVER, 0);
+            lv_obj_set_style_radius(mk, 1, 0);
+            lv_obj_clear_flag(mk, LV_OBJ_FLAG_SCROLLABLE);
+            lv_coord_t mx = (lv_coord_t)(((int)DASH_BAR_W * expected) / 100 - 1);
+            lv_obj_align(mk, LV_ALIGN_LEFT_MID, mx, 0);
+        }
     }
 
     if (!l->ok) {
