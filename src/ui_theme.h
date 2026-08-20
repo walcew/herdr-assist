@@ -96,6 +96,7 @@ typedef enum {
     UI_TAB_HOME = 0,
     UI_TAB_SESSIONS,
     UI_TAB_DASH,
+    UI_TAB_ACTIVITY,
     UI_TAB_SETTINGS,
 } ui_tab_t;
 
