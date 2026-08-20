@@ -35,13 +35,16 @@ def _jwt_email(id_token: str) -> str:
         data = json.loads(base64.urlsafe_b64decode(payload))
     except (ValueError, IndexError, json.JSONDecodeError):
         return ""
-    if isinstance(data.get("email"), str):
-        return data["email"]
-    for v in data.values():  # claims namespaced: pega o primeiro que pareça e-mail
-        if isinstance(v, str) and "@" in v:
-            return v
-        if isinstance(v, dict) and isinstance(v.get("email"), str):
-            return v["email"]
+    try:
+        if isinstance(data.get("email"), str):
+            return data["email"]
+        for v in data.values():  # claims namespaced: pega o primeiro que pareça e-mail
+            if isinstance(v, str) and "@" in v:
+                return v
+            if isinstance(v, dict) and isinstance(v.get("email"), str):
+                return v["email"]
+    except (AttributeError, TypeError):
+        return ""
     return ""
 
 
@@ -59,7 +62,7 @@ def read_account_email(agent: str, config_dir: str, home: str) -> str:
             with open(os.path.join(config_dir, "auth.json"), encoding="utf-8") as fh:
                 tok = (json.load(fh).get("tokens") or {})
             return _jwt_email(tok.get("id_token", "")) or tok.get("account_id", "")
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, AttributeError, TypeError):
         return ""
     return ""
 
