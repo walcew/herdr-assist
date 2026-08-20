@@ -20,6 +20,7 @@ static struct {
     herdr_conn_state_t conn[CFG_MAX_HOSTS];
     herdr_limits_t limits[CFG_MAX_HOSTS][HERDR_MAX_PROVIDERS];
     int limit_count[CFG_MAX_HOSTS];
+    herdr_cost_t cost;
     uint32_t generation;
     SemaphoreHandle_t mutex;
 } s_model;
@@ -232,6 +233,15 @@ void herdr_model_set_limits(int host, const herdr_limits_t *limits, int count)
     unlock();
 }
 
+void herdr_model_set_cost(const herdr_cost_t *cost)
+{
+    lock();
+    s_model.cost = *cost;
+    s_model.cost.valid = true;
+    bump();
+    unlock();
+}
+
 int herdr_model_get_agents(herdr_agent_t *out, int max)
 {
     lock();
@@ -256,6 +266,15 @@ int herdr_model_get_limits(herdr_limits_t *out, int max)
     }
     unlock();
     return n;
+}
+
+bool herdr_model_get_cost(herdr_cost_t *out)
+{
+    lock();
+    *out = s_model.cost;
+    bool valid = s_model.cost.valid;
+    unlock();
+    return valid;
 }
 
 bool herdr_model_get_pane_content(char *pane_id, size_t id_size, int *host,
