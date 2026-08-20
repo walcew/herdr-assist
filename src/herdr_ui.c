@@ -693,6 +693,14 @@ static void set_elapsed_text(lv_obj_t *label, time_t now, uint32_t since)
     }
 }
 
+/* Cor do medidor de contexto por preenchimento (aviso de compactação). */
+static lv_color_t ctx_color(uint8_t pct)
+{
+    if (pct >= 90) return UI_BLOCKED;   /* vai compactar */
+    if (pct >= 70) return UI_WORKING;
+    return UI_IDLE;
+}
+
 static void add_session_row(int flat_idx, bool multi_acct)
 {
     const herdr_agent_t *a = &s_ui_agents[flat_idx];
@@ -720,9 +728,18 @@ static void add_session_row(int flat_idx, bool multi_acct)
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 26, -8);
 
+    /* Sub-linha: conta multi-acct mostra org · modelo (selo corp/pess cobre o
+       status via cor do dot); conta única cai no modelo, e sem modelo volta
+       ao par agente/host de sempre — sem host quando a lista já está
+       agrupada por ele. */
     lv_obj_t *sub = lv_label_create(row);
-    /* sem host quando a lista já está agrupada por ele */
-    if (s_group_by_host) {
+    if (multi_acct && a->account[0]) {
+        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s",
+                              a->org[0] ? a->org : "conta",
+                              a->model[0] ? a->model : a->agent);
+    } else if (a->model[0]) {
+        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s", a->model, i18n_status(a->status));
+    } else if (s_group_by_host) {
         lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s", a->agent, i18n_status(a->status));
     } else {
         lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s \xC2\xB7 %s",
@@ -732,21 +749,38 @@ static void add_session_row(int flat_idx, bool multi_acct)
     lv_obj_set_style_text_color(sub, UI_MUTED, 0);
     lv_obj_align(sub, LV_ALIGN_LEFT_MID, 26, 11);
 
-    /* Chip da conta: só aparece quando há mais de uma entre os agentes
-       visíveis (multi_acct) e esta linha conhece a sua — uma conta só
-       segue sem sufixo, igual ao critério "multi" da Dash. Encolhe o sub
-       para o chip não invadi-lo quando a conta for um e-mail comprido. */
-    if (multi_acct && a->account[0]) {
-        lv_obj_set_width(sub, LV_PCT(60));
-        lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
+    /* Selo corp/pess (pill): prefixo curto colorido antes da sub, só quando
+       há mais de uma conta entre os agentes visíveis e esta linha conhece a
+       sua org. "corp"/"pess" somam ~28px em ui_12 (medido nos adv_w da
+       fonte) — 34 dá folga de ~6px antes da sub começar. */
+    if (multi_acct && a->account[0] && a->org[0]) {
+        lv_obj_t *chip = lv_label_create(row);
+        lv_label_set_text(chip, a->corp ? "corp" : "pess");
+        lv_obj_set_style_text_font(chip, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(chip, a->corp ? UI_CORP : UI_MUTED, 0);
+        lv_obj_align(chip, LV_ALIGN_LEFT_MID, 26, 11);
+        lv_obj_align(sub, LV_ALIGN_LEFT_MID, 26 + 34, 11);
+    }
 
-        lv_obj_t *acct = lv_label_create(row);
-        lv_label_set_text(acct, a->account);
-        lv_obj_set_style_text_font(acct, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(acct, UI_MUTED, 0);
-        lv_label_set_long_mode(acct, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(acct, 100);
-        lv_obj_align(acct, LV_ALIGN_RIGHT_MID, -4, 11);
+    /* Medidor de contexto: substitui o e-mail à direita (a org já foi para a
+       sub-linha). Só aparece quando a ponte reportou um valor. */
+    if (a->context_pct != 255) {
+        lv_obj_t *ctxlab = lv_label_create(row);
+        lv_label_set_text_fmt(ctxlab, "ctx %u%%", (unsigned)a->context_pct);
+        lv_obj_set_style_text_font(ctxlab, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(ctxlab, UI_MUTED, 0);
+        lv_obj_align(ctxlab, LV_ALIGN_RIGHT_MID, -4, 4);
+
+        lv_obj_t *cbar = lv_bar_create(row);
+        lv_obj_set_size(cbar, 60, 5);
+        lv_obj_align(cbar, LV_ALIGN_RIGHT_MID, -4, 16);
+        lv_obj_set_style_bg_color(cbar, UI_BORDER, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(cbar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(cbar, 2, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(cbar, ctx_color(a->context_pct), LV_PART_INDICATOR);
+        lv_obj_set_style_radius(cbar, 2, LV_PART_INDICATOR);
+        lv_bar_set_range(cbar, 0, 100);
+        lv_bar_set_value(cbar, a->context_pct, LV_ANIM_OFF);
     }
 
     /* Só quem está working ganha cronômetro. Mudar de status muda a geração e
