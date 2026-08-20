@@ -250,5 +250,12 @@ void fw_update_init(void)
     }
 #endif
     s_events = xEventGroupCreate();
+#ifndef HERDR_DISABLE_OTA
     xTaskCreate(fw_update_task, "fw_update", 8192, NULL, 5, NULL);
+#else
+    /* Fork custom: sem checagem de OTA. O estado fica IDLE, então o toast de
+       "versão nova" nunca aparece e o painel não se auto-substitui pelo
+       release upstream (a confirmação de rollback acima já rodou). */
+    ESP_LOGI(TAG, "OTA desativado (HERDR_DISABLE_OTA)");
+#endif
 }
