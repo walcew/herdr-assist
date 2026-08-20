@@ -699,8 +699,12 @@ def collect_claude(config_dir: str) -> dict:
             label = clip("7d " + model, 16)     # cabe em label[20] mesmo truncado
         else:
             label = clip(kind, 16)              # kind novo aparece cru, não some
+        wsec = (18000 if kind == "session"
+                else 604800 if kind in ("weekly_all", "weekly_scoped")
+                else 0)
         rows.append({"label": label, "pct": int(round(lim.get("percent") or 0)),
-                     "resets_at": iso_epoch(lim["resets_at"]) if lim.get("resets_at") else 0})
+                     "resets_at": iso_epoch(lim["resets_at"]) if lim.get("resets_at") else 0,
+                     "window_s": wsec})
     # o plano vem do próprio arquivo de credencial: default_claude_max_20x → Max 20x
     tier = cred.get("rateLimitTier", "")
     plan = (tier.split("claude_")[-1].replace("_", " ").capitalize()
@@ -730,7 +734,8 @@ def collect_codex(config_dir: str) -> dict:
         label = ("%dd" % round(secs / 86400) if secs >= 86400
                  else "%dh" % max(1, round(secs / 3600)))
         rows.append({"label": label, "pct": int(round(win.get("used_percent") or 0)),
-                     "resets_at": round_min(win.get("reset_at") or 0)})
+                     "resets_at": round_min(win.get("reset_at") or 0),
+                     "window_s": int(secs)})
     return {"name": "Codex", "plan": (data.get("plan_type") or "").capitalize(),
             "limits": rows,
             "account": clip(read_account_email("codex", config_dir, HOME), 32)}
