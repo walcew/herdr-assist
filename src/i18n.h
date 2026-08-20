@@ -57,6 +57,10 @@ typedef enum {
     X(NO_USAGE,        "No usage data yet.",          "Sem dados de uso ainda.")             \
     X(STALE,           "not updated",                 "sem atualizar")                       \
     X(STALE_SINCE,     "not updated since %s",        "sem atualizar desde %s")              \
+    X(COST_TITLE,      "Cost · estimate",             "Custo · estimativa")                  \
+    X(COST_NOW,        "Now",                         "Agora")                               \
+    X(COST_WEEK,       "Week",                        "Semana")                              \
+    X(COST_LIFE,       "Lifetime",                    "Vitalício")                           \
     /* --- detalhe da sessão --- */                                                          \
     X(LOADING,         "loading...",                  "carregando...")                       \
     X(PROMPT_PH,       "Prompt for the agent...",     "Prompt para o agente...")             \

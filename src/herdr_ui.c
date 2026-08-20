@@ -1083,8 +1083,19 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
         lv_obj_center(img);
     }
 
+    /* org conhecida numa conta multi-acct: pill corp/pess + org no lugar do
+       e-mail (mesmo padrão do selo em add_session_row, Sessões 2.0). Sem org
+       (ponte antiga ou conta única) o título antigo continua valendo. */
+    bool org_pill = show_acct && l->org[0];
+
     lv_obj_t *name = lv_label_create(card);
-    if (show_host && show_acct) {
+    if (org_pill) {
+        if (show_host) {
+            lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", host_label(l->host), l->name);
+        } else {
+            lv_label_set_text(name, l->name);
+        }
+    } else if (show_host && show_acct) {
         lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", l->name, l->account);
     } else if (show_host) {
         lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", host_label(l->host), l->name);
@@ -1095,9 +1106,42 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
     }
     lv_obj_set_style_text_font(name, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(name, UI_TEXT, 0);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);   /* e-mail longo não estoura */
-    lv_obj_set_width(name, DASH_NAME_MAX_W);           /* largura até o slot do plano */
+    if (!org_pill) {
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);   /* e-mail longo não estoura */
+        lv_obj_set_width(name, DASH_NAME_MAX_W);           /* largura até o slot do plano */
+    }
     lv_obj_align_to(name, slot, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+
+    if (org_pill) {
+        /* nome sem largura fixa (provedor/host curtos, não truncam) para o
+           pill encostar nele; o resto do orçamento de DASH_NAME_MAX_W vai
+           para a org, que trunca se precisar */
+        lv_obj_update_layout(name);
+        lv_coord_t used = (lv_coord_t)(lv_obj_get_width(name) + 6);
+
+        lv_obj_t *chip = lv_label_create(card);
+        lv_label_set_text(chip, l->corp ? "corp" : "pess");
+        lv_obj_set_style_text_font(chip, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(chip, l->corp ? UI_CORP : UI_MUTED, 0);
+        lv_obj_set_style_bg_color(chip, l->corp ? UI_CORP : UI_MUTED, 0);
+        lv_obj_set_style_bg_opa(chip, LV_OPA_20, 0);   /* fundo suave, pill discreto */
+        lv_obj_set_style_radius(chip, 8, 0);
+        lv_obj_set_style_pad_hor(chip, 5, 0);
+        lv_obj_set_style_pad_ver(chip, 1, 0);
+        lv_obj_align_to(chip, name, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+        lv_obj_update_layout(chip);
+        used = (lv_coord_t)(used + lv_obj_get_width(chip) + 6);
+
+        lv_obj_t *org = lv_label_create(card);
+        lv_label_set_text(org, l->org);
+        lv_obj_set_style_text_font(org, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(org, UI_MUTED, 0);
+        lv_label_set_long_mode(org, LV_LABEL_LONG_DOT);
+        lv_coord_t org_w = (lv_coord_t)(DASH_NAME_MAX_W - used);
+        if (org_w < 20) org_w = 20;   /* orçamento mínimo: org curta ainda aparece */
+        lv_obj_set_width(org, org_w);
+        lv_obj_align_to(org, chip, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+    }
 
     if (l->plan[0]) {
         lv_obj_t *plan = lv_label_create(card);
@@ -1107,6 +1151,17 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
         /* centralizado na altura do slot, como o align-items:center do design */
         lv_obj_align(plan, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X,
                      DASH_PAD_TOP + (DASH_LOGO - 14) / 2);
+    }
+
+    if (l->agents > 0) {
+        /* contagem por conta: canto direito, colada no fim do cabeçalho —
+           ainda cabe antes do primeiro bloco de limite (DASH_ROWS_Y + 11) */
+        lv_obj_t *cnt = lv_label_create(card);
+        lv_label_set_text_fmt(cnt, "%u (%u ativos)",
+                              (unsigned)l->agents, (unsigned)l->agents_working);
+        lv_obj_set_style_text_font(cnt, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(cnt, UI_MUTED, 0);
+        lv_obj_align(cnt, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X, DASH_ROWS_Y - 6);
     }
 
     for (int i = 0; i < n; i++) {
@@ -1199,6 +1254,37 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
 static void rebuild_dash_cards(void)
 {
     lv_obj_clean(s_dash_list);
+
+    /* card de custo: só aparece depois do primeiro payload "cost" da ponte
+       (versões antigas da ponte nunca mandam, então o card some de vez) */
+    herdr_cost_t cost;
+    if (herdr_model_get_cost(&cost)) {
+        lv_obj_t *cc = ui_card(s_dash_list, 10);
+        lv_obj_set_size(cc, LV_PCT(100), 92);
+        struct { const char *lab; const char *val; } rows[3] = {
+            {T(STR_COST_NOW),  cost.now},
+            {T(STR_COST_WEEK), cost.week},
+            {T(STR_COST_LIFE), cost.life},
+        };
+        lv_obj_t *title = lv_label_create(cc);
+        lv_label_set_text(title, T(STR_COST_TITLE));   /* "Custo · estimativa" */
+        lv_obj_set_style_text_font(title, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(title, UI_TEXT, 0);
+        lv_obj_align(title, LV_ALIGN_TOP_LEFT, DASH_PAD_X, DASH_PAD_TOP);
+        for (int i = 0; i < 3; i++) {
+            lv_obj_t *l = lv_label_create(cc);
+            lv_label_set_text(l, rows[i].lab);
+            lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
+            lv_obj_set_style_text_color(l, UI_MUTED, 0);
+            lv_obj_align(l, LV_ALIGN_TOP_LEFT, DASH_PAD_X, 30 + i * 18);
+            lv_obj_t *v = lv_label_create(cc);
+            lv_label_set_text(v, rows[i].val[0] ? rows[i].val : "—");
+            lv_obj_set_style_text_font(v, &lv_font_ui_12, 0);
+            lv_obj_set_style_text_color(v, UI_TEXT, 0);
+            lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X, 30 + i * 18);
+        }
+    }
+
     s_ui_limit_count = herdr_model_get_limits(
         s_ui_limits, HERDR_MAX_PROVIDERS * CFG_MAX_HOSTS);
     if (s_ui_limit_count == 0) {
