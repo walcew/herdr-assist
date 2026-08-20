@@ -890,6 +890,9 @@ static void rebuild_session_rows(void)
 /* onde o primeiro bloco começa, logo abaixo do cabeçalho do card */
 #define DASH_ROWS_Y     (DASH_PAD_TOP + DASH_LOGO)
 #define DASH_BAR_W      (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD - 2 * DASH_PAD_X)
+/* largura do título (nome/host/conta) até o slot do plano, para o e-mail
+   longo truncar em vez de invadir o canto direito do card */
+#define DASH_NAME_MAX_W (LV_HOR_RES - DASH_LOGO - 4 * DASH_PAD_X - 60)
 
 static void build_dash(void)
 {
@@ -953,7 +956,7 @@ static const lv_img_dsc_t *provider_logo(const char *name)
     return NULL;
 }
 
-static void add_limits_card(const herdr_limits_t *l, bool show_host)
+static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_acct)
 {
     time_t now = time(NULL);
     int n = l->row_count;
@@ -986,13 +989,19 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host)
     }
 
     lv_obj_t *name = lv_label_create(card);
-    if (show_host) {
+    if (show_host && show_acct) {
+        lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", l->name, l->account);
+    } else if (show_host) {
         lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", host_label(l->host), l->name);
+    } else if (show_acct) {
+        lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", l->name, l->account);
     } else {
         lv_label_set_text(name, l->name);
     }
     lv_obj_set_style_text_font(name, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(name, UI_TEXT, 0);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);   /* e-mail longo não estoura */
+    lv_obj_set_width(name, DASH_NAME_MAX_W);           /* largura até o slot do plano */
     lv_obj_align_to(name, slot, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
 
     if (l->plan[0]) {
@@ -1085,7 +1094,17 @@ static void rebuild_dash_cards(void)
         multi |= s_ui_limits[i].host != s_ui_limits[0].host;
     }
     for (int i = 0; i < s_ui_limit_count; i++) {
-        add_limits_card(&s_ui_limits[i], multi);
+        /* mostra a conta quando há outra do MESMO provedor: sem isso, dois
+           cards "Claude" ficariam indistinguíveis */
+        bool show_acct = false;
+        for (int j = 0; j < s_ui_limit_count; j++) {
+            if (j != i && strcmp(s_ui_limits[j].name, s_ui_limits[i].name) == 0
+                && s_ui_limits[i].account[0]) {
+                show_acct = true;
+                break;
+            }
+        }
+        add_limits_card(&s_ui_limits[i], multi, show_acct);
     }
 }
 
