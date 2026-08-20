@@ -131,9 +131,12 @@ _req_id = 0
 pane_account: dict = {}          # pane_id -> (agent, config_dir)
 account_dirs: set = {(a, default_dir(a, HOME)) for a in CONFIG_VAR}
 acc_email_cache: dict = {}       # (agent, config_dir) -> e-mail (clipado)
-pane_pid_cache: dict = {}        # pane_id -> pid do processo em primeiro plano
+# Chave (pane_id, agent), não só pane_id: um agente trocado NO MESMO pane
+# (reinicia com outro CLI) precisa invalidar o pid cacheado — o pid do SO
+# mudou mesmo que o pane continue vivo.
+pane_pid_cache: dict = {}        # (pane_id, agent) -> pid do processo em 1º plano
 pid_env_cache: dict = {}         # pid -> env (só os config-dirs, já filtrado)
-_prev_agent_panes = [set()]      # composição de panes na última refresh_accounts
+_prev_agent_panes = [set()]      # {(pane_id, agent)} na última refresh_accounts
 
 
 async def pane_pid(pane_id: str):
@@ -145,46 +148,70 @@ async def pane_pid(pane_id: str):
     return procs[0].get("pid") if procs else None
 
 
-def _cached_env(pid):
-    """Ambiente do processo `pid`, lido uma vez e cacheado por pid.
+def _read_env_filtered(pid):
+    """Ambiente do processo `pid`, já filtrado só às chaves de CONFIG_VAR.
 
-    Guarda só as chaves de CONFIG_VAR (CLAUDE_CONFIG_DIR/CODEX_HOME) — nada
-    além do config-dir fica em memória.
+    Bloqueante (ctypes no Windows, /proc no Linux, `ps` com timeout no macOS —
+    até ~5s no pior caso): só chamar de dentro de um executor, nunca direto do
+    event loop. Guarda só o config-dir — nada mais do ambiente fica em memória.
     """
-    if pid not in pid_env_cache:
-        env = read_process_env(pid)
-        pid_env_cache[pid] = {k: env[k] for k in CONFIG_VAR.values() if k in env}
-    return pid_env_cache[pid]
+    env = read_process_env(pid)
+    return {k: env[k] for k in CONFIG_VAR.values() if k in env}
+
+
+def _cached_env(pid):
+    """Ambiente já cacheado de um pid — leitura pura, sem I/O.
+
+    Depende de refresh_accounts ter pré-populado pid_env_cache no executor
+    antes de chamar accounts.discover(); por isso não dispara `read_process_env`
+    aqui, ao contrário de antes (isso bloquearia o event loop).
+    """
+    return pid_env_cache.get(pid, {})
 
 
 async def refresh_accounts(panes) -> None:
     """Recalcula pane_account/account_dirs/acc_email_cache.
 
-    Chamada só quando a composição de panes muda (ver push_agents) — não a
-    cada ciclo de reconciliação de 1s.
+    Chamada só quando a composição de panes (pane_id, agent) muda (ver
+    push_agents) — não a cada ciclo de reconciliação de 1s. Todo I/O
+    bloqueante (leitura de ambiente por pid) roda num executor: o event loop
+    não pode travar enquanto ctypes/`/proc`/`ps` respondem.
     """
     global pane_account, account_dirs, acc_email_cache
 
-    async def get_pid(pid_pane):
-        if pid_pane not in pane_pid_cache:
-            pane_pid_cache[pid_pane] = await pane_pid(pid_pane)
-        return pane_pid_cache[pid_pane]
+    live_keys = {(p["pane_id"], p.get("agent")) for p in panes}
+    for k in list(pane_pid_cache):   # poda pid cache de panes/agentes que sumiram
+        if k not in live_keys:
+            pane_pid_cache.pop(k, None)
 
-    # discover() é síncrona; resolvemos os pids antes e passamos um lookup pronto
-    pids = {}
-    for p in panes:
-        if p.get("agent") in CONFIG_VAR:
-            pids[p["pane_id"]] = await get_pid(p["pane_id"])
+    # resolve os pids que faltam, concorrente (cada um já é I/O não-bloqueante
+    # via cli_run/subprocess assíncrono, então gather em vez de await sequencial)
+    targets = [p for p in panes if p.get("agent") in CONFIG_VAR]
+    to_resolve = [p for p in targets
+                 if (p["pane_id"], p.get("agent")) not in pane_pid_cache]
+    if to_resolve:
+        resolved = await asyncio.gather(*(pane_pid(p["pane_id"]) for p in to_resolve))
+        for p, pid in zip(to_resolve, resolved):
+            pane_pid_cache[(p["pane_id"], p.get("agent"))] = pid
+    pids = {p["pane_id"]: pane_pid_cache.get((p["pane_id"], p.get("agent")))
+           for p in targets}
+
+    # leitura de ambiente é bloqueante — todas de uma vez, fora do event loop
+    new_pids = {pid for pid in pids.values() if pid and pid not in pid_env_cache}
+    if new_pids:
+        loop = asyncio.get_running_loop()
+        envs = await loop.run_in_executor(
+            None, lambda ps=new_pids: {p: _read_env_filtered(p) for p in ps})
+        pid_env_cache.update(envs)
+
+    # discover() é síncrona; a essa altura pid_env_cache já tem tudo que ela
+    # precisa, então _cached_env não faz I/O nenhum aqui dentro
     pane_account, account_dirs = accounts.discover(
         panes, lambda pane: pids.get(pane), _cached_env, HOME)
     acc_email_cache = {(a, d): clip(read_account_email(a, d, HOME), 32)
                        for (a, d) in account_dirs}
-    # poda caches de panes/pids que sumiram
-    live_panes = {p["pane_id"] for p in panes}
-    for k in list(pane_pid_cache):
-        if k not in live_panes:
-            pane_pid_cache.pop(k, None)
-    live_pids = set(pids.values())
+
+    live_pids = {pid for pid in pids.values() if pid}  # poda env de pids sumidos
     for k in list(pid_env_cache):
         if k not in live_pids:
             pid_env_cache.pop(k, None)
@@ -475,10 +502,12 @@ async def push_agents() -> set[str] | None:
     if not result:
         return None
     panes = result.get("panes", [])
-    # Composição de panes (todos, não só os com agente): é ela que decide troca
-    # de conta (login/logout, pane novo de outra conta), então o refresh roda
-    # sobre `panes` inteiro, não sobre a lista já filtrada de agentes.
-    new_set = {p["pane_id"] for p in panes}
+    # Composição de panes (todos, não só os com agente) chaveada por
+    # (pane_id, agent): é ela que decide troca de conta (login/logout, pane
+    # novo de outra conta, OU o mesmo pane trocando de agente — o pid do SO
+    # muda mesmo com o pane_id estável), então o refresh roda sobre `panes`
+    # inteiro, não sobre a lista já filtrada de agentes.
+    new_set = {(p["pane_id"], p.get("agent")) for p in panes}
     if new_set != _prev_agent_panes[0]:
         _prev_agent_panes[0] = new_set
         await refresh_accounts(panes)
