@@ -44,6 +44,7 @@ import urllib.error
 import urllib.request
 
 import accounts
+import cost
 import transcript
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
 from proc_env import read_process_env  # noqa: E402
@@ -144,6 +145,16 @@ _prev_agent_panes = [set()]      # {(pane_id, agent)} na última refresh_account
 # por pane nem clear() a cada miss): dois+ panes claude concorrentes não se
 # expulsam do cache. push_agents poda as entradas cujo path saiu da rodada.
 tx_cache: dict = {}   # path -> (mtime, {"model","context_pct"} | None)
+# Mapa pane→transcript da última rodada de push_agents (mesma resolução por
+# UUID/cwd usada para tx_cache): é o que _session_paths() devolve para a
+# agregação de custo "agora" sem precisar chamar o Herdr de novo.
+pane_paths: dict = {}  # pane_id -> transcript path
+
+# Custo (ver cost.py): cache por (mtime, size) — só relê um transcript se ele
+# cresceu — e snapshot para o dedup do broadcast "cost", nos mesmos moldes de
+# tx_cache/last_limits_snapshot.
+cost_cache: dict = {}        # path -> (mtime, size, {"total","days"})
+last_cost_snapshot = ""      # dedup do payload cost
 
 
 async def pane_pid(pane_id: str):
@@ -497,6 +508,42 @@ def trim_ansi(raw: str, keep: int) -> str:
     return "\n".join(lines)
 
 
+def _resolve_transcript_path(p: dict, acc: tuple) -> str | None:
+    """Transcript do Claude Code para o pane `p`, na conta `acc` (agent, config_dir).
+
+    Por UUID (`agent_session`) quando o Herdr o expõe; senão pelo cwd, achando
+    o dir de projects/ e pegando o .jsonl mais recente por mtime (sessão
+    ativa). Extraída de push_agents porque a mesma resolução alimenta agora
+    também _session_paths()/aggregate_cost — glob e stat são baratos o
+    bastante para rodar direto no event loop (nunca abrir/ler o jsonl aqui).
+    """
+    sess = (p.get("agent_session") or {}).get("value")
+    if sess:
+        hits = glob.glob(os.path.join(acc[1], "projects", "*", sess + ".jsonl"))
+        return hits[0] if hits else None
+    cwd = p.get("cwd")
+    if not cwd:
+        return None
+    enc = transcript.encode_cwd(cwd)
+    hits = glob.glob(os.path.join(acc[1], "projects", enc, "*.jsonl"))
+    if not hits:
+        return None
+    try:
+        return max(hits, key=os.path.getmtime)
+    except OSError:
+        return None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
+
+
+def _session_paths() -> list:
+    """Transcripts dos panes claude ativos na última rodada de push_agents.
+
+    Não faz I/O: só devolve o mapa pane→transcript já resolvido (mesma
+    resolução de _resolve_transcript_path). Chamada direto do event loop pela
+    coleta de custo, antes de agregar (que aí sim vai para o executor).
+    """
+    return list(pane_paths.values())
+
+
 async def push_agents() -> set[str] | None:
     """Reconcilia com o Herdr; envia aos painéis só o que de fato mudou.
 
@@ -504,7 +551,7 @@ async def push_agents() -> set[str] | None:
     saber quando reassinar, ou None se o Herdr não respondeu — que não é motivo
     para reassinar.
     """
-    global last_snapshot, working_since
+    global last_snapshot, working_since, pane_paths
     result = await herdr_request("pane.list")
     if not result:
         return None
@@ -549,26 +596,9 @@ async def push_agents() -> set[str] | None:
             org, corp = accounts.org_and_corp(a["account"])
             if org:
                 a["org"], a["corp"] = org, corp
-        sess = (p.get("agent_session") or {}).get("value")
         path = None
         if p.get("agent") == "claude" and acc:
-            if sess:
-                hits = glob.glob(os.path.join(acc[1], "projects", "*", sess + ".jsonl"))
-                if hits:
-                    path = hits[0]
-            else:
-                # Sem UUID (agent_session None, ex.: algumas contas work):
-                # acha pelo cwd o dir de projects/ e pega o .jsonl mais
-                # recente por mtime — é a sessão ativa.
-                cwd = p.get("cwd")
-                if cwd:
-                    enc = transcript.encode_cwd(cwd)
-                    hits = glob.glob(os.path.join(acc[1], "projects", enc, "*.jsonl"))
-                    if hits:
-                        try:
-                            path = max(hits, key=os.path.getmtime)
-                        except OSError:
-                            path = None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
+            path = _resolve_transcript_path(p, acc)
         if path:
             try:
                 mt = os.path.getmtime(path)
@@ -610,6 +640,7 @@ async def push_agents() -> set[str] | None:
     for k in list(tx_cache):
         if k not in live_paths:
             tx_cache.pop(k, None)
+    pane_paths = pane_path  # publica o mapa desta rodada para _session_paths()
 
     # reconstruir em vez de mutar poda de graça quem saiu de working ou sumiu
     working_since = new_since
@@ -866,25 +897,92 @@ def collect_limits(account_dirs) -> list:
     return providers
 
 
+def _file_cost_cached(path):
+    """Custo de um transcript, cacheado por (mtime, size) — só relê se cresceu.
+
+    Bloqueante (abre e lê o jsonl inteiro via cost.file_cost): só chamar de
+    dentro do executor, nunca do event loop — o mesmo cuidado dos demais
+    caches de I/O desta ponte (tx_cache, pid_env_cache).
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (st.st_mtime, st.st_size)
+    ent = cost_cache.get(path)
+    if not ent or (ent[0], ent[1]) != key:
+        m = cost.file_cost(path)
+        cost_cache[path] = (key[0], key[1], m or {"total": 0.0, "days": {}})
+    return cost_cache[path][2]
+
+
+def aggregate_cost(account_dirs, session_paths) -> dict:
+    """Custo agora/semana/vitalício, formatados (ver cost.fmt_usd).
+
+    Bloqueante (varredura de todos os transcripts das contas claude para o
+    vitalício): só rodar no executor, nunca no event loop. `now` soma só os
+    transcripts de `session_paths` — os panes claude ativos agora, via
+    _session_paths(); `week` soma os dias da janela [hoje-6..hoje] de TODOS os
+    transcripts das contas claude descobertas; `life` é o total de todos eles.
+    """
+    seen = set()
+    life = 0.0
+    week = 0.0
+    today = datetime.date.today()
+    window = {(today - datetime.timedelta(days=i)).isoformat() for i in range(7)}
+    for agent, cdir in account_dirs:
+        if agent != "claude":
+            continue
+        for p in glob.glob(os.path.join(cdir, "projects", "*", "*.jsonl")):
+            if p in seen:
+                continue
+            seen.add(p)
+            m = _file_cost_cached(p)
+            if not m:
+                continue
+            life += m["total"]
+            for day, c in m["days"].items():
+                if day in window:
+                    week += c
+    now = 0.0
+    for p in session_paths:                 # transcripts dos panes claude ativos
+        m = _file_cost_cached(p)
+        if m:
+            now += m["total"]
+    return {"now": cost.fmt_usd(now), "week": cost.fmt_usd(week),
+            "life": cost.fmt_usd(life)}
+
+
 async def limits_loop() -> None:
-    """Coleta o uso de limites e difunde com o mesmo dedup de agents.
+    """Coleta uso de limites e custo, difundindo cada um com seu próprio dedup.
 
     Passo curto com contabilização própria em vez de dormir o ciclo inteiro:
     um painel que conecta depois de ociosidade espera LIMITS_STEP_S pelo
     primeiro dado, não LIMITS_POLL_S. Sem painel conectado, nada é coletado.
+    Custo entra no mesmo ciclo de limites (mesma cadência LIMITS_POLL_S): não
+    há motivo para um laço próprio só para variar o passo.
     """
-    global last_limits_snapshot
+    global last_limits_snapshot, last_cost_snapshot
     last = None   # sentinela: a base do monotonic varia por plataforma
     while True:
         if clients and (last is None or time.monotonic() - last >= LIMITS_POLL_S):
             last = time.monotonic()
-            providers = await asyncio.get_running_loop().run_in_executor(
+            loop = asyncio.get_running_loop()
+            providers = await loop.run_in_executor(
                 None, collect_limits, set(account_dirs))
             snapshot = json.dumps({"type": "limits", "providers": providers},
                                   separators=(",", ":"))
             if snapshot != last_limits_snapshot:
                 last_limits_snapshot = snapshot
                 await broadcast_line(snapshot)
+
+            costs = await loop.run_in_executor(
+                None, aggregate_cost, set(account_dirs), _session_paths())
+            cost_snapshot = json.dumps({"type": "cost", **costs},
+                                       separators=(",", ":"))
+            if cost_snapshot != last_cost_snapshot:
+                last_cost_snapshot = cost_snapshot
+                await broadcast_line(cost_snapshot)
         await asyncio.sleep(LIMITS_STEP_S)
 
 
@@ -994,6 +1092,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             await writer.drain()
         if last_limits_snapshot:  # limites: mesmo trio cache/push/entrega
             writer.write((last_limits_snapshot + "\n").encode())
+            await writer.drain()
+        if last_cost_snapshot:    # custo: mesmo trio cache/push/entrega
+            writer.write((last_cost_snapshot + "\n").encode())
             await writer.drain()
         while True:
             line = await reader.readline()
