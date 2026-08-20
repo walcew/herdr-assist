@@ -550,19 +550,35 @@ async def push_agents() -> set[str] | None:
             if org:
                 a["org"], a["corp"] = org, corp
         sess = (p.get("agent_session") or {}).get("value")
-        if p.get("agent") == "claude" and sess and acc:
-            hits = glob.glob(os.path.join(acc[1], "projects", "*", sess + ".jsonl"))
-            if hits:
-                path = hits[0]
-                try:
-                    mt = os.path.getmtime(path)
-                except OSError:
-                    mt = None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
-                if mt is not None:
-                    pane_path[pid] = path
-                    cached = tx_cache.get(path)
-                    if cached is None or cached[0] != mt:
-                        to_read[path] = mt
+        path = None
+        if p.get("agent") == "claude" and acc:
+            if sess:
+                hits = glob.glob(os.path.join(acc[1], "projects", "*", sess + ".jsonl"))
+                if hits:
+                    path = hits[0]
+            else:
+                # Sem UUID (agent_session None, ex.: algumas contas work):
+                # acha pelo cwd o dir de projects/ e pega o .jsonl mais
+                # recente por mtime — é a sessão ativa.
+                cwd = p.get("cwd")
+                if cwd:
+                    enc = transcript.encode_cwd(cwd)
+                    hits = glob.glob(os.path.join(acc[1], "projects", enc, "*.jsonl"))
+                    if hits:
+                        try:
+                            path = max(hits, key=os.path.getmtime)
+                        except OSError:
+                            path = None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
+        if path:
+            try:
+                mt = os.path.getmtime(path)
+            except OSError:
+                mt = None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
+            if mt is not None:
+                pane_path[pid] = path
+                cached = tx_cache.get(path)
+                if cached is None or cached[0] != mt:
+                    to_read[path] = mt
         if status == "working":
             # só o primeiro ciclo em working cria o carimbo; os seguintes o herdam
             new_since[pid] = working_since.get(pid, now)
