@@ -140,23 +140,10 @@ pane_pid_cache: dict = {}        # (pane_id, agent) -> pid do processo em 1º pl
 pid_env_cache: dict = {}         # pid -> env (só os config-dirs, já filtrado)
 _prev_agent_panes = [set()]      # {(pane_id, agent)} na última refresh_accounts
 
-# Métricas (model, context_pct) do transcript do pane claude ativo, cacheadas
-# por (path, mtime): só 1 sessão por pane é lida por vez, então o cache não
-# cresce — troca de pane ou nova mensagem invalida a entrada e relê.
-tx_cache: dict = {}   # (path, mtime) -> {"model","context_pct"}
-
-
-def _session_metrics_cached(path):
-    """Métricas do transcript em `path`, relendo só quando o arquivo muda."""
-    try:
-        mt = os.path.getmtime(path)
-    except OSError:
-        return None
-    key = (path, mt)
-    if key not in tx_cache:
-        tx_cache.clear()          # 1 sessão por pane; cache pequeno, sem crescer
-        tx_cache[key] = transcript.session_metrics(path)
-    return tx_cache[key]
+# Métricas (model, context_pct) por transcript, uma entrada por CAMINHO (não
+# por pane nem clear() a cada miss): dois+ panes claude concorrentes não se
+# expulsam do cache. push_agents poda as entradas cujo path saiu da rodada.
+tx_cache: dict = {}   # path -> (mtime, {"model","context_pct"} | None)
 
 
 async def pane_pid(pane_id: str):
@@ -538,6 +525,13 @@ async def push_agents() -> set[str] | None:
     now = time.time()
     new_since = {}
     agents = []
+    # Fase A (no loop, barato): monta os agentes e, para cada pane claude
+    # elegível, resolve o path do transcript por glob e faz só o stat
+    # (getmtime é barato — abrir e ler o jsonl inteiro é que não pode rodar
+    # aqui). pane_path guarda o candidato deste ciclo; to_read só os misses
+    # (path ausente do cache ou com mtime diferente).
+    pane_path: dict = {}   # pane_id -> transcript path (candidatos deste ciclo)
+    to_read: dict = {}     # path -> mtime (misses a reler no executor)
     for p in panes:
         if not p.get("agent"):
             continue
@@ -558,15 +552,49 @@ async def push_agents() -> set[str] | None:
         sess = (p.get("agent_session") or {}).get("value")
         if p.get("agent") == "claude" and sess and acc:
             hits = glob.glob(os.path.join(acc[1], "projects", "*", sess + ".jsonl"))
-            m = _session_metrics_cached(hits[0]) if hits else None
-            if m:
-                a["model"] = m["model"]
-                a["context_pct"] = m["context_pct"]
+            if hits:
+                path = hits[0]
+                try:
+                    mt = os.path.getmtime(path)
+                except OSError:
+                    mt = None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
+                if mt is not None:
+                    pane_path[pid] = path
+                    cached = tx_cache.get(path)
+                    if cached is None or cached[0] != mt:
+                        to_read[path] = mt
         if status == "working":
             # só o primeiro ciclo em working cria o carimbo; os seguintes o herdam
             new_since[pid] = working_since.get(pid, now)
             a["since"] = int(new_since[pid])
         agents.append(a)
+
+    # Fase B (executor): só os transcripts que mudaram de mtime, fora do event
+    # loop — ler um jsonl inteiro é I/O bloqueante, o mesmo cuidado do
+    # _read_env_filtered/refresh_accounts do multi-conta.
+    if to_read:
+        loop = asyncio.get_running_loop()
+        fresh = await loop.run_in_executor(
+            None, lambda: {pth: (mt, transcript.session_metrics(pth))
+                           for pth, mt in to_read.items()})
+        tx_cache.update(fresh)
+
+    # Fase C (no loop): anexa model/context_pct a partir do cache já quente.
+    for a in agents:
+        path = pane_path.get(a["pane_id"])
+        cached = tx_cache.get(path) if path else None
+        m = cached[1] if cached else None
+        if m:
+            a["model"] = m["model"]
+            a["context_pct"] = m["context_pct"]
+
+    # Poda: só ficam no cache os transcripts de panes vivos neste ciclo —
+    # sem isso ele cresceria sem limite conforme sessões (panes) fecham.
+    live_paths = set(pane_path.values())
+    for k in list(tx_cache):
+        if k not in live_paths:
+            tx_cache.pop(k, None)
+
     # reconstruir em vez de mutar poda de graça quem saiu de working ou sumiu
     working_since = new_since
     known_panes.clear()
