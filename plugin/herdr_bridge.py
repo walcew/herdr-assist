@@ -42,6 +42,8 @@ import time
 import urllib.error
 import urllib.request
 
+from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
+
 SOCK = (os.environ.get("HERDR_SOCK")
         or os.environ.get("HERDR_SOCKET_PATH")  # fornecida pelo plugin do Herdr
         or os.path.expanduser("~/.config/herdr/herdr.sock"))
@@ -93,8 +95,14 @@ RECONCILE_IDLE_S = 5.0   # sem painel: só manter o cache morno
 LIMITS_POLL_S = 60.0     # cadência da coleta com painel conectado
 LIMITS_STEP_S = 5.0      # passo do laço: painel que conecta espera pouco
 LIMITS_HTTP_TIMEOUT = 10
-CLAUDE_CRED = os.path.expanduser("~/.claude/.credentials.json")
-CODEX_AUTH = os.path.expanduser("~/.codex/auth.json")
+LIMITS_MAX_CARDS = 8     # teto espelhado no firmware (HERDR_MAX_PROVIDERS)
+HOME = os.path.expanduser("~")  # injetável nos testes
+
+
+def _cred_path(agent: str, config_dir: str) -> str:
+    """Caminho da credencial do agente dentro do config-dir da conta."""
+    return os.path.join(config_dir, ".credentials.json" if agent == "claude"
+                        else "auth.json")
 
 clients: set[asyncio.StreamWriter] = set()
 known_panes: set[str] = set()
@@ -107,8 +115,8 @@ last_limits_snapshot = ""  # último {"type":"limits"} serializado que foi ao ar
 # Última coleta boa por provedor ({"data": ..., "at": epoch}): quando a coleta
 # falha, o painel recebe esses valores com ok=false e stale_since imutável —
 # um stale_since que andasse a cada falha quebraria o dedup do snapshot.
-limits_last_good: dict[str, dict] = {}
-limits_ok: dict[str, bool] = {}  # só para logar transições, não cada ciclo
+limits_last_good: dict[tuple[str, str], dict] = {}
+limits_ok: dict[tuple[str, str], bool] = {}  # só para logar transições, não cada ciclo
 # Controller de resolução: no máximo um pane travado por vez (o painel só abre
 # uma sessão de cada vez). proc é o `herdr terminal session control` vivo.
 ctl: dict = {"pane": None, "size": None, "proc": None}
@@ -547,15 +555,17 @@ def iso_epoch(s: str) -> int:
     return round_min(datetime.datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp())
 
 
-def collect_claude() -> dict:
+def collect_claude(config_dir: str) -> dict:
     """Uso do Claude Code pelo endpoint OAuth, com o token que o CLI renova.
 
     É o mesmo endpoint interno que alimenta o /usage do CLI; formato pode mudar
     sem aviso, e qualquer surpresa aqui vira falha do provedor, nunca crash
     (collect_limits embrulha tudo). O array limits[] já vem normalizado —
-    session (5h), weekly_all (7d) e weekly_scoped por modelo.
+    session (5h), weekly_all (7d) e weekly_scoped por modelo. `config_dir` é o
+    CLAUDE_CONFIG_DIR da conta (default ou não) — é dali que vêm credencial e
+    e-mail.
     """
-    with open(CLAUDE_CRED) as f:
+    with open(os.path.join(config_dir, ".credentials.json")) as f:
         cred = json.load(f)["claudeAiOauth"]
     if cred.get("expiresAt", 0) / 1000 <= time.time():
         # o CLI renova no próximo uso; request agora seria um 401 garantido
@@ -581,16 +591,18 @@ def collect_claude() -> dict:
     tier = cred.get("rateLimitTier", "")
     plan = (tier.split("claude_")[-1].replace("_", " ").capitalize()
             if tier else cred.get("subscriptionType", "").capitalize())
-    return {"name": "Claude", "plan": plan, "limits": rows}
+    return {"name": "Claude", "plan": plan, "limits": rows,
+            "account": clip(read_account_email("claude", config_dir, HOME), 32)}
 
 
-def collect_codex() -> dict:
+def collect_codex(config_dir: str) -> dict:
     """Uso do Codex pelo backend do ChatGPT, com o token que o CLI renova.
 
     Atenção ao reset_after_seconds: muda a cada segundo e por isso NÃO entra
     na saída — só o reset_at (epoch fixo), senão o dedup do snapshot morre.
+    `config_dir` é o CODEX_HOME da conta (default ou não).
     """
-    with open(CODEX_AUTH) as f:
+    with open(os.path.join(config_dir, "auth.json")) as f:
         tok = json.load(f)["tokens"]
     data = fetch_json("https://chatgpt.com/backend-api/wham/usage",
                       {"Authorization": "Bearer " + tok["access_token"],
@@ -606,32 +618,42 @@ def collect_codex() -> dict:
         rows.append({"label": label, "pct": int(round(win.get("used_percent") or 0)),
                      "resets_at": round_min(win.get("reset_at") or 0)})
     return {"name": "Codex", "plan": (data.get("plan_type") or "").capitalize(),
-            "limits": rows}
+            "limits": rows,
+            "account": clip(read_account_email("codex", config_dir, HOME), 32)}
 
 
-def collect_limits() -> list:
-    """Monta a lista de provedores, degradando com honestidade.
+def collect_limits(account_dirs) -> list:
+    """Monta a lista de provedores, um por conta, degradando com honestidade.
 
-    Três estados por provedor: credencial ausente → omitido (CLI não instalado
-    nesta máquina); falha com sucesso anterior → últimos valores com ok=false e
-    stale_since do último sucesso; falha sem histórico → omitido. Ordem fixa
-    dos provedores: a serialização precisa ser determinística para o dedup.
+    `account_dirs` é um iterável de (agent, config_dir) — as contas descobertas
+    nos panes ativos (ver accounts.discover). Três estados por provedor:
+    credencial ausente → omitido (CLI não instalado/conta sem login nesta
+    máquina); falha com sucesso anterior → últimos valores com ok=false e
+    stale_since do último sucesso; falha sem histórico → omitido. A ordenação
+    por (agent, config_dir) é o que garante determinismo — a serialização
+    precisa ser estável para o dedup do snapshot funcionar. Corta em
+    LIMITS_MAX_CARDS: o firmware tem um teto fixo de cards por painel.
     """
+    collectors = {"claude": collect_claude, "codex": collect_codex}
     providers = []
-    for key, path, collect in (("claude", CLAUDE_CRED, collect_claude),
-                               ("codex", CODEX_AUTH, collect_codex)):
+    for agent, cdir in sorted(account_dirs):
+        key = (agent, cdir)
+        path = _cred_path(agent, cdir)
         if not os.path.exists(path):
             limits_last_good.pop(key, None)
             limits_ok.pop(key, None)
             continue
         try:
-            cur = collect()
+            cur = collectors[agent](cdir)
             cur.update(ok=True, stale_since=0)
-            limits_last_good[key] = {"data": {k: cur[k] for k in ("name", "plan", "limits")},
+            limits_last_good[key] = {"data": {k: cur[k] for k in
+                                     ("name", "plan", "limits", "account")},
                                      "at": int(time.time())}
             providers.append(cur)
             if limits_ok.get(key) is not True:
-                log.info("limites %s: ok (%d janelas)", key, len(cur["limits"]))
+                log.info("limites %s [%s]: ok (%d janelas)",
+                         agent, cur.get("account") or os.path.basename(cdir),
+                         len(cur["limits"]))
             limits_ok[key] = True
         except Exception as e:  # endpoint interno: qualquer surpresa é falha, não crash
             reason = ("HTTP %d" % e.code if isinstance(e, urllib.error.HTTPError)
@@ -642,8 +664,12 @@ def collect_limits() -> list:
                 stale.update(ok=False, stale_since=good["at"])
                 providers.append(stale)
             if limits_ok.get(key) is not False:
-                log.warning("limites %s: %s", key, reason)
+                log.warning("limites %s [%s]: %s", agent, os.path.basename(cdir), reason)
             limits_ok[key] = False
+    if len(providers) > LIMITS_MAX_CARDS:
+        log.warning("cards de uso acima do teto (%d>%d): cortando",
+                    len(providers), LIMITS_MAX_CARDS)
+        providers = providers[:LIMITS_MAX_CARDS]
     return providers
 
 
