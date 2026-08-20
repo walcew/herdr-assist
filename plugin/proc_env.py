@@ -8,6 +8,7 @@ accounts.discover); esta camada só devolve o dict cru.
 from __future__ import annotations
 
 import os
+import subprocess
 
 
 def parse_proc_environ(raw: bytes) -> dict:
@@ -101,7 +102,6 @@ def read_process_env(pid: int) -> dict:
             with open("/proc/%d/environ" % pid, "rb") as fh:
                 return parse_proc_environ(fh.read())
         # macOS e demais BSDs
-        import subprocess
         out = subprocess.run(["ps", "eww", "-o", "command=", "-p", str(pid)],
                              capture_output=True, timeout=5)
         return parse_ps_env(out.stdout.decode("utf-8", "replace"))
