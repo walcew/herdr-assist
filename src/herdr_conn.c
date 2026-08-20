@@ -119,6 +119,17 @@ static void handle_agents(conn_slot_t *s, const cJSON *root)
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "account")))) {
             strncpy(a->account, f->valuestring, sizeof(a->account) - 1);
         }
+        a->context_pct = 255;   /* 0 é contexto válido; 255 = ausente */
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "model")))) {
+            strncpy(a->model, f->valuestring, sizeof(a->model) - 1);
+        }
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "org")))) {
+            strncpy(a->org, f->valuestring, sizeof(a->org) - 1);
+        }
+        if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "context_pct")))) {
+            a->context_pct = (uint8_t)f->valuedouble;
+        }
+        a->corp = cJSON_IsTrue(cJSON_GetObjectItem(item, "corp"));
         /* valuedouble, não valueint: o epoch já está perto do teto de int */
         if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "since")))) {
             a->since = (uint32_t)f->valuedouble;

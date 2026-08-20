@@ -40,6 +40,10 @@ typedef struct {
      * status. A API do Herdr não expõe tempo algum, então quem carimba é ela. */
     uint32_t since;
     char    account[33];   /* e-mail da conta (config-dir); "" se desconhecida */
+    char    model[16];     /* modelo curto p/ exibição; "" desconhecido */
+    char    org[24];       /* org (domínio sem sufixo); "" desconhecido */
+    uint8_t context_pct;   /* 0-100; 255 = desconhecido */
+    bool    corp;          /* true = corporativa, false = pessoal */
 } herdr_agent_t;
 
 /* Uma janela de limite de uso ("5h", "7d", "7d Fable"...). Os 20 bytes do
