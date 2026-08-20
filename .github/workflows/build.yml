@@ -77,3 +77,6 @@ jobs:
           cc -std=c11 -Wall -Wextra -Isrc -o /tmp/tpt \
             scripts/term_parse_test.c src/term_parse.c
           /tmp/tpt
+
+      - name: bridge unit tests
+        run: cd plugin && python3 -m unittest discover -s tests -v
