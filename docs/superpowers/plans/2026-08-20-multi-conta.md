@@ -796,7 +796,7 @@ Atualizar o comentário da linha para refletir "provedor × conta".
 
 - [ ] **Step 2: Build de fumaça**
 
-Run: `pio run -d cardputer`
+Run: `python -m platformio run` (builda a tela / env default `LVGL-320-480`)
 Expected: compila sem erro (structs maiores; sem uso ainda de `account`).
 
 - [ ] **Step 3: Commit**
@@ -839,7 +839,7 @@ Após o bloco que lê `plan`:
 
 - [ ] **Step 3: Build**
 
-Run: `pio run -d cardputer`
+Run: `python -m platformio run` (builda a tela / env `LVGL-320-480`)
 Expected: compila sem erro.
 
 - [ ] **Step 4: Commit**
@@ -906,7 +906,7 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
 
 - [ ] **Step 3: Build**
 
-Run: `pio run -d cardputer`
+Run: `python -m platformio run` (builda a tela / env `LVGL-320-480`)
 Expected: compila sem erro.
 
 - [ ] **Step 4: Verificação visual (manual)**
@@ -956,7 +956,7 @@ if (multi_acct && a->account[0]) {
 
 - [ ] **Step 3: Build**
 
-Run: `pio run -d cardputer`
+Run: `python -m platformio run` (builda a tela / env `LVGL-320-480`)
 Expected: compila sem erro.
 
 - [ ] **Step 4: Verificação visual (manual)**
