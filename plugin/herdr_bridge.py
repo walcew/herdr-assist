@@ -42,7 +42,9 @@ import time
 import urllib.error
 import urllib.request
 
+import accounts
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
+from proc_env import read_process_env  # noqa: E402
 
 SOCK = (os.environ.get("HERDR_SOCK")
         or os.environ.get("HERDR_SOCKET_PATH")  # fornecida pelo plugin do Herdr
@@ -121,6 +123,71 @@ limits_ok: dict[tuple[str, str], bool] = {}  # só para logar transições, não
 # uma sessão de cada vez). proc é o `herdr terminal session control` vivo.
 ctl: dict = {"pane": None, "size": None, "proc": None}
 _req_id = 0
+
+# Descoberta de contas por pane (ver accounts.py): qual config-dir cada pane
+# usa e o conjunto de contas em uso, para taguear agents[] e alimentar a
+# coleta de limites por conta (collect_limits). Semeado com os defaults logo
+# abaixo para a primeira coleta nunca rodar vazia.
+pane_account: dict = {}          # pane_id -> (agent, config_dir)
+account_dirs: set = {(a, default_dir(a, HOME)) for a in CONFIG_VAR}
+acc_email_cache: dict = {}       # (agent, config_dir) -> e-mail (clipado)
+pane_pid_cache: dict = {}        # pane_id -> pid do processo em primeiro plano
+pid_env_cache: dict = {}         # pid -> env (só os config-dirs, já filtrado)
+_prev_agent_panes = [set()]      # composição de panes na última refresh_accounts
+
+
+async def pane_pid(pane_id: str):
+    """Pid do processo em primeiro plano do pane, via `pane.process_info`."""
+    info = await herdr_request("pane.process_info", {"pane_id": pane_id})
+    if not info:
+        return None
+    procs = (info.get("process_info") or {}).get("foreground_processes") or []
+    return procs[0].get("pid") if procs else None
+
+
+def _cached_env(pid):
+    """Ambiente do processo `pid`, lido uma vez e cacheado por pid.
+
+    Guarda só as chaves de CONFIG_VAR (CLAUDE_CONFIG_DIR/CODEX_HOME) — nada
+    além do config-dir fica em memória.
+    """
+    if pid not in pid_env_cache:
+        env = read_process_env(pid)
+        pid_env_cache[pid] = {k: env[k] for k in CONFIG_VAR.values() if k in env}
+    return pid_env_cache[pid]
+
+
+async def refresh_accounts(panes) -> None:
+    """Recalcula pane_account/account_dirs/acc_email_cache.
+
+    Chamada só quando a composição de panes muda (ver push_agents) — não a
+    cada ciclo de reconciliação de 1s.
+    """
+    global pane_account, account_dirs, acc_email_cache
+
+    async def get_pid(pid_pane):
+        if pid_pane not in pane_pid_cache:
+            pane_pid_cache[pid_pane] = await pane_pid(pid_pane)
+        return pane_pid_cache[pid_pane]
+
+    # discover() é síncrona; resolvemos os pids antes e passamos um lookup pronto
+    pids = {}
+    for p in panes:
+        if p.get("agent") in CONFIG_VAR:
+            pids[p["pane_id"]] = await get_pid(p["pane_id"])
+    pane_account, account_dirs = accounts.discover(
+        panes, lambda pane: pids.get(pane), _cached_env, HOME)
+    acc_email_cache = {(a, d): clip(read_account_email(a, d, HOME), 32)
+                       for (a, d) in account_dirs}
+    # poda caches de panes/pids que sumiram
+    live_panes = {p["pane_id"] for p in panes}
+    for k in list(pane_pid_cache):
+        if k not in live_panes:
+            pane_pid_cache.pop(k, None)
+    live_pids = set(pids.values())
+    for k in list(pid_env_cache):
+        if k not in live_pids:
+            pid_env_cache.pop(k, None)
 
 
 def load_token() -> str:
@@ -223,6 +290,14 @@ async def cli_request(method: str, params: dict) -> dict | None:
         # a CLI separa: `pane focus` é por direção; focar por id é `agent focus`
         out = await cli_run(["agent", "focus", pane])
         return None if out is None else {}
+    if method == "pane.process_info":
+        out = await cli_run(["pane", "process-info", "--pane", pane])
+        if not out:
+            return None
+        try:
+            return json.loads(out).get("result")
+        except (ValueError, AttributeError):
+            return None
     log.warning("metodo sem equivalente na CLI: %s", method)
     return None
 
@@ -400,6 +475,13 @@ async def push_agents() -> set[str] | None:
     if not result:
         return None
     panes = result.get("panes", [])
+    # Composição de panes (todos, não só os com agente): é ela que decide troca
+    # de conta (login/logout, pane novo de outra conta), então o refresh roda
+    # sobre `panes` inteiro, não sobre a lista já filtrada de agentes.
+    new_set = {p["pane_id"] for p in panes}
+    if new_set != _prev_agent_panes[0]:
+        _prev_agent_panes[0] = new_set
+        await refresh_accounts(panes)
     # O carimbo vai como epoch absoluto, e não como duração: o broadcast só sai
     # quando o snapshot serializado muda (adiante), então uma duração mudaria a
     # cada segundo e faria a ponte transmitir sem parar — e o painel reconstruir
@@ -418,6 +500,9 @@ async def push_agents() -> set[str] | None:
             "project": os.path.basename(p.get("cwd", "")),
             "workspace_id": p.get("workspace_id", ""),
         }
+        acc = pane_account.get(pid)
+        if acc:
+            a["account"] = acc_email_cache.get(acc, "")
         if status == "working":
             # só o primeiro ciclo em working cria o carimbo; os seguintes o herdam
             new_since[pid] = working_since.get(pid, now)
@@ -685,7 +770,8 @@ async def limits_loop() -> None:
     while True:
         if clients and (last is None or time.monotonic() - last >= LIMITS_POLL_S):
             last = time.monotonic()
-            providers = await asyncio.get_running_loop().run_in_executor(None, collect_limits)
+            providers = await asyncio.get_running_loop().run_in_executor(
+                None, collect_limits, set(account_dirs))
             snapshot = json.dumps({"type": "limits", "providers": providers},
                                   separators=(",", ":"))
             if snapshot != last_limits_snapshot:
