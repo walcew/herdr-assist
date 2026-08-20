@@ -172,6 +172,16 @@ static void handle_limits(conn_slot_t *s, const cJSON *root)
         if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "stale_since")))) {
             l->stale_since = (uint32_t)f->valuedouble;
         }
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "org")))) {
+            strncpy(l->org, f->valuestring, sizeof(l->org) - 1);
+        }
+        l->corp = cJSON_IsTrue(cJSON_GetObjectItem(item, "corp"));
+        if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "agents")))) {
+            l->agents = (uint8_t)f->valuedouble;
+        }
+        if (cJSON_IsNumber((f = cJSON_GetObjectItem(item, "agents_working")))) {
+            l->agents_working = (uint8_t)f->valuedouble;
+        }
         const cJSON *rows = cJSON_GetObjectItem(item, "limits");
         if (cJSON_IsArray(rows)) {
             const cJSON *r;
@@ -201,6 +211,20 @@ static void handle_limits(conn_slot_t *s, const cJSON *root)
     herdr_model_set_limits(s->idx, s->parse_limits, n);
 }
 
+static void handle_cost(const cJSON *root)
+{
+    herdr_cost_t c;
+    memset(&c, 0, sizeof(c));
+    const cJSON *f;
+    if (cJSON_IsString((f = cJSON_GetObjectItem(root, "now"))))
+        strncpy(c.now, f->valuestring, sizeof(c.now) - 1);
+    if (cJSON_IsString((f = cJSON_GetObjectItem(root, "week"))))
+        strncpy(c.week, f->valuestring, sizeof(c.week) - 1);
+    if (cJSON_IsString((f = cJSON_GetObjectItem(root, "life"))))
+        strncpy(c.life, f->valuestring, sizeof(c.life) - 1);
+    herdr_model_set_cost(&c);
+}
+
 static void handle_line(conn_slot_t *s, char *line, size_t len)
 {
     cJSON *root = cJSON_ParseWithLength(line, len);
@@ -222,6 +246,8 @@ static void handle_line(conn_slot_t *s, char *line, size_t len)
             }
         } else if (strcmp(t, "limits") == 0) {
             handle_limits(s, root);
+        } else if (strcmp(t, "cost") == 0) {
+            handle_cost(root);
         } else if (strcmp(t, "error") == 0) {
             const cJSON *m = cJSON_GetObjectItem(root, "message");
             ESP_LOGW(TAG, "[%s] ponte recusou: %s", s->label,
