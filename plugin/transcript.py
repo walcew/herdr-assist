@@ -7,6 +7,7 @@ mensagem é consumido — só o id do modelo e as contagens de tokens do usage.
 from __future__ import annotations
 
 import json
+import re
 
 _NAMES = {"opus": "Opus", "sonnet": "Sonnet", "haiku": "Haiku", "fable": "Fable"}
 
@@ -26,6 +27,11 @@ def context_pct(prompt_tokens: int) -> int:
         return 0
     window = 1_000_000 if prompt_tokens > 200_000 else 200_000
     return min(100, prompt_tokens * 100 // window)
+
+
+def encode_cwd(cwd: str) -> str:
+    """cwd → nome do diretório em projects/ (troca :\\/  por -)."""
+    return re.sub(r"[:\\/]", "-", (cwd or "").rstrip("\\/"))
 
 
 def session_metrics(jsonl_path: str):

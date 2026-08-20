@@ -27,6 +27,19 @@ class TestContextPct(unittest.TestCase):
         self.assertEqual(transcript.context_pct(2_000_000), 100)
 
 
+class TestEncodeCwd(unittest.TestCase):
+    def test_windows_path(self):
+        self.assertEqual(
+            transcript.encode_cwd(r"C:\Users\bruno\OneDrive\git\SOS\git-lab\spgg\docz\procergs"),
+            "C--Users-bruno-OneDrive-git-SOS-git-lab-spgg-docz-procergs")
+
+    def test_tira_barra_final(self):
+        self.assertEqual(transcript.encode_cwd("C:\\a\\b\\"), "C--a-b")
+
+    def test_preserva_hifen_existente(self):
+        self.assertEqual(transcript.encode_cwd("/x/git-lab/y"), "-x-git-lab-y")
+
+
 class TestSessionMetrics(unittest.TestCase):
     def test_le_ultimo_assistant(self):
         m = transcript.session_metrics(FIX)
