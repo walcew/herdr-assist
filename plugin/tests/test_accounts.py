@@ -1,4 +1,6 @@
+import json
 import os
+import tempfile
 import unittest
 import accounts
 
@@ -48,6 +50,20 @@ class TestDiscover(unittest.TestCase):
         self.assertIn(("claude", os.path.normpath(os.path.abspath("/h/.claude"))), account_dirs)
         self.assertIn(("codex", os.path.normpath(os.path.abspath("/h/.codex"))), account_dirs)
         self.assertIn(("claude", os.path.normpath(os.path.abspath("/h/.claude-sos"))), account_dirs)
+
+
+class TestEmailMalformado(unittest.TestCase):
+    def test_claude_json_topo_nao_dict_devolve_vazio(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, ".claude.json"), "w", encoding="utf-8") as fh:
+                json.dump([], fh)   # topo é lista, não dict
+            self.assertEqual(accounts.read_account_email("claude", d, d), "")
+
+    def test_codex_auth_topo_nao_dict_devolve_vazio(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "auth.json"), "w", encoding="utf-8") as fh:
+                json.dump("nope", fh)   # topo é string
+            self.assertEqual(accounts.read_account_email("codex", d, d), "")
 
 
 if __name__ == "__main__":
