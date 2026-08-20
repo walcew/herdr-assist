@@ -29,6 +29,10 @@ class TestFmtUsd(unittest.TestCase):
     def test_milhar_ponto(self):
         self.assertEqual(cost.fmt_usd(1240), "~US$ 1.240")
 
+    def test_boundary_100_sem_centavos(self):
+        self.assertEqual(cost.fmt_usd(99.999), "~US$ 100")
+        self.assertEqual(cost.fmt_usd(99.5), "~US$ 99,50")
+
 
 class TestFileCost(unittest.TestCase):
     def test_total_e_days(self):
