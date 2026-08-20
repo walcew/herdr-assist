@@ -693,7 +693,7 @@ static void set_elapsed_text(lv_obj_t *label, time_t now, uint32_t since)
     }
 }
 
-static void add_session_row(int flat_idx)
+static void add_session_row(int flat_idx, bool multi_acct)
 {
     const herdr_agent_t *a = &s_ui_agents[flat_idx];
     lv_obj_t *row = lv_btn_create(s_sess_list);
@@ -731,6 +731,23 @@ static void add_session_row(int flat_idx)
     lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(sub, UI_MUTED, 0);
     lv_obj_align(sub, LV_ALIGN_LEFT_MID, 26, 11);
+
+    /* Chip da conta: só aparece quando há mais de uma entre os agentes
+       visíveis (multi_acct) e esta linha conhece a sua — uma conta só
+       segue sem sufixo, igual ao critério "multi" da Dash. Encolhe o sub
+       para o chip não invadi-lo quando a conta for um e-mail comprido. */
+    if (multi_acct && a->account[0]) {
+        lv_obj_set_width(sub, LV_PCT(60));
+        lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
+
+        lv_obj_t *acct = lv_label_create(row);
+        lv_label_set_text(acct, a->account);
+        lv_obj_set_style_text_font(acct, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(acct, UI_MUTED, 0);
+        lv_label_set_long_mode(acct, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(acct, 100);
+        lv_obj_align(acct, LV_ALIGN_RIGHT_MID, -4, 11);
+    }
 
     /* Só quem está working ganha cronômetro. Mudar de status muda a geração e
        reconstrói a lista, então uma linha registrada aqui continua working até
@@ -834,6 +851,25 @@ static void rebuild_session_rows(void)
     const panel_cfg_t *cfg = panel_cfg_get();
     int order[HERDR_MAX_AGENTS_TOTAL];
 
+    /* multi_acct: há >1 conta distinta entre os agentes visíveis? calculado
+       uma vez ao reconstruir a lista, análogo ao multi da Dash. Contas vazias
+       (desconhecidas) não contam para a comparação. */
+    bool multi_acct = false;
+    {
+        const char *first = NULL;
+        for (int i = 0; i < s_ui_agent_count; i++) {
+            if (!s_ui_agents[i].account[0]) {
+                continue;
+            }
+            if (!first) {
+                first = s_ui_agents[i].account;
+            } else if (strcmp(s_ui_agents[i].account, first) != 0) {
+                multi_acct = true;
+                break;
+            }
+        }
+    }
+
     int enabled = 0;
     for (int h = 0; h < CFG_MAX_HOSTS; h++) {
         enabled += cfg->hosts[h].enabled;
@@ -850,7 +886,7 @@ static void rebuild_session_rows(void)
             add_muted_line(T(STR_NO_SESSIONS));
         }
         for (int i = 0; i < n; i++) {
-            add_session_row(order[i]);
+            add_session_row(order[i], multi_acct);
         }
         return;
     }
@@ -867,7 +903,7 @@ static void rebuild_session_rows(void)
                           conn == HERDR_CONN_CONNECTING ? UI_WORKING : UI_BLOCKED);
         int n = collect_agents(h, order, HERDR_MAX_AGENTS_TOTAL);
         for (int i = 0; i < n; i++) {
-            add_session_row(order[i]);
+            add_session_row(order[i], multi_acct);
         }
         if (n == 0) {
             add_muted_line(conn == HERDR_CONN_ONLINE ? T(STR_NO_SESSIONS)
