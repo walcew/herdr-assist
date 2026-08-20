@@ -701,6 +701,10 @@ static lv_color_t ctx_color(uint8_t pct)
     return UI_IDLE;
 }
 
+/* Largura útil da linha (coordenadas locais: já descontam o dock e as
+ * margens do container-lista, como em DASH_BAR_W). */
+#define SESS_ROW_W (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD)
+
 static void add_session_row(int flat_idx, bool multi_acct)
 {
     const herdr_agent_t *a = &s_ui_agents[flat_idx];
@@ -728,10 +732,31 @@ static void add_session_row(int flat_idx, bool multi_acct)
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_align(name, LV_ALIGN_LEFT_MID, 26, -8);
 
+    /* Selo corp/pess (pill): fundo suave arredondado, só quando há mais de
+       uma conta entre os agentes visíveis e esta linha conhece a sua org.
+       Medido depois de montado (lv_obj_update_layout) para o sub encostar
+       logo à direita dele, em vez de um offset de texto estimado à mão. */
+    lv_coord_t sub_x = 26;
+    if (multi_acct && a->account[0] && a->org[0]) {
+        lv_obj_t *chip = lv_label_create(row);
+        lv_label_set_text(chip, a->corp ? "corp" : "pess");
+        lv_obj_set_style_text_font(chip, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(chip, a->corp ? UI_CORP : UI_MUTED, 0);
+        lv_obj_set_style_bg_color(chip, a->corp ? UI_CORP : UI_MUTED, 0);
+        lv_obj_set_style_bg_opa(chip, LV_OPA_20, 0);   /* fundo suave, pill discreto */
+        lv_obj_set_style_radius(chip, 8, 0);
+        lv_obj_set_style_pad_hor(chip, 5, 0);
+        lv_obj_set_style_pad_ver(chip, 1, 0);
+        lv_obj_align(chip, LV_ALIGN_LEFT_MID, 26, 11);
+        lv_obj_update_layout(chip);
+        sub_x = 26 + lv_obj_get_width(chip) + 6;
+    }
+
     /* Sub-linha: conta multi-acct mostra org · modelo (selo corp/pess cobre o
        status via cor do dot); conta única cai no modelo, e sem modelo volta
        ao par agente/host de sempre — sem host quando a lista já está
-       agrupada por ele. */
+       agrupada por ele. Largura reservada pro medidor de contexto (ou só a
+       margem, sem medidor) à direita — nunca deixa o texto passar por baixo. */
     lv_obj_t *sub = lv_label_create(row);
     if (multi_acct && a->account[0]) {
         lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s",
@@ -747,20 +772,10 @@ static void add_session_row(int flat_idx, bool multi_acct)
     }
     lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(sub, UI_MUTED, 0);
-    lv_obj_align(sub, LV_ALIGN_LEFT_MID, 26, 11);
-
-    /* Selo corp/pess (pill): prefixo curto colorido antes da sub, só quando
-       há mais de uma conta entre os agentes visíveis e esta linha conhece a
-       sua org. "corp"/"pess" somam ~28px em ui_12 (medido nos adv_w da
-       fonte) — 34 dá folga de ~6px antes da sub começar. */
-    if (multi_acct && a->account[0] && a->org[0]) {
-        lv_obj_t *chip = lv_label_create(row);
-        lv_label_set_text(chip, a->corp ? "corp" : "pess");
-        lv_obj_set_style_text_font(chip, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(chip, a->corp ? UI_CORP : UI_MUTED, 0);
-        lv_obj_align(chip, LV_ALIGN_LEFT_MID, 26, 11);
-        lv_obj_align(sub, LV_ALIGN_LEFT_MID, 26 + 34, 11);
-    }
+    lv_coord_t reserve_right = (a->context_pct != 255) ? 72 : UI_PAD;
+    lv_obj_set_width(sub, SESS_ROW_W - sub_x - reserve_right);
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
+    lv_obj_align(sub, LV_ALIGN_LEFT_MID, sub_x, 11);
 
     /* Medidor de contexto: substitui o e-mail à direita (a org já foi para a
        sub-linha). Só aparece quando a ponte reportou um valor. */
