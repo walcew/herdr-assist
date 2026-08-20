@@ -31,6 +31,7 @@ extern "C" {
 #define UI_IDLE        lv_color_hex(0x7da97d)   /* verde: ocioso / ok */
 #define UI_BLOCKED     lv_color_hex(0xc05a55)   /* vermelho: bloqueado / offline */
 #define UI_LIMIT_HIGH  lv_color_hex(0xc9814a)   /* laranja: uso alto (aba Dash) */
+#define UI_CORP        lv_color_hex(0x6f9bd1)   /* azul: conta corporativa */
 /* hex cru reutilizável fora da LVGL (paleta do term_view usa RGB888) */
 #define UI_TERM_BG_HEX   0x0a0a0b
 #define UI_TERM_TEXT_HEX 0xaebfa0
