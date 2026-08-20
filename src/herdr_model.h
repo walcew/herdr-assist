@@ -48,6 +48,7 @@ typedef struct {
     char     label[20];
     uint8_t  pct;        /* 0-100 */
     uint32_t resets_at;  /* epoch em que a janela zera; 0 = desconhecido */
+    uint32_t window_s;   /* tamanho da janela em segundos; 0 = desconhecido */
 } herdr_limit_row_t;
 
 /* Uso de limites de um provedor de IA, coletado pela ponte (aba Dash).

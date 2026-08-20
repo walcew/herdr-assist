@@ -180,6 +180,9 @@ static void handle_limits(conn_slot_t *s, const cJSON *root)
                 if (cJSON_IsNumber((f = cJSON_GetObjectItem(r, "resets_at")))) {
                     row->resets_at = (uint32_t)f->valuedouble;
                 }
+                if (cJSON_IsNumber((f = cJSON_GetObjectItem(r, "window_s")))) {
+                    row->window_s = (uint32_t)f->valuedouble;
+                }
             }
         }
         n++;
