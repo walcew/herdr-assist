@@ -86,3 +86,24 @@ def discover(panes, get_pid, get_env, home: str):
         pane_account[p["pane_id"]] = (agent, cdir)
         account_dirs.add((agent, cdir))
     return pane_account, account_dirs
+
+
+PUBLIC_DOMAINS = {"gmail.com", "outlook.com", "hotmail.com", "live.com",
+                  "yahoo.com", "yahoo.com.br", "icloud.com", "proton.me",
+                  "protonmail.com", "gmx.com", "aol.com"}
+_KNOWN_2LD = {"com.br", "com.mx", "co.uk", "com.ar", "com.au"}
+
+
+def org_and_corp(email: str):
+    """(org, corp) — org = domínio sem sufixo; corp = não é domínio público."""
+    domain = (email.split("@")[-1] if email and "@" in email else "").lower()
+    if not domain:
+        return "", False
+    corp = domain not in PUBLIC_DOMAINS
+    parts = domain.split(".")
+    if len(parts) >= 3 and ".".join(parts[-2:]) in _KNOWN_2LD:
+        parts = parts[:-2]
+    elif len(parts) >= 2:
+        parts = parts[:-1]
+    org = parts[-1] if parts else domain
+    return org, corp

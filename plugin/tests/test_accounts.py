@@ -66,5 +66,19 @@ class TestEmailMalformado(unittest.TestCase):
             self.assertEqual(accounts.read_account_email("codex", d, d), "")
 
 
+class TestOrgCorp(unittest.TestCase):
+    def test_corporativa_2ld(self):
+        self.assertEqual(accounts.org_and_corp("bruno@sosdocs.com.br"), ("sosdocs", True))
+
+    def test_pessoal_publico(self):
+        self.assertEqual(accounts.org_and_corp("bruno@gmail.com"), ("gmail", False))
+
+    def test_subdominio_corporativa(self):
+        self.assertEqual(accounts.org_and_corp("x@mail.google.com"), ("google", True))
+
+    def test_vazio(self):
+        self.assertEqual(accounts.org_and_corp(""), ("", False))
+
+
 if __name__ == "__main__":
     unittest.main()
