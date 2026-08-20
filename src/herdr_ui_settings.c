@@ -9,6 +9,7 @@
 #include "esp_system.h"
 
 #include "fw_update.h"
+#include "goku_level.h"
 #include "herdr_kb.h"
 #include "herdr_ui.h"
 #include "i18n.h"
@@ -45,6 +46,7 @@ static lv_obj_t *s_ta_token;
 static lv_obj_t *s_sw_auto;         /* switch de descoberta automática do editor */
 static lv_obj_t *s_lbl_lang;        /* valor da linha de idioma, na tela principal */
 static lv_obj_t *s_lbl_orient;      /* idem, linha de orientação */
+static lv_obj_t *s_lbl_goku;        /* idem, linha do modo do Goku */
 static lv_obj_t *s_row_lock_tmo;    /* linhas que só valem com o bloqueio ligado */
 static lv_obj_t *s_row_lock_pat;
 static lv_obj_t *s_lbl_lock_tmo;
@@ -1086,6 +1088,25 @@ static void orient_toggle_cb(lv_event_t *e)
     update_toast();
 }
 
+static const char *goku_name(uint8_t m)
+{
+    return T(m == GOKU_MODE_DESCENDING ? STR_GOKU_DESC : STR_GOKU_ASC);
+}
+
+/*
+ * Alterna o modo do Goku (ascendente/descendente) na cópia em edição.
+ *
+ * Como o idioma e a orientação, o modo só vale a partir do reinício; já a
+ * transformação por uso acontece em runtime, no próprio avatar.
+ */
+static void goku_mode_toggle_cb(lv_event_t *e)
+{
+    (void)e;
+    s_edit.goku_mode = (uint8_t)((s_edit.goku_mode + 1) % GOKU_MODE_COUNT);
+    lv_label_set_text(s_lbl_goku, goku_name(s_edit.goku_mode));
+    update_toast();
+}
+
 /** Reinício avulso: o que estiver pendente de salvar é descartado. */
 static void restart_cb(lv_event_t *e)
 {
@@ -1269,6 +1290,18 @@ static void show_main(void)
     lv_obj_set_style_text_font(s_lbl_orient, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(s_lbl_orient, UI_MUTED, 0);
     lv_obj_align(s_lbl_orient, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    lv_obj_t *gkrow = make_row(goku_mode_toggle_cb, NULL, 44);
+    lv_obj_t *gkl = lv_label_create(gkrow);
+    lv_label_set_text(gkl, T(STR_GOKU_MODE));
+    lv_obj_set_style_text_font(gkl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(gkl, UI_TEXT, 0);
+    lv_obj_align(gkl, LV_ALIGN_LEFT_MID, 0, 0);
+    s_lbl_goku = lv_label_create(gkrow);
+    lv_label_set_text(s_lbl_goku, goku_name(s_edit.goku_mode));
+    lv_obj_set_style_text_font(s_lbl_goku, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(s_lbl_goku, UI_MUTED, 0);
+    lv_obj_align(s_lbl_goku, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *lkrow = make_row(lock_row_cb, NULL, 44);
     lv_obj_t *lkl = lv_label_create(lkrow);
