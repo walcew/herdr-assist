@@ -13,7 +13,10 @@ então o painel só enxerga **uma** conta: a Dash mostra o uso da pessoal e igno
 a de work, e nada na aba Sessões diz sob qual conta cada agente está rodando.
 
 Objetivo: **mostrar as contas conectadas e as métricas de cada uma** quando há
-múltiplas contas em uso, e **taguear cada sessão** com sua conta.
+múltiplas contas em uso, e **taguear cada sessão** com sua conta. Toda conta em
+uso por um pane aberto tem que aparecer — inclusive o caso de **um único
+provedor com várias contas** (ex.: 4 contas Claude → 4 cards, um por conta), não
+só provedores diferentes.
 
 ## Descoberta (o que foi verificado ao vivo)
 
@@ -124,6 +127,12 @@ Campos novos, ambos opcionais (ausência = comportamento antigo):
 - `herdr_limits_t` ganha `char account[33];` (32 + NUL, casa com o clip da ponte).
 - `herdr_agent_t` ganha `char account[33];`.
 - Parsers em `herdr_conn.c` leem o campo novo quando presente; ausente → `""`.
+- `HERDR_MAX_PROVIDERS` deixa de ser "provedores por host" e passa a ser
+  **cards de uso por host** (provedor × conta). Sobe de 4 para **8** (cobre 4
+  contas do mesmo provedor com folga, ou combinações). O mesmo teto é espelhado
+  na ponte (`collect_limits` corta em 8, determinístico) para os buffers
+  casarem. `s_ui_limits` (dimensionado `HERDR_MAX_PROVIDERS * CFG_MAX_HOSTS`)
+  acompanha automaticamente.
 
 **UI — Dash (`herdr_ui.c`, `add_limits_card`/`rebuild_dash_cards`):**
 
@@ -159,9 +168,10 @@ idiomas já suportados.
   desambiguado pelo basename.
 - **Só panes de work abertos:** a conta default ainda aparece (uso pessoal não
   some); as de work aparecem por estarem em uso.
-- **Estouro de `HERDR_MAX_PROVIDERS`** (4 por host): 2 contas × 2 provedores já
-  enche o teto. Manter o cap e cortar de forma determinística, logando o que
-  ficou de fora (sem truncar em silêncio).
+- **Estouro do teto de cards por host** (`HERDR_MAX_PROVIDERS`, agora 8):
+  4 contas do mesmo provedor cabem; combinações maiores (ex.: 4 Claude +
+  vários Codex) podem estourar. Cortar de forma determinística e **logar o que
+  ficou de fora** (sem truncar em silêncio).
 
 ## Testes
 
