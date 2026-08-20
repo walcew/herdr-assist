@@ -1,0 +1,2 @@
+{"type":"user","message":{"role":"user","content":"oi"}}
+{"type":"assistant","gitBranch":"main","message":{"role":"assistant","model":"claude-opus-4-8","usage":{"input_tokens":2,"output_tokens":1799,"cache_read_input_tokens":488968,"cache_creation_input_tokens":452}}}
