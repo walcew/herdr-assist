@@ -62,8 +62,10 @@
 
 ```python
 # plugin/tests/test_proc_env.py
+# Rode SEMPRE de dentro de plugin/ (mesmo sys.path que a ponte em produção):
+#   cd plugin && python -m unittest tests.test_proc_env -v
 import unittest
-from plugin.proc_env import parse_proc_environ, parse_ps_env
+from proc_env import parse_proc_environ, parse_ps_env
 
 
 class TestParseProcEnviron(unittest.TestCase):
@@ -95,8 +97,8 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Rodar e ver falhar**
 
-Run: `python -m unittest plugin.tests.test_proc_env -v`
-Expected: FAIL com `ModuleNotFoundError: No module named 'plugin.proc_env'`
+Run: `cd plugin && python -m unittest tests.test_proc_env -v`
+Expected: FAIL com `ModuleNotFoundError: No module named 'proc_env'`
 
 - [ ] **Step 3: Implementar o mínimo**
 
@@ -215,7 +217,7 @@ def read_process_env(pid: int) -> dict:
 
 - [ ] **Step 4: Rodar e ver passar**
 
-Run: `python -m unittest plugin.tests.test_proc_env -v`
+Run: `cd plugin && python -m unittest tests.test_proc_env -v`
 Expected: PASS (todos)
 
 - [ ] **Step 5: Commit**
@@ -258,9 +260,10 @@ git commit -m "feat(ponte): leitura de ambiente de processo por pid (cross-platf
 
 ```python
 # plugin/tests/test_accounts.py
+# cd plugin && python -m unittest tests.test_accounts -v
 import os
 import unittest
-from plugin import accounts
+import accounts
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -316,8 +319,8 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Rodar e ver falhar**
 
-Run: `python -m unittest plugin.tests.test_accounts -v`
-Expected: FAIL com `ModuleNotFoundError: No module named 'plugin.accounts'`
+Run: `cd plugin && python -m unittest tests.test_accounts -v`
+Expected: FAIL com `ModuleNotFoundError: No module named 'accounts'`
 
 - [ ] **Step 3: Implementar o mínimo**
 
@@ -412,7 +415,7 @@ def discover(panes, get_pid, get_env, home: str):
 
 - [ ] **Step 4: Rodar e ver passar**
 
-Run: `python -m unittest plugin.tests.test_accounts -v`
+Run: `cd plugin && python -m unittest tests.test_accounts -v`
 Expected: PASS (todos)
 
 - [ ] **Step 5: Commit**
@@ -452,11 +455,12 @@ git commit -m "feat(ponte): descoberta de contas por config-dir e e-mail como r�
 
 ```python
 # plugin/tests/test_bridge_limits.py
+# cd plugin && python -m unittest tests.test_bridge_limits -v
 import os
 import unittest
 from unittest import mock
 
-from plugin import herdr_bridge as b
+import herdr_bridge as b
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -495,16 +499,17 @@ if __name__ == "__main__":
 
 - [ ] **Step 2: Rodar e ver falhar**
 
-Run: `python -m unittest plugin.tests.test_bridge_limits -v`
+Run: `cd plugin && python -m unittest tests.test_bridge_limits -v`
 Expected: FAIL (`collect_claude` sem parâmetro / sem chave `account`).
 
 - [ ] **Step 3: Implementar as mudanças**
 
-No topo de `herdr_bridge.py`, junto dos imports do projeto:
+No topo de `herdr_bridge.py`, junto dos imports do projeto (a ponte roda com
+cwd=`plugin/`, então `accounts` é importável direto — mesmo sys.path dos testes,
+que rodam de dentro de `plugin/`):
 ```python
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
 ```
-(ou `from plugin.accounts import ...` conforme o modo de execução; ver nota no fim da task.)
 
 Trocar as constantes fixas por helper de caminho e um HOME injetável:
 ```python
@@ -599,22 +604,14 @@ def collect_limits(account_dirs) -> list:
 
 Remover as constantes `CLAUDE_CRED`/`CODEX_AUTH` (não são mais usadas) — ou mantê-las só se algum outro ponto referenciar (verificar com grep).
 
-**Nota de import:** os testes importam como `plugin.herdr_bridge` (pacote), mas em produção `start.py` roda `herdr_bridge.py` com `cwd=plugin/`, então o import é `from accounts import ...`. Para funcionar nos dois modos, usar no topo:
-```python
-try:
-    from accounts import read_account_email, default_dir, CONFIG_VAR
-except ImportError:  # importado como pacote nos testes
-    from plugin.accounts import read_account_email, default_dir, CONFIG_VAR
-```
-
 - [ ] **Step 4: Rodar e ver passar**
 
-Run: `python -m unittest plugin.tests.test_bridge_limits -v`
+Run: `cd plugin && python -m unittest tests.test_bridge_limits -v`
 Expected: PASS
 
 - [ ] **Step 5: Rodar a suíte inteira da ponte**
 
-Run: `python -m unittest discover -s plugin -p "test_*.py" -v`
+Run: `cd plugin && python -m unittest discover -s tests -v`
 Expected: PASS (proc_env, accounts, bridge_limits)
 
 - [ ] **Step 6: Commit**
@@ -653,10 +650,9 @@ Em `cli_request`, antes do `log.warning` final:
 
 - [ ] **Step 2: Estado e helper de descoberta**
 
-Junto dos globais (perto de `working_since`):
+Junto dos imports do topo, `import accounts` e `from proc_env import read_process_env`
+(cwd=`plugin/`, importáveis direto). Junto dos globais (perto de `working_since`):
 ```python
-from proc_env import read_process_env  # (com o mesmo try/except de import do accounts)
-
 pane_account: dict = {}          # pane_id -> (agent, config_dir)
 account_dirs: set = set()        # {(agent, config_dir)} em uso + defaults
 pane_pid_cache: dict = {}        # pane_id -> pid do foreground
@@ -705,7 +701,7 @@ async def refresh_accounts(panes) -> None:
         if k not in live_pids:
             pid_env_cache.pop(k, None)
 ```
-(import de `accounts` no topo, mesmo padrão try/except.)
+(`accounts` já importado no topo.)
 
 - [ ] **Step 3: `push_agents` tagueia e dispara refresh na mudança**
 
@@ -759,7 +755,7 @@ Esperado no log: `limites claude [bruno@work.gov.br]: ok (...)` e `limites claud
 
 - [ ] **Step 6: Suíte não regride**
 
-Run: `python -m unittest discover -s plugin -p "test_*.py"`
+Run: `cd plugin && python -m unittest discover -s tests -v`
 Expected: PASS
 
 - [ ] **Step 7: Commit**
@@ -986,7 +982,7 @@ git commit -m "feat(fw): aba Sessões mostra a conta de cada pane quando há mai
 No job `host-test`, após o passo `term_parse_test`:
 ```yaml
       - name: bridge unit tests
-        run: python -m unittest discover -s plugin -p "test_*.py" -v
+        run: cd plugin && python -m unittest discover -s tests -v
 ```
 
 - [ ] **Step 2: Verificar sintaxe do workflow**
