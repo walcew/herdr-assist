@@ -1,1 +1,1 @@
-{"oauthAccount": {"emailAddress": "bruno@work.gov.br"}}
+{"oauthAccount": {"emailAddress": "bruno@work.gov.br", "organizationRateLimitTier": "default_claude_max_20x"}}
