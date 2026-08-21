@@ -1427,16 +1427,21 @@ static void rebuild_dash_cards(void)
         lv_obj_set_style_text_color(l, UI_MUTED, 0);
         return;
     }
-    /* com um host os cards falam por si; com mais, o título ganha o host */
+    /* com um host os cards falam por si; com mais, o título ganha o host.
+       Começa no 0 porque o próprio primeiro card pode ser mesclado — sem o
+       shared, Claude em duas máquinas e Codex em uma reportariam todos host 0
+       e o Codex perderia o prefixo que merece. */
     bool multi = false;
-    for (int i = 1; i < s_ui_limit_count; i++) {
-        multi |= s_ui_limits[i].host != s_ui_limits[0].host;
+    for (int i = 0; i < s_ui_limit_count; i++) {
+        multi |= s_ui_limits[i].shared ||
+                 s_ui_limits[i].host != s_ui_limits[0].host;
     }
     for (int i = 0; i < s_ui_limit_count; i++) {
         /* A conta vai em todo card que a conhece: com linha própria o e-mail
            não disputa espaço com o título, então não há por que escondê-lo
-           quando só existe uma conta — ele diz de quem é o consumo. */
-        add_limits_card(&s_ui_limits[i], multi);
+           quando só existe uma conta — ele diz de quem é o consumo.
+           Card mesclado é da CONTA, não de uma máquina: sem prefixo de host. */
+        add_limits_card(&s_ui_limits[i], multi && !s_ui_limits[i].shared);
     }
 }
 
