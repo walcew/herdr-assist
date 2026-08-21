@@ -730,43 +730,69 @@ static lv_color_t ctx_color(uint8_t pct)
 }
 
 /* Largura útil da linha (coordenadas locais: já descontam o dock e as
- * margens do container-lista, como em DASH_BAR_W). */
+ * margens do container-lista, como em DASH_BAR_W). Só é a largura ÚTIL de fato
+ * porque add_session_row zera o padding do botão — ver o comentário lá. */
 #define SESS_ROW_W (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD)
+/* Respiro lateral: o mesmo dos cards da Dash, que são a outra família de
+   blocos com fundo do painel. */
+#define SESS_PAD_X 12
+#define SESS_DOT   14
+#define SESS_TEXT_X (SESS_PAD_X + SESS_DOT + 10)          /* 36 */
+#define SESS_BAR_W 60
+#define SESS_BAR_H 5
+/* Quanto cada elemento da coluna direita tira da largura do texto: ele próprio,
+   o respiro até o texto e a margem da linha. "9:59:59" na ui_12 ocupa ~43px. */
+#define SESS_BAR_RESERVE  (SESS_BAR_W + 8 + SESS_PAD_X)   /* 80 */
+#define SESS_TIME_RESERVE (44 + 8 + SESS_PAD_X)           /* 64 */
+/* As duas bases de texto da linha, compartilhadas pelas duas colunas. Antes o
+   nome e o cronômetro ficavam em -8 e a sub-linha em +11, com a barra em +16 e
+   o percentual em +4 — quatro alturas para duas linhas de texto. */
+#define SESS_Y_TOP (-10)
+#define SESS_Y_SUB 12
 
 static void add_session_row(int flat_idx, bool multi_acct)
 {
     const herdr_agent_t *a = &s_ui_agents[flat_idx];
+    /* Só quem está working ganha cronômetro. Mudar de status muda a geração e
+       reconstrói a lista, então uma linha registrada aqui continua working até
+       ser destruída — não há caso de virar working sem passar por aqui.
+       Decidido antes de montar porque a largura do nome depende disso. */
+    bool has_timer = strcmp(a->status, "working") == 0 && a->since != 0 &&
+                     s_sess_timer_count < HERDR_MAX_AGENTS_TOTAL;
+
     lv_obj_t *row = lv_btn_create(s_sess_list);
     lv_obj_set_size(row, LV_PCT(100), UI_ROW_H);
     lv_obj_set_style_bg_color(row, UI_PANEL, 0);
     lv_obj_set_style_radius(row, 6, 0);
     lv_obj_set_style_shadow_width(row, 0, 0);
+    /* Load-bearing: o tema dá pad_hor ao botão — 13px em retrato e 16 em
+       paisagem (PAD_DEF muda com LV_HOR_RES). Como lv_obj_align posiciona pela
+       área de CONTEÚDO, todo orçamento tirado de SESS_ROW_W (a largura externa)
+       saía 26/32px otimista, e a sub-linha longa passava por baixo da barra de
+       contexto. Continua sendo lv_btn, e não ui_card, pelo realce ao toque que
+       o styles->pressed do tema dá de graça. */
+    lv_obj_set_style_pad_all(row, 0, 0);
     lv_obj_add_event_cb(row, row_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)flat_idx);
 
     lv_obj_t *dot = lv_obj_create(row);
-    lv_obj_set_size(dot, 14, 14);
+    lv_obj_set_size(dot, SESS_DOT, SESS_DOT);
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_border_width(dot, 0, 0);
     lv_obj_set_style_bg_color(dot, ui_status_color(a->status), 0);
-    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_align(dot, LV_ALIGN_LEFT_MID, SESS_PAD_X, 0);
     lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
 
-    lv_obj_t *name = lv_label_create(row);
-    lv_label_set_text(name, a->project);
-    lv_obj_set_style_text_font(name, &lv_font_ui_16, 0);
-    lv_obj_set_style_text_color(name, UI_TEXT, 0);
-    /* corta o nome longo em vez de deixá-lo passar por baixo do cronômetro */
-    lv_obj_set_width(name, LV_PCT(72));
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_align(name, LV_ALIGN_LEFT_MID, 26, -8);
-
-    /* Selo corp/pess (pill): fundo suave arredondado, só quando há mais de
-       uma conta entre os agentes visíveis e esta linha conhece a sua org.
-       Medido depois de montado (lv_obj_update_layout) para o sub encostar
-       logo à direita dele, em vez de um offset de texto estimado à mão. */
-    lv_coord_t sub_x = 26;
+    /* Selo corp/pess (pill): só quando há mais de uma conta entre os agentes
+       visíveis e esta linha conhece a sua org. Fica na linha de cima, encostado
+       no nome, porque é identidade — mesmo par que o projeto, não metadado
+       técnico. Estava na sub-linha e empurrava o texto ~44px à direita, o que
+       fazia "org · modelo · effort" truncar em retrato justamente no effort
+       (medido: 161px de conteúdo para 144 de espaço). Criado antes do nome
+       porque a largura dele desconta este selo. */
+    lv_obj_t *chip = NULL;
+    lv_coord_t chip_slot = 0;
     if (multi_acct && a->account[0] && a->org[0]) {
-        lv_obj_t *chip = lv_label_create(row);
+        chip = lv_label_create(row);
         lv_label_set_text(chip, T(a->corp ? STR_ACCT_CORP : STR_ACCT_PERSONAL));
         lv_obj_set_style_text_font(chip, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(chip, a->corp ? UI_CORP : UI_MUTED, 0);
@@ -775,48 +801,79 @@ static void add_session_row(int flat_idx, bool multi_acct)
         lv_obj_set_style_radius(chip, 8, 0);
         lv_obj_set_style_pad_hor(chip, 5, 0);
         lv_obj_set_style_pad_ver(chip, 1, 0);
-        lv_obj_align(chip, LV_ALIGN_LEFT_MID, 26, 11);
         lv_obj_update_layout(chip);
-        sub_x = 26 + lv_obj_get_width(chip) + 6;
+        chip_slot = lv_obj_get_width(chip) + 6;
     }
 
-    /* Sub-linha: conta multi-acct mostra org · modelo (selo corp/pess cobre o
-       status via cor do dot); conta única cai no modelo, e sem modelo volta
-       ao par agente/host de sempre — sem host quando a lista já está
-       agrupada por ele. Largura reservada pro medidor de contexto (ou só a
-       margem, sem medidor) à direita — nunca deixa o texto passar por baixo. */
-    lv_obj_t *sub = lv_label_create(row);
-    if (multi_acct && a->account[0]) {
-        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s",
-                              a->org[0] ? a->org : "conta",
-                              a->model[0] ? a->model : a->agent);
-    } else if (a->model[0]) {
-        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s", a->model, i18n_status(a->status));
-    } else if (s_group_by_host) {
-        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s", a->agent, i18n_status(a->status));
-    } else {
-        lv_label_set_text_fmt(sub, "%s \xC2\xB7 %s \xC2\xB7 %s",
-                              host_label(a->host), a->agent, i18n_status(a->status));
+    lv_obj_t *name = lv_label_create(row);
+    lv_label_set_text(name, a->project);
+    lv_obj_set_style_text_font(name, &lv_font_ui_16, 0);
+    lv_obj_set_style_text_color(name, UI_TEXT, 0);
+    /* corta o nome longo em vez de deixá-lo passar por baixo do cronômetro;
+       sem cronômetro, a linha inteira é dele. Medido com lv_txt_get_size, e não
+       com lv_obj_update_layout, porque isto roda em TODA linha: medir o texto é
+       O(texto), enquanto atualizar o layout sobe até a tela a cada chamada. */
+    lv_coord_t name_max = SESS_ROW_W - SESS_TEXT_X - chip_slot -
+                          (has_timer ? SESS_TIME_RESERVE : SESS_PAD_X);
+    lv_point_t nsz;
+    lv_txt_get_size(&nsz, a->project, &lv_font_ui_16,
+                    lv_obj_get_style_text_letter_space(name, LV_PART_MAIN), 0,
+                    LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_coord_t name_w = LV_MIN(nsz.x, name_max);
+    lv_obj_set_width(name, name_w);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, SESS_TEXT_X, SESS_Y_TOP);
+    if (chip) {
+        /* encostado no nome real, não numa largura fixa: com nome curto um
+           offset fixo deixaria o selo flutuando no meio da linha */
+        lv_obj_align(chip, LV_ALIGN_LEFT_MID, SESS_TEXT_X + name_w + 6, SESS_Y_TOP);
     }
+
+    /* Sub-linha: só o que a cor do dot não diz. No máximo três tokens —
+       identidade (a org quando há mais de uma conta, o host quando a lista está
+       corrida; nenhum dos dois quando ela já está agrupada por host), o modelo
+       (ou o agente, quando a ponte não leu o transcript) e o effort. O status
+       por extenso saiu daqui: era o dot repetido em palavras. */
+    const char *parts[3];
+    int np = 0;
+    if (multi_acct && a->account[0]) {
+        parts[np++] = a->org[0] ? a->org : "conta";
+    } else if (!s_group_by_host) {
+        parts[np++] = host_label(a->host);
+    }
+    parts[np++] = a->model[0] ? a->model : a->agent;
+    if (a->effort[0]) {
+        parts[np++] = a->effort;
+    }
+    /* 96: o pior caso é host_label devolvendo h->host (47) + " · " + agent (31)
+       + " · " + effort (7) + NUL = 92. snprintf devolve o tamanho que QUERIA
+       escrever, então o laço para pelo offset antes de a subtração estourar. */
+    char subtext[96];
+    int off = 0;
+    for (int i = 0; i < np && off < (int)sizeof(subtext); i++) {
+        off += snprintf(subtext + off, sizeof(subtext) - off, "%s%s",
+                        i ? " \xC2\xB7 " : "", parts[i]);
+    }
+
+    lv_obj_t *sub = lv_label_create(row);
+    lv_label_set_text(sub, subtext);
     lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(sub, UI_MUTED, 0);
-    lv_coord_t reserve_right = (a->context_pct != 255) ? 72 : UI_PAD;
-    lv_obj_set_width(sub, SESS_ROW_W - sub_x - reserve_right);
+    /* largura reservada pro medidor de contexto (ou só a margem, sem medidor)
+       à direita — nunca deixa o texto passar por baixo dele */
+    lv_obj_set_width(sub, SESS_ROW_W - SESS_TEXT_X -
+                          (a->context_pct != 255 ? SESS_BAR_RESERVE : SESS_PAD_X));
     lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
-    lv_obj_align(sub, LV_ALIGN_LEFT_MID, sub_x, 11);
+    lv_obj_align(sub, LV_ALIGN_LEFT_MID, SESS_TEXT_X, SESS_Y_SUB);
 
-    /* Medidor de contexto: substitui o e-mail à direita (a org já foi para a
-       sub-linha). Só aparece quando a ponte reportou um valor. */
+    /* Medidor de contexto: só a barra. O percentual em texto não dizia nada que
+       ela já não mostrasse e disputava a coluna direita com o cronômetro. Só
+       aparece quando a ponte reportou um valor — sem barra é "sem dado";
+       trilho vazio é 0%. */
     if (a->context_pct != 255) {
-        lv_obj_t *ctxlab = lv_label_create(row);
-        lv_label_set_text_fmt(ctxlab, "ctx %u%%", (unsigned)a->context_pct);
-        lv_obj_set_style_text_font(ctxlab, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(ctxlab, UI_MUTED, 0);
-        lv_obj_align(ctxlab, LV_ALIGN_RIGHT_MID, -4, 4);
-
         lv_obj_t *cbar = lv_bar_create(row);
-        lv_obj_set_size(cbar, 60, 5);
-        lv_obj_align(cbar, LV_ALIGN_RIGHT_MID, -4, 16);
+        lv_obj_set_size(cbar, SESS_BAR_W, SESS_BAR_H);
+        lv_obj_align(cbar, LV_ALIGN_RIGHT_MID, -SESS_PAD_X, SESS_Y_SUB);
         lv_obj_set_style_bg_color(cbar, UI_BORDER, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(cbar, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_radius(cbar, 2, LV_PART_MAIN);
@@ -826,16 +883,12 @@ static void add_session_row(int flat_idx, bool multi_acct)
         lv_bar_set_value(cbar, a->context_pct, LV_ANIM_OFF);
     }
 
-    /* Só quem está working ganha cronômetro. Mudar de status muda a geração e
-       reconstrói a lista, então uma linha registrada aqui continua working até
-       ser destruída — não há caso de virar working sem passar por aqui. */
-    if (strcmp(a->status, "working") == 0 && a->since != 0 &&
-        s_sess_timer_count < HERDR_MAX_AGENTS_TOTAL) {
+    if (has_timer) {
         lv_obj_t *t = lv_label_create(row);
         set_elapsed_text(t, time(NULL), a->since);   /* já nasce com o valor certo */
         lv_obj_set_style_text_font(t, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(t, UI_MUTED, 0);
-        lv_obj_align(t, LV_ALIGN_RIGHT_MID, -4, -8);   /* na altura do nome */
+        lv_obj_align(t, LV_ALIGN_RIGHT_MID, -SESS_PAD_X, SESS_Y_TOP);
         s_sess_timers[s_sess_timer_count].label = t;
         s_sess_timers[s_sess_timer_count].since = a->since;
         s_sess_timer_count++;

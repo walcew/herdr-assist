@@ -48,15 +48,6 @@ const char *i18n_get(str_id_t id)
     return S[id][s_lang];
 }
 
-const char *i18n_status(const char *status)
-{
-    if (strcmp(status, "working") == 0) return T(STR_ST_WORKING);
-    if (strcmp(status, "blocked") == 0) return T(STR_ST_BLOCKED);
-    if (strcmp(status, "idle") == 0)    return T(STR_ST_IDLE);
-    if (strcmp(status, "done") == 0)    return T(STR_ST_DONE);
-    return status;   /* status novo aparece cru, não some */
-}
-
 const char *i18n_weekday(int wday)
 {
     if (wday < 0 || wday > 6) {
