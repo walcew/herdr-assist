@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <string.h>
 
 /**
  * Decodifica um frame RLE para LV_IMG_CF_TRUE_COLOR_ALPHA em 16 bpp com
@@ -20,16 +21,23 @@
  * pretos: o antialias do zoom interpola a cor dos vizinhos, e preto se dilui
  * no fundo escuro da home (a cor original da chave deixaria halo azulado).
  *
+ * O `end` é obrigatório porque os dados vêm de pacote de terceiro (cartão ou
+ * repositório na internet): um frame cujo RLE não cobre pixel_count faria o
+ * laço ler adiante indefinidamente. Com o limite, ele para e o que faltou sai
+ * transparente — pacote torto vira sprite incompleto, nunca leitura fora do
+ * buffer.
+ *
  * @param rle          pares (valor, contagem) do frame
+ * @param end          fim do bloco de RLE do pacote (limite de leitura)
  * @param out          buffer de saída (pixel_count * 3 bytes)
  * @param pixel_count  width * height
  * @param key          valor RGB565 tratado como transparente
  */
-static inline void rle_decode_tca16_swap(const uint16_t *rle, uint8_t *out,
-                                         int pixel_count, uint16_t key)
+static inline void rle_decode_tca16_swap(const uint16_t *rle, const uint16_t *end,
+                                         uint8_t *out, int pixel_count, uint16_t key)
 {
     int pos = 0;
-    while (pos < pixel_count) {
+    while (pos < pixel_count && rle + 1 < end) {
         uint16_t v = *rle++;
         uint16_t n = *rle++;
         uint8_t a  = (v == key) ? 0x00 : 0xFF;
@@ -40,5 +48,8 @@ static inline void rle_decode_tca16_swap(const uint16_t *rle, uint8_t *out,
             out[pos * 3 + 1] = lo;
             out[pos * 3 + 2] = a;
         }
+    }
+    if (pos < pixel_count) {
+        memset(out + (size_t)pos * 3, 0, (size_t)(pixel_count - pos) * 3);
     }
 }
