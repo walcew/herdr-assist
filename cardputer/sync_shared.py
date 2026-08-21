@@ -29,6 +29,8 @@ FILES = (
     "discovery.c", "discovery.h",
     "panel_cfg.c", "panel_cfg.h",
     "herdr_model.c", "herdr_model.h",
+    # dependência do herdr_model: o diff de status alimenta o log de atividade
+    "activity_log.c", "activity_log.h",
     "herdr_conn.c", "herdr_conn.h",
     "pairing.c", "pairing.h",
     # só o contrato: o Wi-Fi do Cardputer é a lib do Arduino (src/net.cpp)
