@@ -47,6 +47,16 @@ def fmt_usd(v: float) -> str:
     return "~US$ " + (grouped + ("," + frac if frac else ""))
 
 
+def to_cents(v: float) -> int:
+    """US$ em centavos, para o painel formatar conforme o idioma dele.
+
+    Satura no teto de uint32 do firmware — US$ 42 milhões não acontecem, mas um
+    transcript corrompido não pode virar um número negativo do outro lado.
+    """
+    c = int(round(max(v, 0.0) * 100))
+    return min(c, 0xFFFFFFFF)
+
+
 def file_cost(jsonl_path: str):
     """{"total": float, "days": {date: float}} do transcript, ou None em falha."""
     total = 0.0

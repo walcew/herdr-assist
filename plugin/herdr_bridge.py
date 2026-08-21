@@ -792,9 +792,9 @@ def collect_claude(config_dir: str) -> dict:
     if not st.get("loggedIn"):
         raise claude_cli.NotLoggedIn(config_dir)
     rows = claude_cli.usage_rows(config_dir)
-    # o CLI só expõe o tipo de assinatura ("max"), não o tier detalhado que a
-    # credencial trazia (default_claude_max_20x -> "Max 20x")
-    plan = (st.get("subscriptionType") or "").capitalize()
+    # tier detalhado do perfil ("Max 20x"); sem ele, o tipo cru do CLI ("Max")
+    plan = (accounts.plan_label(accounts.read_account_tier(config_dir, HOME))
+            or (st.get("subscriptionType") or "").capitalize())
     account = st.get("email") or read_account_email("claude", config_dir, HOME)
     return {"name": "Claude", "plan": plan, "limits": rows,
             "account": clip(account, 32)}
@@ -953,8 +953,13 @@ def aggregate_cost(account_dirs, session_paths) -> dict:
         m = _file_cost_cached(p)
         if m:
             now += m["total"]
+    # Centavos são o valor de verdade: quem formata é o painel, que conhece o
+    # idioma configurado (a ponte não). As strings continuam indo junto para os
+    # painéis anteriores a este campo, que só sabem exibir texto pronto.
     return {"now": cost.fmt_usd(now), "week": cost.fmt_usd(week),
-            "life": cost.fmt_usd(life)}
+            "life": cost.fmt_usd(life),
+            "now_cents": cost.to_cents(now), "week_cents": cost.to_cents(week),
+            "life_cents": cost.to_cents(life)}
 
 
 async def limits_loop() -> None:

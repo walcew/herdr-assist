@@ -48,16 +48,50 @@ def _jwt_email(id_token: str) -> str:
     return ""
 
 
+def _oauth_account(config_dir: str, home: str) -> dict:
+    """Perfil da conta claude: o `oauthAccount` do .claude.json.
+
+    Tenta o do config-dir e cai no do home. Testar só a existência do arquivo
+    não basta: um config-dir pode ter .claude.json SEM perfil (uma execução que
+    não logou ali cria o arquivo assim mesmo), e ele mascararia o do home,
+    deixando conta e plano vazios.
+    """
+    for path in (os.path.join(config_dir, ".claude.json"),
+                 os.path.join(home, ".claude.json")):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                oa = (json.load(fh).get("oauthAccount") or {})
+            if oa:
+                return oa
+        except (OSError, ValueError, json.JSONDecodeError, AttributeError, TypeError):
+            continue
+    return {}
+
+
+def read_account_tier(config_dir: str, home: str) -> str:
+    """rateLimitTier da conta claude, do mesmo perfil que dá o e-mail.
+
+    O CLI só expõe o tipo de assinatura ("max"); o tier detalhado
+    ("default_claude_max_20x") mora no perfil gravado no config-dir. É config,
+    não credencial — segue sendo escrito em todo sistema, e ler daqui não
+    reintroduz a dependência do cofre que quebrou a coleta.
+    """
+    oa = _oauth_account(config_dir, home)
+    return oa.get("organizationRateLimitTier") or oa.get("userRateLimitTier") or ""
+
+
+def plan_label(tier: str) -> str:
+    """"default_claude_max_20x" -> "Max 20x"; "" quando não dá para ler."""
+    if not tier:
+        return ""
+    return tier.split("claude_")[-1].replace("_", " ").capitalize()
+
+
 def read_account_email(agent: str, config_dir: str, home: str) -> str:
     """E-mail logado da conta. `""` quando não dá para resolver."""
     try:
         if agent == "claude":
-            path = os.path.join(config_dir, ".claude.json")
-            if not os.path.exists(path):  # conta default guarda no home
-                path = os.path.join(home, ".claude.json")
-            with open(path, encoding="utf-8") as fh:
-                data = json.load(fh)
-            return ((data.get("oauthAccount") or {}).get("emailAddress") or "")
+            return _oauth_account(config_dir, home).get("emailAddress") or ""
         if agent == "codex":
             with open(os.path.join(config_dir, "auth.json"), encoding="utf-8") as fh:
                 tok = (json.load(fh).get("tokens") or {})

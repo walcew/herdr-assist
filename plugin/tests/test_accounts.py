@@ -80,5 +80,33 @@ class TestOrgCorp(unittest.TestCase):
         self.assertEqual(accounts.org_and_corp(""), ("", False))
 
 
+class TestPerfilDaConta(unittest.TestCase):
+    """O .claude.json do config-dir pode existir SEM oauthAccount (uma execução
+    que não logou ali cria o arquivo assim). Nesse caso vale o perfil do home —
+    testar só a existência do arquivo zerava conta e plano."""
+
+    def test_tier_vira_rotulo_de_plano(self):
+        self.assertEqual(accounts.plan_label("default_claude_max_20x"), "Max 20x")
+        self.assertEqual(accounts.plan_label("default_claude_pro"), "Pro")
+        self.assertEqual(accounts.plan_label(""), "")
+
+    def test_tier_do_config_dir(self):
+        self.assertEqual(
+            accounts.read_account_tier(os.path.join(FIX, "work"), FIX),
+            "default_claude_max_20x")
+
+    def test_arquivo_sem_perfil_nao_mascara_o_do_home(self):
+        vazio = os.path.join(FIX, "nologin")
+        self.assertEqual(accounts.read_account_email("claude", vazio, os.path.join(FIX, "work")),
+                         "bruno@work.gov.br")
+        self.assertEqual(accounts.read_account_tier(vazio, os.path.join(FIX, "work")),
+                         "default_claude_max_20x")
+
+    def test_sem_perfil_em_lugar_nenhum(self):
+        vazio = os.path.join(FIX, "nologin")
+        self.assertEqual(accounts.read_account_email("claude", vazio, vazio), "")
+        self.assertEqual(accounts.read_account_tier(vazio, vazio), "")
+
+
 if __name__ == "__main__":
     unittest.main()
