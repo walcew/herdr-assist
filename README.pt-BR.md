@@ -132,6 +132,42 @@ teclado, padrão de bloqueio — se redimensiona para a nova proporção. O term
 troca altura por largura, saindo de ~43×19 para 66×10 células, e a ponte é avisada da nova
 geometria.
 
+## Avatares
+
+O mascote da home é um **pacote**, não código compilado. Um motor só toca qualquer arquivo
+`.hav`: o Clawd de fábrica, embutido na flash, e o que mais estiver no **cartão microSD**
+do painel. Tocar no mascote cicla entre os instalados.
+
+Antes disso, cada avatar era um driver com os sprites em arrays `static const` — cinco
+deles ocupavam 3,2 MB e eram 65% do firmware. Acrescentar um exigia recompilar, e ninguém
+de fora do projeto conseguia acrescentar nada. Agora a app cabe em um terço do slot de
+flash e um avatar é um arquivo.
+
+**Configurações → Dispositivo → Avatares** lista o que os repositórios cadastrados oferecem
+mais o que já está no cartão. Toque na linha para instalar, ou para tornar corrente um já
+instalado; a lixeira remove. Repositório é só **uma URL base servindo arquivos estáticos** —
+GitHub raw, GitHub Pages, GitLab ou um nginx qualquer, sem API de fornecedor no meio:
+
+```
+GET <base>/index.json    {"avatars":[{"id":"sonic","name":"Sonic","size":38392}]}
+GET <base>/sonic.hav     →  /sd/avatars/sonic.hav
+```
+
+Além do padrão embutido, os repositórios vêm de dois campos naquela tela (salvos na hora,
+sem reiniciar), de `/sd/avatars/repos.txt` (uma URL por linha, `#` comenta) e da ponte —
+ponha suas URLs em `~/.config/herdr-assist/avatar_repos` e o plugin as empurra a cada
+conexão. Id repetido fica com o primeiro que apareceu, e o repositório padrão é lido
+primeiro: um repositório de terceiro não sequestra o nome de um avatar oficial.
+
+Todo pacote é validado antes de merecer confiança — magic, tabela de animações, offsets de
+frame, índices de sequência — e o decoder de RLE é limitado pelo fim do buffer, porque
+pacote vem de cartão ou da internet. Pacote que não passa é recusado e sai do ciclo de
+toque, em vez de travá-lo.
+
+Os pacotes são gerados por `scripts/hav_pack.py` e o formato está documentado em
+`src/avatar_pack.h`. Ler um leva segundos no cartão (1,5 MB a ~520 KB/s), então o motor
+carrega numa task separada: o avatar atual segue animando, esmaecido, até o novo chegar.
+
 ## Hardware
 
 **JC3248W535EN** (Guition/Sunton), ~R$ 120 no AliExpress:
@@ -143,6 +179,7 @@ geometria.
 | Display | 3.5" IPS 320×480, controlador AXS15231B via QSPI |
 | Touch | Capacitivo, mesmo AXS15231B, via I2C (SCL 8 / SDA 4) |
 | Rede | Wi-Fi 2.4 GHz + BLE |
+| Armazenamento | Slot microSD (TF), SPI em IO10/11/12/13 — guarda os pacotes de avatar |
 
 Pinout relevante em `src/esp_bsp.h`; esquemáticos e datasheets em `docs/`.
 
@@ -331,6 +368,10 @@ testar o fluxo.
 | `src/ui_theme.c` | Paleta, fontes, topbar e dock compartilhados pelas telas |
 | `src/herdr_ui.c` | UI LVGL: home (relógio, mascote, resumo, mapa de calor), sessões, dash de limites, terminal, ações, teclado |
 | `src/herdr_ui_settings.c` | Aba de configurações: scan de Wi-Fi, senha, editor de hosts, idioma, atualização de firmware |
+| `src/sd.c` | Montagem do microSD (`/sd`) por SPI3, com retry — o cartão guarda estado através de reset a quente |
+| `src/avatar_pack.c` | Formato `.hav`: cabeçalho, tabela de animações, validação de pacote vindo de cartão ou da internet |
+| `src/avatar.c` | Motor de avatar: toca qualquer pacote, cicla no toque, carrega do cartão fora da task da UI |
+| `src/avatar_store.c` | Marketplace de avatares: catálogo dos repositórios, download e instalação; é também a única task de I/O de avatar |
 | `src/fw_update.c` | OTA via GitHub Releases: checagem diária do manifest, download com esp_https_ota, confirmação do rollback |
 | `src/lv_font_terminal_12.c` | Fonte gerada (não editar) — veja `scripts/gen_font.sh` |
 | `src/esp_bsp.c`, `src/esp_lcd_axs15231b.c`, `src/lv_port.c` | BSP do fabricante (display, touch, port LVGL) |
@@ -346,6 +387,15 @@ testar o fluxo.
   acabou de definir. Funciona para varredura sequencial, que é o padrão do refresh completo;
   com áreas arbitrárias, cada região vai parar no lugar errado e a tela embaralha. Habilitar
   parcial exige também trocar esse RAMWRC por RAMWR — não testado.
+- **A RAM interna é o recurso escasso aqui, não a flash nem a PSRAM.** O chip tem 242 KB
+  dela e o painel termina o boot gastando quase tudo: display 80 KB, UI 43 KB, Wi-Fi 66 KB,
+  pontes 22 KB. Duas coisas decorrem disso. Criar task pode falhar de verdade, então cheque
+  o retorno — a task de avatar não checava, e o marketplace ficou morto em silêncio por
+  vários builds. E os dois buffers de transporte do LCD, que movem o framebuffer da PSRAM
+  para o painel, eram `hres*vres/10` = 30 KB cada: com eles sobravam ~17 KB e o handshake
+  TLS não conseguia alocar (`esp-aes: Failed to allocate memory`), então nem OTA nem
+  marketplace funcionavam. Agora são `/20` — 47 KB livres, e um flush de tela cheia custa
+  33,7 ms em vez de 29,7 ms (medido).
 - **Rotação é sempre por software.** O painel ignora MADCTL, então ela não muda com o
   aparelho ligado: a orientação é lida da NVS no boot e escolhida em `DEMO_LVGL.c`, e
   trocá-la em Configurações → Dispositivo → Orientação salva e reinicia, como toda mudança
