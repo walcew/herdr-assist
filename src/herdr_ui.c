@@ -891,9 +891,10 @@ static int collect_agents(int host, int *out, int max)
     return n;
 }
 
-static void add_section_label(const char *text, const char *right, lv_color_t right_color)
+static void add_section_label(lv_obj_t *parent, const char *text, const char *right,
+                              lv_color_t right_color)
 {
-    lv_obj_t *sec = ui_plain(s_sess_list);
+    lv_obj_t *sec = ui_plain(parent);
     lv_obj_set_size(sec, LV_PCT(100), 22);
 
     lv_obj_t *l = lv_label_create(sec);
@@ -973,7 +974,7 @@ static void rebuild_session_rows(void)
             continue;
         }
         herdr_conn_state_t conn = herdr_model_get_conn(h);
-        add_section_label(host_label(h),
+        add_section_label(s_sess_list, host_label(h),
                           conn == HERDR_CONN_ONLINE ? T(STR_ONLINE) :
                           conn == HERDR_CONN_CONNECTING ? T(STR_CONNECTING) : T(STR_OFFLINE),
                           conn == HERDR_CONN_ONLINE ? UI_IDLE :
@@ -1173,13 +1174,131 @@ static void fmt_dur(char *buf, size_t size, uint32_t sec)
     if (sec == 0) {
         buf[0] = '\0';
     } else if (sec < 60) {
-        snprintf(buf, size, " (%us)", (unsigned)sec);
+        snprintf(buf, size, "%us", (unsigned)sec);
     } else if (sec < 3600) {
-        snprintf(buf, size, " (%umin)", (unsigned)(sec / 60));
+        snprintf(buf, size, "%umin", (unsigned)(sec / 60));
     } else {
-        snprintf(buf, size, " (%uh%02u)", (unsigned)(sec / 3600),
+        snprintf(buf, size, "%uh%02u", (unsigned)(sec / 3600),
                  (unsigned)((sec % 3600) / 60));
     }
+}
+
+/* Linha de evento na mesma gramática da aba Sessões: a cor mora no marcador,
+   o conteúdo fica em UI_TEXT e o acessório em UI_MUTED à direita. Sem card —
+   o feed chega a 64 eventos e lê melhor corrido do que fatiado. */
+#define ACT_ROW_W  (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD)
+#define ACT_ROW_H  38
+#define ACT_TEXT_X 22   /* dot de 10px em x=4, mais o respiro */
+
+static void add_activity_row(const activity_event_t *e, time_t now, bool multi_host)
+{
+    lv_color_t color;
+    const char *verb;
+    switch (e->type) {
+    case ACT_BLOCKED:
+        color = UI_BLOCKED; verb = T(STR_EV_BLOCKED);
+        break;
+    case ACT_DONE:
+        /* teal, o mesmo que ui_status_color dá a "done" nas Sessões */
+        color = UI_DONE;    verb = T(STR_EV_DONE);
+        break;
+    default:
+        color = UI_WORKING; verb = T(STR_EV_STARTED);
+        break;
+    }
+
+    lv_obj_t *row = ui_plain(s_activity_list);
+    lv_obj_set_size(row, LV_PCT(100), ACT_ROW_H);
+    /* Nada aqui se clica, e não ser clicável mantém o alvo do toque no tile —
+       que a reconstrução não apaga. Antes isso vinha de graça, porque a linha
+       era um label; ui_plain devolve um objeto comum, que nasce clicável. */
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *dot = lv_obj_create(row);
+    lv_obj_set_size(dot, 10, 10);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(dot, 0, 0);
+    lv_obj_set_style_shadow_width(dot, 0, 0);
+    lv_obj_set_style_bg_color(dot, color, 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 4, -7);
+
+    /* A hora vai à direita, como todo metadado do painel. A largura dela sai
+       do orçamento do título, para o corte cair no texto e não sobre ela. */
+    char when[16];
+    lv_coord_t reserve = UI_PAD;
+    if (fmt_when(when, sizeof(when), now, e->epoch)) {
+        lv_obj_t *w = lv_label_create(row);
+        lv_label_set_text(w, when);
+        lv_obj_set_style_text_font(w, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(w, UI_MUTED, 0);
+        lv_obj_align(w, LV_ALIGN_RIGHT_MID, -4, -7);
+        reserve = 52;
+    }
+
+    lv_obj_t *head = lv_label_create(row);
+    lv_label_set_text_fmt(head, "%s \xC2\xB7 %s", e->project, verb);
+    lv_obj_set_style_text_font(head, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(head, UI_TEXT, 0);
+    lv_obj_set_width(head, ACT_ROW_W - ACT_TEXT_X - reserve);
+    lv_label_set_long_mode(head, LV_LABEL_LONG_DOT);
+    lv_obj_align(head, LV_ALIGN_LEFT_MID, ACT_TEXT_X, -7);
+
+    /* quem fez, em qual máquina (só quando há mais de uma) e quanto levou */
+    char dur[16];
+    fmt_dur(dur, sizeof(dur), e->dur);
+    char host[40] = "";
+    char len[24] = "";
+    if (multi_host) {
+        snprintf(host, sizeof(host), " \xC2\xB7 %s", host_label(e->host));
+    }
+    if (dur[0]) {
+        snprintf(len, sizeof(len), " \xC2\xB7 %s", dur);
+    }
+    lv_obj_t *sub = lv_label_create(row);
+    lv_label_set_text_fmt(sub, "%s%s%s", e->agent, host, len);
+    lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(sub, UI_MUTED, 0);
+    lv_obj_set_width(sub, ACT_ROW_W - ACT_TEXT_X - UI_PAD);
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_DOT);
+    lv_obj_align(sub, LV_ALIGN_LEFT_MID, ACT_TEXT_X, 9);
+}
+
+/** Abre um dia com o balanço dele à direita, no cabeçalho das Sessões. */
+static void add_day_header(const activity_event_t *ev, int n, time_t now)
+{
+    time_t et = (time_t)ev[0].epoch;
+    struct tm etm;
+    struct tm ntm;
+    localtime_r(&et, &etm);
+    localtime_r(&now, &ntm);
+    const char *label = (etm.tm_year == ntm.tm_year && etm.tm_yday == ntm.tm_yday)
+                            ? T(STR_TODAY) : i18n_weekday(etm.tm_wday);
+
+    /* Contador zerado some em vez de virar "0": o dia em que nada bloqueou não
+       precisa dizer isso. */
+    activity_summary_t sm = activity_summarize(ev, n, 0);
+    char started[12] = "";
+    char blocked[12] = "";
+    char done[12] = "";
+    char active[24] = "";   /* "  ·  " são 6 bytes; fmt_dur cabe em 15 + NUL */
+    if (sm.started) {
+        snprintf(started, sizeof(started), "\xE2\x97\x8F%u  ", (unsigned)sm.started);
+    }
+    if (sm.blocked) {
+        snprintf(blocked, sizeof(blocked), LV_SYMBOL_BELL "%u  ", (unsigned)sm.blocked);
+    }
+    if (sm.done) {
+        snprintf(done, sizeof(done), LV_SYMBOL_OK "%u", (unsigned)sm.done);
+    }
+    if (sm.active_secs) {
+        char d[16];
+        fmt_dur(d, sizeof(d), sm.active_secs);
+        snprintf(active, sizeof(active), "  \xC2\xB7  %s", d);
+    }
+    char right[64];
+    snprintf(right, sizeof(right), "%s%s%s%s", started, blocked, done, active);
+    add_section_label(s_activity_list, label, right, UI_MUTED);
 }
 
 static void rebuild_activity(void)
@@ -1198,59 +1317,44 @@ static void rebuild_activity(void)
     }
 
     time_t now = time(NULL);
+    struct tm ntm;
+    localtime_r(&now, &ntm);
+    /* Sem relógio sincronizado não há dia a que pendurar os eventos, e fmt_when
+       já se cala sozinho: a lista sai corrida, sem cabeçalhos. */
+    bool clock_ok = ntm.tm_year >= 120;
 
-    /* cabeçalho: totais do dia (desde a meia-noite local) */
-    struct tm tmd;
-    localtime_r(&now, &tmd);
-    tmd.tm_hour = 0;
-    tmd.tm_min = 0;
-    tmd.tm_sec = 0;
-    uint32_t day_start = (uint32_t)mktime(&tmd);
-    activity_summary_t sm = activity_summarize(ev, n, day_start);
-    char act[24];
-    if (sm.active_secs == 0) {
-        act[0] = '\0';
-    } else if (sm.active_secs < 3600) {
-        snprintf(act, sizeof(act), "  \xC2\xB7  %umin", (unsigned)(sm.active_secs / 60));
-    } else {
-        snprintf(act, sizeof(act), "  \xC2\xB7  %uh%02u", (unsigned)(sm.active_secs / 3600),
-                 (unsigned)((sm.active_secs % 3600) / 60));
-    }
-    lv_obj_t *sum = lv_label_create(s_activity_list);
-    lv_label_set_text_fmt(sum, "%s   \xE2\x97\x8F%u   " LV_SYMBOL_BELL "%u   " LV_SYMBOL_OK "%u%s",
-                          T(STR_TODAY), sm.started, sm.blocked, sm.done, act);
-    lv_obj_set_style_text_font(sum, &lv_font_ui_bold_16, 0);
-    lv_obj_set_style_text_color(sum, UI_TEXT, 0);
-    lv_obj_set_style_pad_bottom(sum, 4, 0);
-
-    for (int i = 0; i < n; i++) {
-        const activity_event_t *e = &ev[i];
-        const char *icon;
-        const char *verb;
-        lv_color_t color;
-        switch (e->type) {
-        case ACT_BLOCKED:
-            icon = LV_SYMBOL_BELL; color = UI_BLOCKED; verb = T(STR_EV_BLOCKED);
-            break;
-        case ACT_DONE:
-            icon = LV_SYMBOL_OK;   color = UI_IDLE;    verb = T(STR_EV_DONE);
-            break;
-        default:
-            icon = "\xE2\x97\x8F"; color = UI_WORKING; verb = T(STR_EV_STARTED);
+    /* A máquina só é dita quando há mais de uma, como na Dash e nas Sessões. */
+    bool multi_host = false;
+    for (int i = 1; i < n; i++) {
+        if (ev[i].host != ev[0].host) {
+            multi_host = true;
             break;
         }
-        char when[16];
-        char dur[16];
-        fmt_when(when, sizeof(when), now, e->epoch);
-        fmt_dur(dur, sizeof(dur), e->dur);
+    }
 
-        lv_obj_t *row = lv_label_create(s_activity_list);
-        lv_label_set_text_fmt(row, "%s  %s  %s \xC2\xB7 %s %s%s",
-                              icon, when, e->agent, e->project, verb, dur);
-        lv_obj_set_style_text_font(row, &lv_font_ui_14, 0);
-        lv_obj_set_style_text_color(row, color, 0);
-        lv_obj_set_width(row, lv_pct(100));
-        lv_label_set_long_mode(row, LV_LABEL_LONG_DOT);
+    /* Os eventos chegam do mais recente ao mais antigo, então cada troca de dia
+       abre uma seção nova com o balanço daquele dia. */
+    int i = 0;
+    while (i < n) {
+        int j = n;
+        if (clock_ok && ev[i].epoch != 0) {
+            struct tm dtm;
+            time_t dt = (time_t)ev[i].epoch;
+            localtime_r(&dt, &dtm);
+            for (j = i + 1; j < n; j++) {
+                struct tm ktm;
+                time_t kt = (time_t)ev[j].epoch;
+                localtime_r(&kt, &ktm);
+                if (ktm.tm_yday != dtm.tm_yday || ktm.tm_year != dtm.tm_year) {
+                    break;
+                }
+            }
+            add_day_header(&ev[i], j - i, now);
+        }
+        for (int k = i; k < j; k++) {
+            add_activity_row(&ev[k], now, multi_host);
+        }
+        i = j;
     }
 }
 
