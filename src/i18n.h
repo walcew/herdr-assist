@@ -55,12 +55,14 @@ typedef enum {
     /* --- dash --- */                                                                       \
     X(TAB_DASH,        "Dashboards",                  "Dashboards")                          \
     X(NO_USAGE,        "No usage data yet.",          "Sem dados de uso ainda.")             \
+    X(ACCT_CORP,       "corp",                        "corp")                                \
+    X(ACCT_PERSONAL,   "pers",                        "pess")                                \
     X(STALE,           "not updated",                 "sem atualizar")                       \
     X(STALE_SINCE,     "not updated since %s",        "sem atualizar desde %s")              \
     X(COST_TITLE,      "Cost · estimate",             "Custo · estimativa")                  \
     X(COST_NOW,        "Now",                         "Agora")                               \
     X(COST_WEEK,       "Week",                        "Semana")                              \
-    X(COST_LIFE,       "Lifetime",                    "Vitalício")                           \
+    X(COST_LIFE,       "All time",                    "Acumulado")                           \
     /* --- detalhe da sessão --- */                                                          \
     X(LOADING,         "loading...",                  "carregando...")                       \
     X(PROMPT_PH,       "Prompt for the agent...",     "Prompt para o agente...")             \

@@ -15,6 +15,7 @@
 #include "avatar.h"
 #include "i18n.h"
 #include "herdr_model.h"
+#include "money.h"
 #include "herdr_conn.h"
 #include "herdr_kb.h"
 #include "herdr_ui_settings.h"
@@ -752,7 +753,7 @@ static void add_session_row(int flat_idx, bool multi_acct)
     lv_coord_t sub_x = 26;
     if (multi_acct && a->account[0] && a->org[0]) {
         lv_obj_t *chip = lv_label_create(row);
-        lv_label_set_text(chip, a->corp ? "corp" : "pess");
+        lv_label_set_text(chip, T(a->corp ? STR_ACCT_CORP : STR_ACCT_PERSONAL));
         lv_obj_set_style_text_font(chip, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(chip, a->corp ? UI_CORP : UI_MUTED, 0);
         lv_obj_set_style_bg_color(chip, a->corp ? UI_CORP : UI_MUTED, 0);
@@ -980,17 +981,32 @@ static void rebuild_session_rows(void)
 #define DASH_PAD_TOP    10  /* padding superior do card */
 #define DASH_PAD_X      12  /* padding lateral do card */
 #define DASH_PAD_BOTTOM 12
-#define DASH_LOGO       26  /* slot quadrado do logo do provedor */
+/* Slot quadrado do logo: cobre as DUAS linhas do cabeçalho (título em ui_14,
+   line_height 18, + 3 de respiro + e-mail em ui_12, line_height 16). Era 26,
+   da época em que o cabeçalho tinha uma linha só. */
+#define DASH_LOGO       37
 #define DASH_TXT_H      17  /* altura da linha de texto de um limite */
 #define DASH_BAR_H      12
 /* margem 11 + texto + respiro 6 + barra: passo de um bloco de limite */
 #define DASH_ROW_BLOCK  (11 + DASH_TXT_H + 6 + DASH_BAR_H)
 /* onde o primeiro bloco começa, logo abaixo do cabeçalho do card */
 #define DASH_ROWS_Y     (DASH_PAD_TOP + DASH_LOGO)
+/* altura de uma linha do card de custo: valor em bold_16 (19px) + respiro */
+#define COST_ROW_H      22
 #define DASH_BAR_W      (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD - 2 * DASH_PAD_X)
 /* largura do título (nome/host/conta) até o slot do plano, para o e-mail
    longo truncar em vez de invadir o canto direito do card */
 #define DASH_NAME_MAX_W (LV_HOR_RES - DASH_LOGO - 4 * DASH_PAD_X - 60)
+/* Linha do e-mail: a coluna do texto inteira, já que o plano fica na linha de
+   cima. Derivada como DASH_BAR_W (conta o dock e o pad da lista), ao contrário
+   de DASH_NAME_MAX_W, que é do tempo do cabeçalho de uma linha só. Dá 246px em
+   retrato — "wallacysferreira@gmail.com" ocupa 171. */
+#define DASH_ACCT_MAX_W (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD - 2 * DASH_PAD_X \
+                         - DASH_LOGO - 8)
+/* Título: a coluna do texto menos o plano à direita ("Max 20x" ocupa 50px na
+   ui_12) e o respiro. Sem esse teto o label passaria por baixo do plano. */
+#define DASH_TITLE_MAX_W (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD - 2 * DASH_PAD_X \
+                          - DASH_LOGO - 8 - 58)
 
 static void build_dash(void)
 {
@@ -1130,16 +1146,6 @@ static lv_color_t limit_color(uint8_t pct)
     return UI_BLOCKED;
 }
 
-/* Cor da barra fundindo teto e ritmo. Sem janela conhecida, cai na cor por
-   % absoluto de limit_color (comportamento antigo). */
-static lv_color_t row_bar_color(uint8_t pct, int expected, bool has_window)
-{
-    if (!has_window) return limit_color(pct);
-    if (pct >= 90) return UI_BLOCKED;         /* perto do teto: aviso máximo */
-    if ((int)pct > expected) return UI_WORKING; /* adiantado no ritmo */
-    return UI_IDLE;                            /* no ritmo ou folgado */
-}
-
 /**
  * Escreve um instante de forma curta: hora se a menos de 24h, senão o dia da
  * semana. Devolve false (e buf vazio) sem SNTP sincronizado ou sem instante —
@@ -1173,10 +1179,15 @@ static const lv_img_dsc_t *provider_logo(const char *name)
     return NULL;
 }
 
-static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_acct)
+static void add_limits_card(const herdr_limits_t *l, bool show_host)
 {
     time_t now = time(NULL);
     int n = l->row_count;
+    /* Cabeçalho de duas linhas quando a conta precisa aparecer: título e
+       contagem em cima, e-mail e plano embaixo. O e-mail inteiro cabe nessa
+       linha própria, que é o que o pill + org nunca conseguiram na linha do
+       título — com o host no nome o orçamento ficava negativo. */
+    bool two_line = l->account[0] != '\0';
     /* altura fixa por fórmula: LV_SIZE_CONTENT com filhos alinhados é armadilha
        no 8.4. A linha de "sem atualizar" cobra a margem de 8 mais a própria
        altura de texto. */
@@ -1205,64 +1216,32 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
         lv_obj_center(img);
     }
 
-    /* org conhecida numa conta multi-acct: pill corp/pess + org no lugar do
-       e-mail (mesmo padrão do selo em add_session_row, Sessões 2.0). Sem org
-       (ponte antiga ou conta única) o título antigo continua valendo. */
-    bool org_pill = show_acct && l->org[0];
-
     lv_obj_t *name = lv_label_create(card);
-    if (org_pill) {
-        if (show_host) {
-            lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", host_label(l->host), l->name);
-        } else {
-            lv_label_set_text(name, l->name);
-        }
-    } else if (show_host && show_acct) {
-        lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", l->name, l->account);
-    } else if (show_host) {
+    if (show_host) {
         lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", host_label(l->host), l->name);
-    } else if (show_acct) {
-        lv_label_set_text_fmt(name, "%s \xC2\xB7 %s", l->name, l->account);
     } else {
         lv_label_set_text(name, l->name);
     }
     lv_obj_set_style_text_font(name, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(name, UI_TEXT, 0);
-    if (!org_pill) {
-        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);   /* e-mail longo não estoura */
-        lv_obj_set_width(name, DASH_NAME_MAX_W);           /* largura até o slot do plano */
-    }
-    lv_obj_align_to(name, slot, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(name, DASH_TITLE_MAX_W);
+    /* com duas linhas o título sobe para o topo do slot; com uma, fica
+       centralizado nele como sempre */
+    lv_obj_align_to(name, slot,
+                    two_line ? LV_ALIGN_OUT_RIGHT_TOP : LV_ALIGN_OUT_RIGHT_MID,
+                    8, 0);
 
-    if (org_pill) {
-        /* nome sem largura fixa (provedor/host curtos, não truncam) para o
-           pill encostar nele; o resto do orçamento de DASH_NAME_MAX_W vai
-           para a org, que trunca se precisar */
-        lv_obj_update_layout(name);
-        lv_coord_t used = (lv_coord_t)(lv_obj_get_width(name) + 6);
-
-        lv_obj_t *chip = lv_label_create(card);
-        lv_label_set_text(chip, l->corp ? "corp" : "pess");
-        lv_obj_set_style_text_font(chip, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(chip, l->corp ? UI_CORP : UI_MUTED, 0);
-        lv_obj_set_style_bg_color(chip, l->corp ? UI_CORP : UI_MUTED, 0);
-        lv_obj_set_style_bg_opa(chip, LV_OPA_20, 0);   /* fundo suave, pill discreto */
-        lv_obj_set_style_radius(chip, 8, 0);
-        lv_obj_set_style_pad_hor(chip, 5, 0);
-        lv_obj_set_style_pad_ver(chip, 1, 0);
-        lv_obj_align_to(chip, name, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
-        lv_obj_update_layout(chip);
-        used = (lv_coord_t)(used + lv_obj_get_width(chip) + 6);
-
-        lv_obj_t *org = lv_label_create(card);
-        lv_label_set_text(org, l->org);
-        lv_obj_set_style_text_font(org, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(org, UI_MUTED, 0);
-        lv_label_set_long_mode(org, LV_LABEL_LONG_DOT);
-        lv_coord_t org_w = (lv_coord_t)(DASH_NAME_MAX_W - used);
-        if (org_w < 20) org_w = 20;   /* orçamento mínimo: org curta ainda aparece */
-        lv_obj_set_width(org, org_w);
-        lv_obj_align_to(org, chip, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+    if (two_line) {
+        lv_obj_t *acct = lv_label_create(card);
+        lv_label_set_text(acct, l->account);
+        lv_obj_set_style_text_font(acct, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(acct, UI_MUTED, 0);
+        /* e-mail fora do comum ainda trunca no fim, mas na linha inteira isso
+           só acontece passando de ~34 caracteres */
+        lv_label_set_long_mode(acct, LV_LABEL_LONG_DOT);
+        lv_obj_set_width(acct, DASH_ACCT_MAX_W);
+        lv_obj_align_to(acct, name, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 3);
     }
 
     if (l->plan[0]) {
@@ -1270,20 +1249,11 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
         lv_label_set_text(plan, l->plan);
         lv_obj_set_style_text_font(plan, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(plan, UI_MUTED, 0);
-        /* centralizado na altura do slot, como o align-items:center do design */
+        /* na linha do título: com duas linhas acompanha o topo, com uma fica
+           centralizado na altura do slot (align-items:center do design) */
         lv_obj_align(plan, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X,
-                     DASH_PAD_TOP + (DASH_LOGO - 14) / 2);
-    }
-
-    if (l->agents > 0) {
-        /* contagem por conta: canto direito, colada no fim do cabeçalho —
-           ainda cabe antes do primeiro bloco de limite (DASH_ROWS_Y + 11) */
-        lv_obj_t *cnt = lv_label_create(card);
-        lv_label_set_text_fmt(cnt, "%u (%u ativos)",
-                              (unsigned)l->agents, (unsigned)l->agents_working);
-        lv_obj_set_style_text_font(cnt, &lv_font_ui_12, 0);
-        lv_obj_set_style_text_color(cnt, UI_MUTED, 0);
-        lv_obj_align(cnt, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X, DASH_ROWS_Y - 6);
+                     two_line ? DASH_PAD_TOP + 2
+                              : DASH_PAD_TOP + (DASH_LOGO - 14) / 2);
     }
 
     for (int i = 0; i < n; i++) {
@@ -1326,34 +1296,43 @@ static void add_limits_card(const herdr_limits_t *l, bool show_host, bool show_a
             lv_obj_align(val, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X, y);
         }
 
+        /* A cor é o CALOR: quanto do teto já foi. O ritmo é a sombra atrás,
+           então a cor não precisa mais dizer as duas coisas — antes ela ficava
+           verde a 58% só porque a janela ainda tinha folga, escondendo que o
+           consumo já passava da metade. */
+        lv_color_t fill = limit_color(r->pct);
+        lv_coord_t bar_y = (lv_coord_t)(y + DASH_TXT_H + 6);
+
+        /* Duas barras sobrepostas. A de trás desenha a trilha e, no mesmo tom
+           da da frente porém esmaecido, até onde o consumo estaria no ritmo
+           linear da janela — a sombra do esperado. A da frente é o consumo
+           real, com a trilha transparente para não tapar a sombra.
+           Um filho do bar não serviria: a LVGL desenha os filhos depois de
+           todas as partes, então ele ficaria POR CIMA do indicador. */
+        lv_obj_t *ghost = lv_bar_create(card);
+        lv_obj_set_size(ghost, DASH_BAR_W, DASH_BAR_H);
+        lv_obj_align(ghost, LV_ALIGN_TOP_MID, 0, bar_y);
+        lv_obj_set_style_bg_color(ghost, UI_BORDER, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(ghost, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(ghost, DASH_BAR_H / 2, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(ghost, fill, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(ghost, LV_OPA_40, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(ghost, DASH_BAR_H / 2, LV_PART_INDICATOR);
+        lv_bar_set_range(ghost, 0, 100);
+        /* sem janela conhecida não há esperado: fica só a trilha, como antes */
+        lv_bar_set_value(ghost, has_window ? expected : 0, LV_ANIM_OFF);
+
         lv_obj_t *bar = lv_bar_create(card);
         lv_obj_set_size(bar, DASH_BAR_W, DASH_BAR_H);
-        lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, (lv_coord_t)(y + DASH_TXT_H + 6));
+        lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, bar_y);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, LV_PART_MAIN);
         /* sem sobrescrever, o tema default pinta o indicador na cor primária
            e anima cada mudança de valor */
-        lv_obj_set_style_bg_color(bar, UI_BORDER, LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(bar, DASH_BAR_H / 2, LV_PART_MAIN);
-        lv_obj_set_style_bg_color(bar, row_bar_color(r->pct, expected, has_window), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(bar, fill, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
         lv_obj_set_style_radius(bar, DASH_BAR_H / 2, LV_PART_INDICATOR);
         lv_bar_set_range(bar, 0, 100);
         lv_bar_set_value(bar, r->pct, LV_ANIM_OFF);
-
-        /* marcador do esperado: só quando conhecido e sem encostar nas pontas */
-        if (has_window && expected > 0 && expected < 100) {
-            /* filhos são clipados ao retângulo do pai por padrão no LVGL;
-               sem isso a sangria de 2px do tracinho não aparece */
-            lv_obj_add_flag(bar, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
-            lv_obj_t *mk = lv_obj_create(bar);
-            lv_obj_remove_style_all(mk);
-            lv_obj_set_size(mk, 2, DASH_BAR_H + 4);
-            lv_obj_set_style_bg_color(mk, UI_TEXT, 0);
-            lv_obj_set_style_bg_opa(mk, LV_OPA_COVER, 0);
-            lv_obj_set_style_radius(mk, 1, 0);
-            lv_obj_clear_flag(mk, LV_OBJ_FLAG_SCROLLABLE);
-            lv_coord_t mx = (lv_coord_t)(((int)DASH_BAR_W * expected) / 100 - 1);
-            lv_obj_align(mk, LV_ALIGN_LEFT_MID, mx, 0);
-        }
     }
 
     if (!l->ok) {
@@ -1381,29 +1360,61 @@ static void rebuild_dash_cards(void)
        (versões antigas da ponte nunca mandam, então o card some de vez) */
     herdr_cost_t cost;
     if (herdr_model_get_cost(&cost)) {
+        /* mesma anatomia dos cards de conta: slot de logo à esquerda, título na
+           mesma linha, e as linhas de valor começando abaixo do slot */
         lv_obj_t *cc = ui_card(s_dash_list, 10);
-        lv_obj_set_size(cc, LV_PCT(100), 92);
-        struct { const char *lab; const char *val; } rows[3] = {
-            {T(STR_COST_NOW),  cost.now},
-            {T(STR_COST_WEEK), cost.week},
-            {T(STR_COST_LIFE), cost.life},
-        };
+        lv_obj_set_size(cc, LV_PCT(100), (lv_coord_t)(DASH_ROWS_Y + 3 * COST_ROW_H
+                                                      + DASH_PAD_BOTTOM));
+
+        lv_obj_t *slot = lv_obj_create(cc);
+        lv_obj_set_size(slot, DASH_LOGO, DASH_LOGO);
+        lv_obj_set_style_radius(slot, 7, 0);
+        lv_obj_set_style_bg_color(slot, UI_BG, 0);
+        lv_obj_set_style_border_width(slot, 1, 0);
+        lv_obj_set_style_border_color(slot, UI_BORDER, 0);
+        lv_obj_set_style_shadow_width(slot, 0, 0);
+        lv_obj_set_style_pad_all(slot, 0, 0);
+        lv_obj_clear_flag(slot, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(slot, LV_ALIGN_TOP_LEFT, DASH_PAD_X, DASH_PAD_TOP);
+        /* não há logo de custo: o cifrão é o símbolo, e sai da própria fonte */
+        lv_obj_t *sym = lv_label_create(slot);
+        lv_label_set_text(sym, "$");
+        lv_obj_set_style_text_font(sym, &lv_font_ui_bold_20, 0);
+        lv_obj_set_style_text_color(sym, UI_MUTED, 0);
+        lv_obj_center(sym);
+
         lv_obj_t *title = lv_label_create(cc);
         lv_label_set_text(title, T(STR_COST_TITLE));   /* "Custo · estimativa" */
         lv_obj_set_style_text_font(title, &lv_font_ui_14, 0);
         lv_obj_set_style_text_color(title, UI_TEXT, 0);
-        lv_obj_align(title, LV_ALIGN_TOP_LEFT, DASH_PAD_X, DASH_PAD_TOP);
+        lv_obj_align_to(title, slot, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+
+        const char *labs[3] = {T(STR_COST_NOW), T(STR_COST_WEEK), T(STR_COST_LIFE)};
+        const uint32_t cents[3] = {cost.now_cents, cost.week_cents, cost.life_cents};
+        const char *legacy[3] = {cost.now, cost.week, cost.life};
         for (int i = 0; i < 3; i++) {
             lv_obj_t *l = lv_label_create(cc);
-            lv_label_set_text(l, rows[i].lab);
+            lv_label_set_text(l, labs[i]);
             lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
             lv_obj_set_style_text_color(l, UI_MUTED, 0);
-            lv_obj_align(l, LV_ALIGN_TOP_LEFT, DASH_PAD_X, 30 + i * 18);
+            lv_obj_align(l, LV_ALIGN_TOP_LEFT, DASH_PAD_X,
+                         (lv_coord_t)(DASH_ROWS_Y + i * COST_ROW_H + 4));
+
+            /* centavos da ponte nova: formatar aqui, no idioma do painel.
+               Sem eles, exibir a string que a ponte antiga já mandou pronta. */
+            char money[16];
+            if (cost.has_cents) {
+                money_fmt(money, sizeof(money), cents[i], i18n_lang() == LANG_PT);
+            } else {
+                snprintf(money, sizeof(money), "%s", legacy[i]);
+            }
             lv_obj_t *v = lv_label_create(cc);
-            lv_label_set_text(v, rows[i].val[0] ? rows[i].val : "—");
-            lv_obj_set_style_text_font(v, &lv_font_ui_12, 0);
+            lv_label_set_text(v, money[0] ? money : "—");
+            /* o valor é o conteúdo da linha: peso maior que o do rótulo */
+            lv_obj_set_style_text_font(v, &lv_font_ui_bold_16, 0);
             lv_obj_set_style_text_color(v, UI_TEXT, 0);
-            lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X, 30 + i * 18);
+            lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -DASH_PAD_X,
+                         (lv_coord_t)(DASH_ROWS_Y + i * COST_ROW_H));
         }
     }
 
@@ -1422,17 +1433,10 @@ static void rebuild_dash_cards(void)
         multi |= s_ui_limits[i].host != s_ui_limits[0].host;
     }
     for (int i = 0; i < s_ui_limit_count; i++) {
-        /* mostra a conta quando há outra do MESMO provedor: sem isso, dois
-           cards "Claude" ficariam indistinguíveis */
-        bool show_acct = false;
-        for (int j = 0; j < s_ui_limit_count; j++) {
-            if (j != i && strcmp(s_ui_limits[j].name, s_ui_limits[i].name) == 0
-                && s_ui_limits[i].account[0]) {
-                show_acct = true;
-                break;
-            }
-        }
-        add_limits_card(&s_ui_limits[i], multi, show_acct);
+        /* A conta vai em todo card que a conhece: com linha própria o e-mail
+           não disputa espaço com o título, então não há por que escondê-lo
+           quando só existe uma conta — ele diz de quem é o consumo. */
+        add_limits_card(&s_ui_limits[i], multi);
     }
 }
 
