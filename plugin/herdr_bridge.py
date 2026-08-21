@@ -61,7 +61,9 @@ TOKEN_FILE = os.path.join(CONFIG_DIR, "token")
 TOKEN = ""  # carregado em main()
 
 # Repositórios de avatar que o painel deve varrer além do padrão de fábrica:
-# uma URL base por linha, "#" comenta. Mesma convenção do arquivo token ao lado.
+# uma URL base por linha, "#" comenta. Fica no config-dir, ao lado do token —
+# o que sob o plugin do Herdr é ~/.config/herdr/plugins/config/herdr-assist/,
+# e não o default de baixo (esse só vale para a ponte rodando avulsa).
 # Lido a cada conexão, não no boot — editar o arquivo e reconectar o painel
 # basta, sem reiniciar a ponte.
 AVATAR_REPOS_FILE = os.path.join(CONFIG_DIR, "avatar_repos")

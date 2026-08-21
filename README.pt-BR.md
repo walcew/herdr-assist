@@ -155,8 +155,9 @@ GET <base>/sonic.hav     →  /sd/avatars/sonic.hav
 
 Além do padrão embutido, os repositórios vêm de dois campos naquela tela (salvos na hora,
 sem reiniciar), de `/sd/avatars/repos.txt` (uma URL por linha, `#` comenta) e da ponte —
-ponha suas URLs em `~/.config/herdr-assist/avatar_repos` e o plugin as empurra a cada
-conexão. Id repetido fica com o primeiro que apareceu, e o repositório padrão é lido
+ponha suas URLs em `avatar_repos` dentro do config-dir do plugin
+(`$HERDR_PLUGIN_CONFIG_DIR`, que sob o Herdr é
+`~/.config/herdr/plugins/config/herdr-assist/`) e o plugin as empurra a cada conexão. Id repetido fica com o primeiro que apareceu, e o repositório padrão é lido
 primeiro: um repositório de terceiro não sequestra o nome de um avatar oficial.
 
 Todo pacote é validado antes de merecer confiança — magic, tabela de animações, offsets de
