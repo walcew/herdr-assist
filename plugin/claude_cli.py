@@ -30,6 +30,19 @@ HOME = os.path.expanduser("~")  # injetável nos testes
 AUTH_TIMEOUT_S = 20
 USAGE_TIMEOUT_S = 45
 
+# Onde procurar o CLI quando ele não está no PATH do processo. A ponte sobe
+# como plugin do Herdr, que pode ter herdado um PATH curto (uma sessão ssh não
+# interativa traz só /usr/bin:/bin:/usr/sbin:/sbin), e o instalador do Claude
+# Code costuma pôr o binário em ~/.local/bin — fora dele. Sem esta busca a
+# coleta morre com "claude não está no PATH" numa máquina onde o CLI funciona.
+_FALLBACK_BINS = (
+    "~/.local/bin/claude",
+    "~/.claude/local/claude",
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+)
+_exe_cache = []
+
 # "Current session: 52% used · resets Aug 21 at 12:29am (America/Sao_Paulo)"
 # "Current week (all models): 2% used · resets Aug 27 at 9:59pm (...)"
 # "Current week (Fable): 0% used"                      <- sem reset anunciado
@@ -110,6 +123,26 @@ def parse_usage(text: str, ref: datetime.datetime = None) -> list:
     return rows
 
 
+def _find_claude() -> str:
+    """Caminho do CLI: PATH primeiro, depois os lugares usuais de instalação.
+
+    Cacheado porque roda a cada coleta (duas vezes por conta) e o binário não
+    muda de lugar durante a execução.
+    """
+    if _exe_cache:
+        return _exe_cache[0]
+    exe = shutil.which("claude")
+    if not exe:
+        for cand in _FALLBACK_BINS:
+            cand = os.path.expanduser(cand)
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                exe = cand
+                break
+    if exe:
+        _exe_cache.append(exe)
+    return exe or ""
+
+
 def is_default_dir(config_dir: str, home: str) -> bool:
     """A conta é a default (a que não declara CLAUDE_CONFIG_DIR)?"""
     return (os.path.normpath(os.path.abspath(config_dir))
@@ -127,9 +160,9 @@ def _run(args, config_dir: str, timeout: int) -> str:
     variável é removida do ambiente — inclusive a que a ponte possa ter
     herdado do pane onde subiu.
     """
-    exe = shutil.which("claude")
+    exe = _find_claude()
     if not exe:
-        raise ClaudeCliError("claude não está no PATH")
+        raise ClaudeCliError("claude não encontrado (PATH nem caminhos usuais)")
     env = dict(os.environ)
     if is_default_dir(config_dir, HOME):
         env.pop("CLAUDE_CONFIG_DIR", None)
