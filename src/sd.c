@@ -110,3 +110,12 @@ bool sd_is_mounted(void)
 {
     return s_card != NULL;
 }
+
+uint64_t sd_free_bytes(void)
+{
+    uint64_t total = 0, freeb = 0;
+    if (!s_card || esp_vfs_fat_info(SD_ROOT, &total, &freeb) != ESP_OK) {
+        return 0;
+    }
+    return freeb;
+}

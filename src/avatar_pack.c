@@ -8,6 +8,11 @@
 
 static const char *TAG = "avatar_pack";
 
+/* 4KB = 8 setores. A RAM INTERNA é o recurso escasso deste painel (medido: 12KB
+   livres com as pontes conectadas), e o custo por chamada some diante dos
+   ~520KB/s do cartão — pedir 16KB só aumentaria a chance de não ter. */
+#define READ_CHUNK 4096
+
 /* O gerador escreve os structs byte a byte (struct.pack em Python). Se o
    compilador inserir enchimento, tudo lido daqui para frente sai deslocado —
    e o erro seria silencioso, não uma falha de build. Daí as travas. */
@@ -159,7 +164,35 @@ bool avatar_pack_load_file(const char *path, avatar_pack_t *out)
         fclose(f);
         return false;
     }
-    size_t got = fread(blob, 1, (size_t)size, f);
+    /* Em pedaços, por um staging em RAM INTERNA — e não num fread único para a
+       PSRAM. O destino em PSRAM não é alcançável por DMA, então o driver do
+       cartão faria um bounce buffer do tamanho do pedido: 1,5MB de RAM interna
+       que não existe. Medido: o fread único lia 402KB e morria em
+       esp_dma_malloc durante o boot, quando o Wi-Fi disputa a mesma memória. */
+    uint8_t *stage = heap_caps_malloc(READ_CHUNK, MALLOC_CAP_DMA);
+    if (!stage) {
+        ESP_LOGW(TAG, "sem RAM interna para o buffer de leitura");
+        heap_caps_free(blob);
+        fclose(f);
+        return false;
+    }
+    ESP_LOGD(TAG, "lendo %s: %u internos livres, maior bloco DMA %u", path,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    size_t got = 0;
+    while (got < (size_t)size) {
+        size_t want = (size_t)size - got;
+        if (want > READ_CHUNK) {
+            want = READ_CHUNK;
+        }
+        size_t n = fread(stage, 1, want, f);
+        if (n == 0) {
+            break;
+        }
+        memcpy(blob + got, stage, n);
+        got += n;
+    }
+    heap_caps_free(stage);
     fclose(f);
     if (got != (size_t)size) {
         ESP_LOGW(TAG, "%s: li %u de %ld bytes", path, (unsigned)got, size);

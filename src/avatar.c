@@ -17,8 +17,17 @@
 #include "avatar_pack.h"
 #include "rle_sprite.h"
 
+#include <dirent.h>
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
+
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "nvs.h"
+
+#include "avatar_store.h"
+#include "sd.h"
 
 /* O pacote de fábrica, embutido pelo EMBED_FILES em src/CMakeLists.txt. Fica
    mapeado em flash e é lido no lugar, sem cópia para a PSRAM. */
@@ -28,7 +37,27 @@ extern const uint8_t clawd_hav_end[]   asm("_binary_clawd_hav_end");
 #define TAG "avatar"
 #define PAD 4     /* respiro nas bordas do slot */
 
-static avatar_pack_t  s_pack;
+#define AVATAR_DIR    SD_ROOT "/avatars"
+#define AVATAR_EXT    ".hav"
+/* Teto da lista. O cartão comporta muito mais, mas a troca é por toque cíclico:
+   passar de uma dúzia já torna alcançar o último uma tarefa chata. */
+#define MAX_AVATARS   12
+#define ID_LEN        24
+
+/* A escolha é gravada pelo ID, não pelo índice: com pacotes entrando e saindo
+   do cartão, um índice salvo passaria a apontar para outro avatar a cada
+   download. Foi o defeito que já obrigou a aposentar as chaves "sel".."sel4" —
+   com marketplace ele deixa de ser contornável. */
+#define NVS_NS  "avatar"
+#define NVS_KEY "id"
+
+
+static avatar_pack_t  s_pack;         /* o que está tocando */
+static char           s_ids[MAX_AVATARS][ID_LEN];
+static int            s_count;        /* sempre >= 1: o de fábrica é o índice 0 */
+static int            s_cur;          /* índice em s_ids do avatar tocando */
+static bool           s_loading;      /* leitura em curso na task de I/O */
+static int            s_req_idx;      /* índice pedido, confirmado ao chegar */
 static lv_obj_t      *s_img;
 static lv_img_dsc_t   s_dsc;
 static uint8_t       *s_buf;         /* PSRAM, cabe o maior frame do pacote */
@@ -40,6 +69,75 @@ static int            s_target;      /* animação a entrar após uma transiçã
 static uint32_t       s_last_tick;
 static uint32_t       s_idle_since;
 static avatar_state_t s_st = AVATAR_ST_DISCONNECTED;
+
+/* ---------- lista de avatares ---------- */
+
+static void path_of(const char *id, char *out, size_t size)
+{
+    snprintf(out, size, AVATAR_DIR "/%s" AVATAR_EXT, id);
+}
+
+/* Varre o cartão uma vez, no boot. O índice 0 é sempre o de fábrica, com id
+   vazio: ele não vem de arquivo nenhum e não pode ser apagado. */
+static void scan_packs(void)
+{
+    s_ids[0][0] = '\0';
+    s_count = 1;
+    if (!sd_is_mounted()) {
+        return;
+    }
+    DIR *d = opendir(AVATAR_DIR);
+    if (!d) {
+        return;   /* diretório ainda não existe: nada instalado */
+    }
+    const struct dirent *e;
+    while ((e = readdir(d)) && s_count < MAX_AVATARS) {
+        size_t n = strlen(e->d_name);
+        size_t ext = strlen(AVATAR_EXT);
+        if (n <= ext || n - ext >= ID_LEN ||
+            strcasecmp(e->d_name + n - ext, AVATAR_EXT) != 0) {
+            continue;   /* .part de download interrompido cai aqui */
+        }
+        memcpy(s_ids[s_count], e->d_name, n - ext);
+        s_ids[s_count][n - ext] = '\0';
+        s_count++;
+    }
+    closedir(d);
+}
+
+static int index_of(const char *id)
+{
+    for (int i = 0; i < s_count; i++) {
+        if (strcmp(s_ids[i], id) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* A NVS já foi inicializada no boot pelo panel_cfg_init(). */
+static void load_choice(char *out, size_t size)
+{
+    nvs_handle_t h;
+    out[0] = '\0';
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = size;
+        if (nvs_get_str(h, NVS_KEY, out, &len) != ESP_OK) {
+            out[0] = '\0';
+        }
+        nvs_close(h);
+    }
+}
+
+static void save_choice(const char *id)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, NVS_KEY, id);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
 
 /**
  * Posiciona o sprite no slot; `grow` é o quanto ele cresce por causa do zoom
@@ -142,9 +240,39 @@ static void compute_zoom(uint32_t *max_px)
     }
 }
 
+static void adopt(avatar_pack_t *p);
+
 static void tick_cb(lv_timer_t *timer)
 {
     (void)timer;
+    /* Colheita do carregamento em segundo plano: a troca é feita aqui porque
+       só esta task pode tocar na LVGL. */
+    if (s_loading) {
+        avatar_pack_t got;
+        int r = avatar_store_take_pack(&got);
+        if (r == 1) {
+            s_loading = false;
+            s_cur = s_req_idx;             /* só agora a escolha vale */
+            save_choice(s_ids[s_cur]);
+            adopt(&got);
+            return;
+        }
+        if (r < 0) {
+            s_loading = false;
+            /* Pacote ilegível fica no cartão mas sai da lista: mantê-lo faria
+               o toque no mascote bater sempre no mesmo erro, sem passar
+               adiante. A varredura do próximo boot o traz de volta se ele
+               melhorar. */
+            ESP_LOGW(TAG, "%s não carregou; tirando da lista", s_ids[s_req_idx]);
+            memmove(s_ids[s_req_idx], s_ids[s_req_idx + 1],
+                    (size_t)(s_count - s_req_idx - 1) * ID_LEN);
+            s_count--;
+            if (s_cur > s_req_idx) {
+                s_cur--;
+            }
+            lv_obj_set_style_img_opa(s_img, LV_OPA_COVER, 0);
+        }
+    }
     if (s_anim < 0 || !s_buf || !lv_obj_is_visible(s_img)) {
         return;
     }
@@ -177,6 +305,86 @@ static void tick_cb(lv_timer_t *timer)
     show_step(a);
 }
 
+
+/* ---------- troca de avatar ---------- */
+
+/* Entrega o pacote recém-lido ao motor: descarta o antigo, redimensiona o
+   buffer de frame e recomeça no estado corrente. Só na task da LVGL. */
+static void adopt(avatar_pack_t *p)
+{
+    s_anim = -1;                 /* nada mais aponta para o pacote velho */
+    avatar_pack_free(&s_pack);
+    s_pack = *p;
+    memset(p, 0, sizeof(*p));
+
+    lv_img_set_antialias(s_img, s_pack.antialias);
+    uint32_t max_px;
+    compute_zoom(&max_px);
+    heap_caps_free(s_buf);
+    s_buf = heap_caps_malloc(max_px * 3, MALLOC_CAP_SPIRAM);
+    if (!s_buf) {
+        ESP_LOGW(TAG, "sem PSRAM para o frame buffer (%u bytes)", (unsigned)(max_px * 3));
+    }
+    lv_obj_set_style_img_opa(s_img, LV_OPA_COVER, 0);
+    s_frame = -1;
+    play(role_idx((hav_role_t)s_st));
+    ESP_LOGI(TAG, "avatar: %s (%d animações, zoom %d/256)",
+             s_pack.name, s_pack.count, s_zoom);
+}
+
+int avatar_count(void)
+{
+    return s_count;
+}
+
+const char *avatar_id_at(int idx)
+{
+    return (idx >= 0 && idx < s_count) ? s_ids[idx] : NULL;
+}
+
+const char *avatar_current(void)
+{
+    return s_ids[s_cur];
+}
+
+void avatar_select(const char *id)
+{
+    int idx = index_of(id);
+    if (idx < 0 || idx == s_cur || s_loading || !s_img) {
+        return;
+    }
+    if (!id[0]) {   /* de fábrica: está mapeado em flash, entra na hora */
+        avatar_pack_t p;
+        if (!avatar_pack_load_mem(clawd_hav_start,
+                                  (size_t)(clawd_hav_end - clawd_hav_start), &p)) {
+            return;
+        }
+        s_cur = idx;
+        save_choice(id);
+        adopt(&p);
+        return;
+    }
+    char path[64];
+    path_of(id, path, sizeof(path));
+    if (!avatar_store_load_pack(path)) {
+        return;   /* task ocupada (baixando, por exemplo): o toque não faz nada */
+    }
+    /* Esmaece enquanto lê: sem isso o toque fica ~3s sem resposta nenhuma.
+       s_cur só muda quando o pacote chega inteiro (ver tick_cb). */
+    lv_obj_set_style_img_opa(s_img, LV_OPA_50, 0);
+    s_req_idx = idx;
+    s_loading = true;
+}
+
+/* Toque no mascote passa para o próximo da lista. */
+static void cycle_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_count > 1) {
+        avatar_select(s_ids[(s_cur + 1) % s_count]);
+    }
+}
+
 void avatar_create(lv_obj_t *slot)
 {
     if (!avatar_pack_load_mem(clawd_hav_start,
@@ -186,7 +394,7 @@ void avatar_create(lv_obj_t *slot)
     }
 
     s_img = lv_img_create(slot);
-    lv_obj_clear_flag(s_img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(s_img, LV_OBJ_FLAG_CLICKABLE);   /* o toque é do slot */
     lv_img_set_antialias(s_img, s_pack.antialias);
 
     uint32_t max_px;
@@ -200,6 +408,22 @@ void avatar_create(lv_obj_t *slot)
     s_idle_since = lv_tick_get();
     lv_timer_create(tick_cb, 33, NULL);
     play(role_idx((hav_role_t)s_st));
+
+    scan_packs();
+    if (s_count > 1) {
+        lv_obj_add_flag(slot, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(slot, cycle_cb, LV_EVENT_CLICKED, NULL);
+
+        /* O de fábrica já está na tela; se a escolha salva for outra, ela entra
+           quando a leitura terminar — o boot não espera pelo cartão. */
+        char saved[ID_LEN];
+        load_choice(saved, sizeof(saved));
+        ESP_LOGI(TAG, "%d pacote(s) no cartão; escolhido: %s", s_count - 1,
+                 saved[0] ? saved : "(de fábrica)");
+        if (saved[0]) {
+            avatar_select(saved);
+        }
+    }
 }
 
 void avatar_set_state(avatar_state_t st)

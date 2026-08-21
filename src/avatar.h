@@ -57,6 +57,28 @@ typedef enum {
 /** Monta o motor no slot da home (chamar uma vez, em build_home). */
 void avatar_create(lv_obj_t *slot);
 
+/**
+ * Quantidade de avatares disponíveis: o de fábrica mais os pacotes achados em
+ * /sd/avatars. Sempre >= 1.
+ */
+int avatar_count(void);
+
+/** Id do avatar na posição `idx`; "" é o de fábrica. NULL fora da faixa. */
+const char *avatar_id_at(int idx);
+
+/**
+ * Troca o avatar corrente, salvando a escolha na NVS.
+ *
+ * Pacote do cartão é lido por uma task separada — a leitura leva segundos e
+ * não pode travar a UI. A troca acontece quando o carregamento termina; até
+ * lá o avatar atual continua animando, esmaecido. Chamada durante um
+ * carregamento é ignorada.
+ */
+void avatar_select(const char *id);
+
+/** Id do avatar tocando agora ("" = o de fábrica). */
+const char *avatar_current(void);
+
 /** Aplica o estado global ao avatar corrente (early-out se não mudou). */
 void avatar_set_state(avatar_state_t st);
 

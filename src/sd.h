@@ -12,6 +12,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -31,6 +32,9 @@ esp_err_t sd_mount(void);
 
 /** true enquanto /sd estiver montado. */
 bool sd_is_mounted(void);
+
+/** Bytes livres no cartão; 0 sem cartão montado. */
+uint64_t sd_free_bytes(void);
 
 #ifdef __cplusplus
 }

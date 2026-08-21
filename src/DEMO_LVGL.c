@@ -13,6 +13,7 @@
 #include "herdr_ui_settings.h"
 #include "herdr_conn.h"
 #include "fw_update.h"
+#include "avatar_store.h"
 #include <esp_log.h>   // Add this line to include the header file that declares ESP_LOGI
 #include <esp_flash.h> // Add this line to include the header file that declares esp_flash_t
 #include <esp_chip_info.h>
@@ -20,6 +21,7 @@
 #include <esp_heap_caps.h>
 
 static const char *TAG = "DEMO_LVGL";
+
 
 #define BUILD (String(__DATE__) + " - " + String(__TIME__)).c_str()
 
@@ -88,6 +90,10 @@ void setup()
   /* Onde moram os pacotes de avatar. Falhar é caminho normal (slot vazio):
      sem cartão o painel roda com o avatar de fábrica e mais nada muda. */
   sd_mount();
+  /* Antes do display: esta task precisa de 8KB de RAM interna, e do meio do
+     boot em diante o painel não tem mais isso (o display, a UI, o Wi-Fi e as
+     pontes consomem 225KB dos 242KB). Ela só acorda quando alguém pede. */
+  avatar_store_init();
 
   logSection("Initialize panel device");
   // ESP_LOGI(TAG, "Initialize panel device");

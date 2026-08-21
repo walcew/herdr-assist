@@ -356,7 +356,14 @@ static lv_disp_t *bsp_display_lcd_init(const bsp_display_cfg_t *cfg)
         .sw_rotate = cfg->rotate,
         .hres = hres,
         .vres = vres,
-        .trans_size = hres * vres / 10,
+        /* Dois buffers de transporte em RAM INTERNA movem o framebuffer da
+           PSRAM para o LCD. Eram vres*hres/10 = 30KB cada, 61KB dos 242KB
+           internos do chip — e com isso o painel ficava com ~17KB livres, em
+           que o handshake TLS não consegue alocar (esp-aes: Failed to allocate
+           memory) e nem OTA nem marketplace funcionam. Pela metade sobram
+           47KB e os dois voltam a funcionar; custa 4ms num flush de tela
+           cheia (29,7 -> 33,7ms, medido). */
+        .trans_size = hres * vres / 20,
         .draw_wait_cb = bsp_display_sync_cb,
         .flags = {
             .buff_dma = false,
