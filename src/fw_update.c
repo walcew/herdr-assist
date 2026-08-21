@@ -15,6 +15,7 @@
 #include "freertos/task.h"
 
 #include "net.h"
+#include "panel_cfg.h"
 
 static const char *TAG = "fw_update";
 
@@ -212,6 +213,15 @@ static void do_download(void)
 
 /* ---------- task ---------- */
 
+/* Switch "atualizações automáticas" das Configurações. Vale só para a checagem
+   sozinha (boot e diária); "Verificar agora" é um toque e passa por cima. A
+   config é imutável em runtime, mas ler no ponto de uso mantém a task sem
+   estado próprio. */
+static bool auto_check_enabled(void)
+{
+    return !panel_cfg_get()->no_auto_update;
+}
+
 static void fw_update_task(void *arg)
 {
     (void)arg;
@@ -219,7 +229,9 @@ static void fw_update_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
     vTaskDelay(pdMS_TO_TICKS(BOOT_DELAY_MS));
-    do_check();
+    if (auto_check_enabled()) {
+        do_check();
+    }
     for (;;) {
         EventBits_t bits = xEventGroupWaitBits(s_events, EV_CHECK | EV_START,
                                                pdTRUE, pdFALSE, CHECK_PERIOD);
@@ -229,7 +241,7 @@ static void fw_update_task(void *arg)
             }
         } else if (bits & EV_CHECK) {
             do_check();                 /* manual: falha vira feedback na tela */
-        } else if (net_wifi_is_up()) {
+        } else if (net_wifi_is_up() && auto_check_enabled()) {
             do_check();                 /* diária: sem rede, fica para amanhã */
         }
     }
@@ -250,12 +262,5 @@ void fw_update_init(void)
     }
 #endif
     s_events = xEventGroupCreate();
-#ifndef HERDR_DISABLE_OTA
     xTaskCreate(fw_update_task, "fw_update", 8192, NULL, 5, NULL);
-#else
-    /* Fork custom: sem checagem de OTA. O estado fica IDLE, então o toast de
-       "versão nova" nunca aparece e o painel não se auto-substitui pelo
-       release upstream (a confirmação de rollback acima já rodou). */
-    ESP_LOGI(TAG, "OTA desativado (HERDR_DISABLE_OTA)");
-#endif
 }

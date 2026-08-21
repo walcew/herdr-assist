@@ -984,6 +984,20 @@ static void fw_toast_cb(lv_event_t *e)
     show_update();                /* e cai direto na tela de atualização */
 }
 
+/* X do toast: recusa esta versão. Marcar como notificada é o mesmo gesto de
+   quem abre a tela de atualização — o aviso só volta quando sair outra versão.
+   Como é um botão filho, o clique não chega ao fw_toast_cb do toast. */
+static void fw_toast_dismiss_cb(lv_event_t *e)
+{
+    (void)e;
+    fw_update_status_t st;
+    fw_update_get_status(&st);
+    if (st.latest[0]) {
+        strlcpy(s_fw_notified, st.latest, sizeof(s_fw_notified));
+    }
+    lv_obj_add_flag(s_fw_toast, LV_OBJ_FLAG_HIDDEN);
+}
+
 /* ---------- view: principal ---------- */
 
 static void pair_open_cb(lv_event_t *e)
@@ -1104,6 +1118,21 @@ static void goku_mode_toggle_cb(lv_event_t *e)
     (void)e;
     s_edit.goku_mode = (uint8_t)((s_edit.goku_mode + 1) % GOKU_MODE_COUNT);
     lv_label_set_text(s_lbl_goku, goku_name(s_edit.goku_mode));
+    update_toast();
+}
+
+/*
+ * Liga/desliga a checagem automática de firmware na cópia em edição.
+ *
+ * Desligado, a task de OTA para de checar sozinha (no boot e diariamente) e o
+ * toast de versão nova some junto; "Verificar agora" na tela de Firmware
+ * continua funcionando. Como os demais ajustes, só vale após aplicar e
+ * reiniciar — a config em uso é imutável em runtime.
+ */
+static void auto_update_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    s_edit.no_auto_update = lv_obj_has_state(sw, LV_STATE_CHECKED) ? 0 : 1;
     update_toast();
 }
 
@@ -1352,6 +1381,22 @@ static void show_main(void)
         lv_obj_align(upv, LV_ALIGN_RIGHT_MID, 0, 0);
     }
 
+    lv_obj_t *aurow = make_row(NULL, NULL, 44);
+    lv_obj_t *aul = lv_label_create(aurow);
+    lv_label_set_text(aul, T(STR_FW_AUTO));
+    lv_obj_set_style_text_font(aul, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(aul, UI_TEXT, 0);
+    lv_obj_align(aul, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *ausw = lv_switch_create(aurow);
+    lv_obj_set_size(ausw, 48, 26);
+    lv_obj_set_ext_click_area(ausw, 12);
+    lv_obj_align(ausw, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(ausw, UI_SWITCH_OFF, 0);
+    if (!s_edit.no_auto_update) {
+        lv_obj_add_state(ausw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(ausw, auto_update_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
     update_toast();
 }
 
@@ -1456,6 +1501,22 @@ void herdr_ui_settings_init(lv_event_cb_t dock_cb)
     lv_obj_set_style_text_font(f2, &lv_font_ui_12, 0);
     lv_obj_set_style_text_color(f2, UI_MUTED, 0);
     lv_obj_align(f2, LV_ALIGN_LEFT_MID, 32, 10);
+
+    /* recusar: fecha sem abrir a tela de atualização */
+    lv_obj_t *fx = lv_btn_create(s_fw_toast);
+    /* 32px cabem na altura útil do toast (56 menos o pad do tema); a área
+       estendida é que dá o alvo de dedo, como nos switches das linhas. */
+    lv_obj_set_size(fx, 32, 32);
+    lv_obj_set_ext_click_area(fx, 8);
+    lv_obj_align(fx, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_opa(fx, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_shadow_width(fx, 0, 0);
+    lv_obj_add_event_cb(fx, fw_toast_dismiss_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *fxl = lv_label_create(fx);
+    lv_label_set_text(fxl, LV_SYMBOL_CLOSE);
+    lv_obj_set_style_text_font(fxl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(fxl, UI_MUTED, 0);
+    lv_obj_center(fxl);
 
     lv_timer_create(fw_notify_tick_cb, 5000, NULL);
     lv_timer_create(wifi_tick_cb, 2000, NULL);
