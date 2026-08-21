@@ -17,3 +17,8 @@
 # bytecode Python (plugin/ e scripts/)
 __pycache__/
 *.pyc
+
+# Pacotes .hav gerados por scripts/hav_pack.py: pertencem ao repositório de
+# avatares, não a este. O de fábrica (src/assets/clawd.hav) é a exceção e vai
+# versionado, porque o firmware o embute.
+packs/
