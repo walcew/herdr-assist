@@ -8,27 +8,43 @@ import herdr_bridge as b
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 
 
-def fake_usage(url, headers):
-    # o endpoint do Claude: dois limits normalizados
-    return {"limits": [
-        {"kind": "session", "percent": 12.4, "resets_at": "2026-08-20T10:00:00Z"},
-        {"kind": "weekly_all", "percent": 40.0, "resets_at": "2026-08-27T10:00:00Z"},
-    ]}
+# O Claude vem do CLI (claude_cli): auth status dá a identidade, /usage as
+# janelas. Os dois são falsificados por config-dir, para os testes de conta.
+def fake_auth_status(config_dir):
+    email = "bruno@work.gov.br" if config_dir.endswith("work") else "bruno@pessoal.dev"
+    return {"loggedIn": True, "email": email, "subscriptionType": "max"}
+
+
+def fake_usage_rows(config_dir):
+    return [{"label": "5h", "pct": 12, "resets_at": 1755684000, "window_s": 18000},
+            {"label": "7d", "pct": 40, "resets_at": 1756288800, "window_s": 604800}]
+
+
+def patch_cli():
+    return (mock.patch.object(b.claude_cli, "auth_status", fake_auth_status),
+            mock.patch.object(b.claude_cli, "usage_rows", fake_usage_rows))
 
 
 class TestCollectPorConta(unittest.TestCase):
     def test_claude_inclui_account(self):
-        with mock.patch.object(b, "fetch_json", fake_usage):
+        auth, usage = patch_cli()
+        with auth, usage:
             cur = b.collect_claude(os.path.join(FIX, "work"))
         self.assertEqual(cur["name"], "Claude")
         self.assertEqual(cur["account"], "bruno@work.gov.br")
         self.assertEqual(len(cur["limits"]), 2)
 
+    def test_conta_sem_login_some_do_painel(self):
+        with mock.patch.object(b.claude_cli, "auth_status",
+                               lambda d: {"loggedIn": False}):
+            providers = b.collect_limits([("claude", os.path.join(FIX, "work"))])
+        self.assertEqual(providers, [])
+
     def test_collect_limits_uma_por_conta_ordenado(self):
         dirs = [("claude", os.path.join(FIX, "personal")),
                 ("claude", os.path.join(FIX, "work"))]
-        with mock.patch.object(b, "fetch_json", fake_usage), \
-             mock.patch.object(b, "HOME", FIX):
+        auth, usage = patch_cli()
+        with auth, usage, mock.patch.object(b, "HOME", FIX):
             providers = b.collect_limits(dirs)
         emails = [p["account"] for p in providers]
         self.assertEqual(emails, sorted(emails))               # determinístico
@@ -43,12 +59,13 @@ def fake_codex_usage(url, headers):
 
 
 class TestWindowS(unittest.TestCase):
-    def test_claude_window_s_por_kind(self):
-        with mock.patch.object(b, "fetch_json", fake_usage):
+    def test_claude_window_s_por_janela(self):
+        auth, usage = patch_cli()
+        with auth, usage:
             cur = b.collect_claude(os.path.join(FIX, "work"))
         ws = {r["label"]: r["window_s"] for r in cur["limits"]}
-        self.assertEqual(ws["5h"], 18000)     # session
-        self.assertEqual(ws["7d"], 604800)    # weekly_all
+        self.assertEqual(ws["5h"], 18000)     # sessão
+        self.assertEqual(ws["7d"], 604800)    # semana
 
     def test_codex_window_s_do_limit_window_seconds(self):
         with mock.patch.object(b, "fetch_json", fake_codex_usage):
@@ -59,8 +76,6 @@ class TestWindowS(unittest.TestCase):
 
 class TestLimitsOrgCorp(unittest.TestCase):
     def test_provider_tem_org_corp(self):
-        with mock.patch.object(b, "fetch_json", fake_usage):
-            cur = b.collect_claude(os.path.join(FIX, "work"))
         # collect_claude não faz org/corp; o enriquecimento é no payload.
         # Testar a função de enriquecimento pura:
         prov = {"name": "Claude", "account": "bruno@sosdocs.com.br"}
