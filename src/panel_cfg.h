@@ -60,7 +60,6 @@ typedef struct {
     panel_host_t hosts[CFG_MAX_HOSTS];
     uint8_t      lang;                  /* ui_lang_t; 0 (en_US) é o de fábrica */
     uint8_t      orient;                /* cfg_orient_t; 0 (retrato) é o de fábrica */
-    uint8_t      goku_mode;             /* goku_mode_t; 0 (ascendente) é o de fábrica */
     /* Negado de propósito: o struct nasce zerado, e de fábrica o painel checa
        atualizações sozinho. 1 = só checa quando o usuário pede. */
     uint8_t      no_auto_update;

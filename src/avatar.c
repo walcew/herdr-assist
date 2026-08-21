@@ -8,7 +8,6 @@
 #include "nvs.h"
 
 static const avatar_driver_t *s_drivers[] = {
-    &avatar_goku_driver,
     &avatar_clawd_driver,
     &avatar_sonic_driver,
     &avatar_mcqueen_driver,
@@ -16,13 +15,14 @@ static const avatar_driver_t *s_drivers[] = {
     &avatar_sf_driver,
 };
 #define DRIVER_COUNT   ((int)(sizeof(s_drivers) / sizeof(s_drivers[0])))
-#define DRIVER_DEFAULT 0   /* Goku */
+#define DRIVER_DEFAULT 0   /* Clawd, o mascote do projeto */
 
 #define NVS_NS  "avatar"
-/* "sel"/"sel2" guardavam índices de ordens antigas da lista, que apontariam
-   para o avatar errado agora que o Goku entrou como padrão (índice 0). Chave
-   nova: quem atualiza volta ao padrão (Goku) e um toque troca. */
-#define NVS_KEY "sel3"
+/* "sel".."sel3" guardavam índices de ordens antigas da lista. Toda vez que ela
+   muda, o índice salvo passa a apontar para outro avatar, então a chave é
+   aposentada junto — quem atualiza volta ao padrão e um toque troca. Ao mexer
+   na lista acima, bump aqui também. */
+#define NVS_KEY "sel4"
 
 static lv_obj_t      *s_slot;
 static int            s_cur = DRIVER_DEFAULT;

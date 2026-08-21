@@ -88,9 +88,6 @@ typedef enum {
     X(ORIENTATION,     "Orientation",                 "Orientação")                          \
     X(ORIENT_PORTRAIT, "Portrait",                    "Retrato")                             \
     X(ORIENT_LANDSCAPE, "Landscape",                  "Paisagem")                            \
-    X(GOKU_MODE,       "Goku power",                  "Goku: poder")                         \
-    X(GOKU_ASC,        "Ascending",                   "Ascendente")                          \
-    X(GOKU_DESC,       "Descending",                  "Descendente")                         \
     X(RESTART_DEVICE,  "Restart device",              "Reiniciar dispositivo")               \
     X(PENDING_TITLE,   "Pending changes",             "Configurações pendentes")             \
     X(PENDING_SUB,     "Tap to apply and restart",    "Toque para aplicar e reiniciar")      \

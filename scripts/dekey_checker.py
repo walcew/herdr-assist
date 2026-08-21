@@ -3,7 +3,7 @@
 
 O xadrez de transparência falsa é feito de dois cinzas CLAROS e quase-neutros.
 Removemos por flood-fill a partir das bordas os pixels claros+neutros (o fundo),
-sem furar o Goku (pele/cabelo/rabo têm cor). Depois erodimos a franja clara que
+sem furar o personagem (que tem cor). Depois erodimos a franja clara que
 a compressão JPEG deixa na borda. Corta no bounding box do que sobrou.
 
 Uso: python scripts/dekey_checker.py <entrada.jpg> <saida.png>
@@ -33,7 +33,7 @@ def main():
     im = Image.open(sys.argv[1]).convert("RGBA")
     w, h = im.size
     px = im.load()
-    # Remoção GLOBAL: o xadrez é claro+neutro e o Goku (pele/cabelo/rabo) tem
+    # Remoção GLOBAL: o xadrez é claro+neutro e o personagem tem
     # cor, então dá pra tirar todo pixel de fundo — inclusive bolsões fechados
     # (ex.: dentro da curva do rabo) que o flood-fill de borda não alcança.
     for y in range(h):
