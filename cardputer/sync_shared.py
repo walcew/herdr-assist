@@ -29,6 +29,8 @@ FILES = (
     "discovery.c", "discovery.h",
     "panel_cfg.c", "panel_cfg.h",
     "herdr_model.c", "herdr_model.h",
+    # dependência do herdr_model: a leitura de limites colapsa por conta
+    "limits_merge.c", "limits_merge.h",
     # dependência do herdr_model: o diff de status alimenta o log de atividade
     "activity_log.c", "activity_log.h",
     "herdr_conn.c", "herdr_conn.h",

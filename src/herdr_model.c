@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 
 #include "activity_log.h"
+#include "limits_merge.h"
 
 static struct {
     herdr_agent_t agents[CFG_MAX_HOSTS][HERDR_MAX_AGENTS];
@@ -23,7 +24,7 @@ static struct {
     herdr_conn_state_t conn[CFG_MAX_HOSTS];
     herdr_limits_t limits[CFG_MAX_HOSTS][HERDR_MAX_PROVIDERS];
     int limit_count[CFG_MAX_HOSTS];
-    herdr_cost_t cost;
+    herdr_cost_t cost[CFG_MAX_HOSTS];
     uint32_t generation;
     SemaphoreHandle_t mutex;
 } s_model;
@@ -281,11 +282,14 @@ void herdr_model_set_limits(int host, const herdr_limits_t *limits, int count)
     unlock();
 }
 
-void herdr_model_set_cost(const herdr_cost_t *cost)
+void herdr_model_set_cost(int host, const herdr_cost_t *cost)
 {
+    if (!host_ok(host)) {
+        return;
+    }
     lock();
-    s_model.cost = *cost;
-    s_model.cost.valid = true;
+    s_model.cost[host] = *cost;
+    s_model.cost[host].valid = true;
     bump();
     unlock();
 }
@@ -313,14 +317,50 @@ int herdr_model_get_limits(herdr_limits_t *out, int max)
         }
     }
     unlock();
-    return n;
+    /* Uma conta é a mesma conta em qualquer máquina: duas pontes logadas no
+       mesmo login mandam o mesmo teto de uso. Fora do lock de propósito — daqui
+       para baixo só se mexe na cópia do chamador. */
+    return limits_merge_accounts(out, n);
+}
+
+/* Soma saturando: o total de várias máquinas não pode dar a volta no uint32. */
+static uint32_t cents_add(uint32_t a, uint32_t b)
+{
+    return (a > UINT32_MAX - b) ? UINT32_MAX : a + b;
 }
 
 bool herdr_model_get_cost(herdr_cost_t *out)
 {
+    memset(out, 0, sizeof(*out));
     lock();
-    *out = s_model.cost;
-    bool valid = s_model.cost.valid;
+    /* O custo sai de transcripts LOCAIS de cada máquina, então cada ponte
+       reporta um pedaço do gasto e o total é a soma. Máquina desligada segue
+       contando com o último valor conhecido: o gasto dela aconteceu. */
+    const herdr_cost_t *legacy = NULL;
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        const herdr_cost_t *c = &s_model.cost[h];
+        if (!c->valid) {
+            continue;
+        }
+        out->valid = true;
+        if (c->has_cents) {
+            out->has_cents = true;
+            out->now_cents = cents_add(out->now_cents, c->now_cents);
+            out->week_cents = cents_add(out->week_cents, c->week_cents);
+            out->life_cents = cents_add(out->life_cents, c->life_cents);
+        } else if (!legacy) {
+            legacy = c;   /* ponte antiga: strings prontas, que não somam */
+        }
+    }
+    /* Só vale o caminho legado quando NENHUMA ponte mandou centavos. Ponte
+       antiga misturada com nova subnotifica até ser atualizada — as strings não
+       são somáveis, e exibir a de uma máquina só também seria parcial. */
+    if (legacy && !out->has_cents) {
+        memcpy(out->now, legacy->now, sizeof(out->now));
+        memcpy(out->week, legacy->week, sizeof(out->week));
+        memcpy(out->life, legacy->life, sizeof(out->life));
+    }
+    bool valid = out->valid;
     unlock();
     return valid;
 }

@@ -67,6 +67,10 @@ typedef struct {
     uint8_t  host;          /* índice em panel_cfg hosts[] */
     char    org[24];         /* domínio sem sufixo; "" desconhecido */
     bool    corp;            /* true = corporativa */
+    /* Preenchido pelo merge por conta na leitura, nunca pelo parser: a mesma
+       conta foi vista em mais de um host, então o card é da conta e não de uma
+       máquina. Cabe no padding que já existia (sizeof não muda). */
+    bool    shared;
     uint8_t agents;          /* agentes desta conta */
     uint8_t agents_working;  /* quantos working */
     char    account[33];   /* e-mail da conta; distingue contas do mesmo provedor */
@@ -103,14 +107,18 @@ void herdr_model_set_agents(int host, const herdr_agent_t *agents, int count);
 void herdr_model_set_pane_content(int host, const char *pane_id, char *content);
 void herdr_model_set_conn(int host, herdr_conn_state_t state);
 void herdr_model_set_limits(int host, const herdr_limits_t *limits, int count);
-void herdr_model_set_cost(const herdr_cost_t *cost);
+void herdr_model_set_cost(int host, const herdr_cost_t *cost);
 
 /* --- Leitura (task LVGL) --- */
 /** Copia os agentes de todos os hosts (agrupados por host); retorna o total. */
 int herdr_model_get_agents(herdr_agent_t *out, int max);
-/** Copia os limites de todos os hosts (agrupados por host); retorna o total. */
+/**
+ * Copia os limites de todos os hosts, colapsando as entradas da mesma conta
+ * (limite de uso é da conta, não da máquina — ver limits_merge.h). Retorna o
+ * total já mesclado; `shared` marca os cards que vieram de mais de um host.
+ */
 int herdr_model_get_limits(herdr_limits_t *out, int max);
-/** Copia o custo agregado em *out; devolve false se nunca recebido. */
+/** Soma o custo de todas as máquinas em *out; false se nenhuma reportou ainda. */
 bool herdr_model_get_cost(herdr_cost_t *out);
 /**
  * Copia o conteúdo de pane só se a sequência mudou desde *seq_inout (dedup:

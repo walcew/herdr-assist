@@ -211,7 +211,7 @@ static void handle_limits(conn_slot_t *s, const cJSON *root)
     herdr_model_set_limits(s->idx, s->parse_limits, n);
 }
 
-static void handle_cost(const cJSON *root)
+static void handle_cost(conn_slot_t *s, const cJSON *root)
 {
     herdr_cost_t c;
     memset(&c, 0, sizeof(c));
@@ -232,7 +232,7 @@ static void handle_cost(const cJSON *root)
         c.week_cents = (uint32_t)f->valuedouble;
     if (cJSON_IsNumber((f = cJSON_GetObjectItem(root, "life_cents"))))
         c.life_cents = (uint32_t)f->valuedouble;
-    herdr_model_set_cost(&c);
+    herdr_model_set_cost(s->idx, &c);
 }
 
 static void handle_line(conn_slot_t *s, char *line, size_t len)
@@ -257,7 +257,7 @@ static void handle_line(conn_slot_t *s, char *line, size_t len)
         } else if (strcmp(t, "limits") == 0) {
             handle_limits(s, root);
         } else if (strcmp(t, "cost") == 0) {
-            handle_cost(root);
+            handle_cost(s, root);
         } else if (strcmp(t, "error") == 0) {
             const cJSON *m = cJSON_GetObjectItem(root, "message");
             ESP_LOGW(TAG, "[%s] ponte recusou: %s", s->label,
