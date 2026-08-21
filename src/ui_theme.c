@@ -95,7 +95,7 @@ lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
 {
     /* mesma ordem do enum ui_tab_t: o índice do laço vira a aba no callback */
     static const char *icons[] = { LV_SYMBOL_HOME, LV_SYMBOL_LIST, UI_ICON_DASH,
-                                   LV_SYMBOL_EYE_OPEN, LV_SYMBOL_SETTINGS };
+                                   LV_SYMBOL_SETTINGS };
 
     /* Deitado embaixo em retrato; em pé à esquerda em paisagem, que é onde
        sobra largura e o polegar alcança sem cobrir o conteúdo. */
@@ -128,7 +128,9 @@ lv_obj_t *ui_dock(lv_obj_t *parent, ui_tab_t active, lv_event_cb_t cb)
         bool on = (i == (int)active);
         lv_obj_t *item = lv_btn_create(dock);
         /* em pé o item é mais alto e mais estreito: 4 deles somam 200px, que
-           cabem folgados nos 320 de altura da paisagem */
+           cabem folgados nos 320 de altura da paisagem. Deitado é o eixo
+           apertado: 4*62 + 3*4 + 5*2 + 1*2 = 272 dos 320 de largura — um quinto
+           ícone estoura a tela, que foi o que aconteceu com a aba Atividade. */
         lv_obj_set_size(item, land ? 48 : 62, land ? 44 : 38);
         lv_obj_set_style_radius(item, 17, 0);
         lv_obj_set_style_shadow_width(item, 0, 0);

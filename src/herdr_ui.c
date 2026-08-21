@@ -80,8 +80,24 @@ static sess_timer_t s_sess_timers[HERDR_MAX_AGENTS_TOTAL];
 static int          s_sess_timer_count;
 static time_t       s_last_timer_sec;
 
-/* --- dash --- */
-static lv_obj_t *s_dash_list;
+/* --- dash: duas páginas num tileview, trocadas arrastando na horizontal --- */
+typedef enum {
+    DASH_PAGE_USAGE = 0,
+    DASH_PAGE_ACTIVITY,
+    DASH_PAGE_COUNT,
+} dash_page_t;
+
+static lv_obj_t *s_dash_tv;
+static lv_obj_t *s_dash_title;
+static lv_obj_t *s_dash_dot[DASH_PAGE_COUNT];
+static lv_obj_t *s_dash_list;       /* tile (0,0): cards de uso */
+static lv_obj_t *s_activity_list;   /* tile (1,0): feed de eventos */
+static dash_page_t s_dash_page;       /* página para onde o snap aponta */
+static dash_page_t s_dash_title_page; /* qual título está escrito agora */
+/* Reconstruir a página escondida a cada mudança do modelo seria CPU jogada
+   fora; marcar aqui e resolver quando ela entra em cena preserva de brinde a
+   rolagem vertical, que o lv_obj_clean zera. */
+static bool s_page_dirty[DASH_PAGE_COUNT];
 static herdr_limits_t s_ui_limits[HERDR_MAX_PROVIDERS * CFG_MAX_HOSTS];
 static int s_ui_limit_count;
 
@@ -90,10 +106,6 @@ static lv_obj_t *s_detail_title;
 static lv_obj_t *s_detail_dot;
 static lv_obj_t *s_term_cont;
 static lv_obj_t *s_term_view;
-
-/* --- aba Atividade --- */
-static lv_obj_t *s_activity;
-static lv_obj_t *s_activity_list;
 
 /* --- teclado --- */
 static lv_obj_t *s_kb_ta;
@@ -139,6 +151,7 @@ static int status_rank(const char *status)
 static void rebuild_session_rows(void);
 static void rebuild_dash_cards(void);
 static void rebuild_activity(void);
+static void dash_rebuild_page(dash_page_t page);
 static bool fmt_when(char *buf, size_t size, time_t now, uint32_t t);
 
 static void show_tab(ui_tab_t tab)
@@ -147,7 +160,6 @@ static void show_tab(ui_tab_t tab)
     lv_obj_add_flag(s_home, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_sessions, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_dash, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_activity, LV_OBJ_FLAG_HIDDEN);
     herdr_ui_settings_hide();
     switch (tab) {
     case UI_TAB_SESSIONS:
@@ -158,14 +170,16 @@ static void show_tab(ui_tab_t tab)
         lv_obj_move_foreground(s_sessions);
         break;
     case UI_TAB_DASH:
-        rebuild_dash_cards();   /* mesmo motivo da lista de sessões */
+        /* As duas páginas, e não só a visível: a vizinha entra no quadro assim
+           que o dedo começa a arrastar, então não pode estar vazia. Sai de
+           graça porque a tela ainda está HIDDEN e a LVGL corta a invalidação
+           no pai escondido — só o clear_flag abaixo custa um quadro. */
+        s_page_dirty[DASH_PAGE_USAGE]    = true;
+        s_page_dirty[DASH_PAGE_ACTIVITY] = true;
+        dash_rebuild_page(DASH_PAGE_USAGE);
+        dash_rebuild_page(DASH_PAGE_ACTIVITY);
         lv_obj_clear_flag(s_dash, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_dash);
-        break;
-    case UI_TAB_ACTIVITY:
-        rebuild_activity();     /* mesmo motivo das outras: monta o que chegou escondido */
-        lv_obj_clear_flag(s_activity, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_activity);
         break;
     case UI_TAB_SETTINGS:
         herdr_ui_settings_show();
@@ -1008,47 +1022,150 @@ static void rebuild_session_rows(void)
 #define DASH_TITLE_MAX_W (LV_HOR_RES - UI_DOCK_W - 2 * UI_PAD - 2 * DASH_PAD_X \
                           - DASH_LOGO - 8 - 58)
 
+/** Reconstrói uma página só se algo mudou desde a última vez. */
+static void dash_rebuild_page(dash_page_t page)
+{
+    if (!s_page_dirty[page]) {
+        return;
+    }
+    s_page_dirty[page] = false;
+    if (page == DASH_PAGE_USAGE) {
+        rebuild_dash_cards();
+    } else {
+        rebuild_activity();
+    }
+}
+
+/**
+ * Bolinhas e título acompanhando a posição contínua do carrossel.
+ *
+ * Sai de graça: com full_refresh o quadro inteiro já está sendo repintado a
+ * cada passo do arraste, então mexer na cor de dois pontos de 8px não custa
+ * quadro nenhum. Só cor — largura entra no grupo LAYOUT_REFR e cobraria um
+ * passe de flex na topbar por quadro.
+ */
+static void dash_track(void)
+{
+    lv_coord_t w = lv_obj_get_content_width(s_dash_tv);
+    if (w <= 0) {
+        return;
+    }
+    int32_t t = (lv_obj_get_scroll_x(s_dash_tv) * 255) / w;   /* 0 = uso, 255 = atividade */
+    t = LV_CLAMP(0, t, 255);
+    /* lv_color_mix(c1, c2, mix): mix = 255 devolve c1 */
+    lv_obj_set_style_bg_color(s_dash_dot[DASH_PAGE_USAGE],
+                              lv_color_mix(UI_MUTED, UI_TEXT, (uint8_t)t), 0);
+    lv_obj_set_style_bg_color(s_dash_dot[DASH_PAGE_ACTIVITY],
+                              lv_color_mix(UI_TEXT, UI_MUTED, (uint8_t)t), 0);
+
+    /* O título vira na metade do caminho. Só quando muda: lv_label_set_text
+       suja o layout e remexeria o flex da topbar a cada quadro. */
+    dash_page_t p = (t >= 128) ? DASH_PAGE_ACTIVITY : DASH_PAGE_USAGE;
+    if (p != s_dash_title_page) {
+        s_dash_title_page = p;
+        lv_label_set_text(s_dash_title, p == DASH_PAGE_ACTIVITY ? T(STR_TAB_ACTIVITY)
+                                                                : T(STR_TAB_DASH));
+    }
+}
+
+static void dash_tv_cb(lv_event_t *e)
+{
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_SCROLL_BEGIN: {
+        /* Dois emissores. Com param != NULL é o lv_obj_scroll_by oferecendo a
+           lv_anim_t antes de iniciá-la: o padrão satura em 400ms, que sob
+           full_refresh são uns seis quadros de tela cheia e lê como travado. */
+        lv_anim_t *a = lv_event_get_param(e);
+        if (a) {
+            lv_anim_set_time(a, 200);
+            break;
+        }
+        /* param NULL: o dedo começou a arrastar e o carrossel ainda não se
+           moveu, então a página que entra está inteira fora do quadro (nada a
+           invalidar) e o dedo está garantidamente na que sai — nunca sobre o
+           que estamos prestes a apagar. É o único instante seguro. */
+        dash_rebuild_page(s_dash_page == DASH_PAGE_USAGE ? DASH_PAGE_ACTIVITY
+                                                         : DASH_PAGE_USAGE);
+        break;
+    }
+    case LV_EVENT_SCROLL:
+        dash_track();
+        break;
+    default:   /* LV_EVENT_VALUE_CHANGED: o tileview já escolheu o tile alvo */
+        s_dash_page = (lv_tileview_get_tile_act(s_dash_tv) == s_activity_list)
+                          ? DASH_PAGE_ACTIVITY : DASH_PAGE_USAGE;
+        break;
+    }
+}
+
+/**
+ * Veste um tile com o que antes era a lista da aba: o tile É a lista.
+ *
+ * Sem set_size nem align de propósito — o tile já nasce do tamanho do
+ * carrossel e com o x gravado pelo construtor; realinhar aqui empilharia os
+ * dois no mesmo lugar.
+ */
+static void dash_tile_setup(lv_obj_t *tile, lv_coord_t pad_row, lv_coord_t pad_top)
+{
+    lv_obj_set_flex_flow(tile, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(tile, pad_row, 0);
+    lv_obj_set_style_pad_top(tile, pad_top, 0);
+    lv_obj_set_style_pad_left(tile, UI_PAD + UI_DOCK_W, 0);
+    lv_obj_set_style_pad_right(tile, UI_PAD, 0);
+    lv_obj_set_style_pad_bottom(tile, UI_DOCK_H, 0);
+    /* Restringir ao eixo vertical é o que entrega o arraste horizontal ao
+       carrossel: sem isto o tile aceita as duas direções e rouba o gesto assim
+       que qualquer filho transbordar um pixel para o lado. */
+    lv_obj_set_scroll_dir(tile, LV_DIR_VER);
+}
+
 static void build_dash(void)
 {
     s_dash = ui_screen();
-    lv_obj_t *bar = ui_topbar(s_dash, T(STR_TAB_DASH), NULL);
+    lv_obj_t *bar = ui_topbar(s_dash, T(STR_TAB_DASH), &s_dash_title);
     lv_obj_set_style_pad_left(bar, UI_TOPBAR_PAD + UI_DOCK_W, 0);
 
-    s_dash_list = ui_plain(s_dash);
-    lv_obj_set_size(s_dash_list, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
-    lv_obj_align(s_dash_list, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
-    lv_obj_set_flex_flow(s_dash_list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_dash_list, 8, 0);
-    lv_obj_set_style_pad_left(s_dash_list, UI_PAD + UI_DOCK_W, 0);
-    lv_obj_set_style_pad_right(s_dash_list, UI_PAD, 0);
-    lv_obj_set_style_pad_bottom(s_dash_list, UI_DOCK_H, 0);
-    lv_obj_add_flag(s_dash_list, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(s_dash_list, LV_DIR_VER);
+    /* As bolinhas encostam à direita sozinhas: o título tem flex_grow. Container
+       próprio porque o pad_column da topbar é largo demais entre pontos de 8. */
+    lv_obj_t *dots = ui_plain(bar);
+    lv_obj_set_size(dots, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(dots, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(dots, 6, 0);
+    for (int i = 0; i < DASH_PAGE_COUNT; i++) {
+        lv_obj_t *d = ui_plain(dots);
+        lv_obj_set_size(d, 8, 8);
+        lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(d, i == 0 ? UI_TEXT : UI_MUTED, 0);
+        s_dash_dot[i] = d;
+    }
+
+    s_dash_tv = lv_tileview_create(s_dash);
+    /* Estilo e tamanho ANTES do primeiro tile: o construtor do tile grava a
+       posição em pixels a partir da largura útil do pai, e nenhum resize
+       posterior a recalcula. Errar aqui desalinha o encaixe das páginas. */
+    lv_obj_set_style_pad_all(s_dash_tv, 0, 0);
+    lv_obj_set_style_border_width(s_dash_tv, 0, 0);
+    /* o tema veste o tileview como se fosse tela, num cinza que não é o nosso */
+    lv_obj_set_style_bg_color(s_dash_tv, UI_BG, 0);
+    lv_obj_set_scrollbar_mode(s_dash_tv, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_size(s_dash_tv, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
+    lv_obj_align(s_dash_tv, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
+
+    s_dash_list     = lv_tileview_add_tile(s_dash_tv, 0, 0, LV_DIR_RIGHT);
+    s_activity_list = lv_tileview_add_tile(s_dash_tv, 1, 0, LV_DIR_LEFT);
+    dash_tile_setup(s_dash_list, 8, 0);
+    dash_tile_setup(s_activity_list, 6, 6);
+
+    lv_obj_add_event_cb(s_dash_tv, dash_tv_cb, LV_EVENT_SCROLL_BEGIN, NULL);
+    lv_obj_add_event_cb(s_dash_tv, dash_tv_cb, LV_EVENT_SCROLL, NULL);
+    lv_obj_add_event_cb(s_dash_tv, dash_tv_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    /* o tile ativo só é apontado no primeiro encaixe; sem isto nasce nulo */
+    lv_obj_set_tile_id(s_dash_tv, 0, 0, LV_ANIM_OFF);
+    s_dash_page = s_dash_title_page = DASH_PAGE_USAGE;
 
     ui_dock(s_dash, UI_TAB_DASH, dock_cb);
-}
-
-/* ---------- aba Atividade ---------- */
-
-static void build_activity(void)
-{
-    s_activity = ui_screen();
-    lv_obj_t *bar = ui_topbar(s_activity, T(STR_TAB_ACTIVITY), NULL);
-    lv_obj_set_style_pad_left(bar, UI_TOPBAR_PAD + UI_DOCK_W, 0);
-
-    s_activity_list = ui_plain(s_activity);
-    lv_obj_set_size(s_activity_list, LV_HOR_RES, LV_VER_RES - UI_TOPBAR_H);
-    lv_obj_align(s_activity_list, LV_ALIGN_TOP_MID, 0, UI_TOPBAR_H);
-    lv_obj_set_flex_flow(s_activity_list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_activity_list, 6, 0);
-    lv_obj_set_style_pad_left(s_activity_list, UI_PAD + UI_DOCK_W, 0);
-    lv_obj_set_style_pad_right(s_activity_list, UI_PAD, 0);
-    lv_obj_set_style_pad_top(s_activity_list, 6, 0);
-    lv_obj_set_style_pad_bottom(s_activity_list, UI_DOCK_H, 0);
-    lv_obj_add_flag(s_activity_list, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(s_activity_list, LV_DIR_VER);
-
-    ui_dock(s_activity, UI_TAB_ACTIVITY, dock_cb);
 }
 
 static void fmt_dur(char *buf, size_t size, uint32_t sec)
@@ -1576,6 +1693,23 @@ static void build_keyboard_overlay(void)
 
 /* ---------- laço da UI ---------- */
 
+/**
+ * true enquanto um dedo arrasta algum objeto rolável.
+ *
+ * Reconstruir nessa janela apaga o objeto que está sob o dedo, e a LVGL
+ * responde a isso zerando o alvo do arraste — sem avisar quem estava rolando.
+ * O carrossel para entre duas páginas e só volta ao lugar no toque seguinte.
+ */
+static bool ui_drag_active(void)
+{
+    for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
+        if (lv_indev_get_scroll_obj(in) != NULL) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void ui_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
@@ -1598,6 +1732,13 @@ static void ui_timer_cb(lv_timer_t *timer)
     if (gen == s_last_generation) {
         return;
     }
+    /* Sem consumir a geração: o próximo tick, 150ms depois, refaz assim que o
+       dedo sair da tela. Vale para todas as listas, não só o carrossel — a
+       rolagem das sessões e do terminal também morria quando a ponte
+       empurrava dados no meio de um arraste. */
+    if (ui_drag_active()) {
+        return;
+    }
     s_last_generation = gen;
 
     s_ui_agent_count = herdr_model_get_agents(s_ui_agents, HERDR_MAX_AGENTS_TOTAL);
@@ -1605,11 +1746,12 @@ static void ui_timer_cb(lv_timer_t *timer)
     if (s_tab == UI_TAB_SESSIONS && !s_detail_open) {
         rebuild_session_rows();
     }
+    /* Só a página à vista; a vizinha fica marcada e se resolve quando o dedo
+       começa a trazê-la, ainda fora do quadro. */
+    s_page_dirty[DASH_PAGE_USAGE]    = true;
+    s_page_dirty[DASH_PAGE_ACTIVITY] = true;
     if (s_tab == UI_TAB_DASH) {
-        rebuild_dash_cards();
-    }
-    if (s_tab == UI_TAB_ACTIVITY) {
-        rebuild_activity();
+        dash_rebuild_page(s_dash_page);
     }
     refresh_detail();
 }
@@ -1622,7 +1764,6 @@ void herdr_ui_init(void)
     build_home();
     build_sessions();
     build_dash();
-    build_activity();
     build_detail();
     build_keyboard_overlay();
     herdr_ui_settings_init(dock_cb);
