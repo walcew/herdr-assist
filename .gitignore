@@ -14,3 +14,6 @@
 # amostra local do teste do parser: é saída real de sessões (nomes de projeto,
 # IPs da LAN), e o teste roda sem ela — regerar com o comando em term_parse_test.c
 /scripts/fixtures
+# bytecode Python (plugin/ e scripts/)
+__pycache__/
+*.pyc
