@@ -3,3 +3,7 @@ CONFIG_FREERTOS_HZ=1000
 # anti-brick do OTA: app novo boota como PENDING_VERIFY e precisa se confirmar
 # (fw_update_init); se crashar antes, o bootloader volta sozinho ao slot anterior
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# TLS na PSRAM: o handshake do OTA (buffer de 16KB + contexto + cert bundle)
+# não cabia mais na heap interna com a UI e as pontes de pé — mbedtls_ssl_setup
+# voltava -0x7F00 (ALLOC_FAILED) e a checagem morria antes do manifest.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
