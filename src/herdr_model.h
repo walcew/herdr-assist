@@ -72,12 +72,20 @@ typedef struct {
     char    account[33];   /* e-mail da conta; distingue contas do mesmo provedor */
 } herdr_limits_t;
 
-/* Custo agregado de uso reportado pela ponte (aba Dash). Textos já formatados
- * para exibição ("~US$ 4,20"); o firmware não interpreta nada. */
+/* Custo agregado de uso reportado pela ponte (aba Dash).
+ *
+ * Os centavos são a fonte de verdade: quem formata é o painel (money_fmt), que
+ * conhece o idioma configurado. As strings são o caminho legado — ponte antiga
+ * só manda elas, já formatadas em pt-BR, e aí não há o que fazer além de
+ * exibir. `has_cents` diz qual dos dois vale. */
 typedef struct {
-    char now[16];   /* "~US$ 4,20" */
+    char now[16];   /* legado: "~US$ 4,20" pronto da ponte */
     char week[16];
     char life[16];
+    uint32_t now_cents;
+    uint32_t week_cents;
+    uint32_t life_cents;
+    bool has_cents; /* ponte mandou os centavos: formatar no painel */
     bool valid;     /* false até chegar o primeiro payload cost */
 } herdr_cost_t;
 

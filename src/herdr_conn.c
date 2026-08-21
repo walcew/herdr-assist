@@ -222,6 +222,16 @@ static void handle_cost(const cJSON *root)
         strncpy(c.week, f->valuestring, sizeof(c.week) - 1);
     if (cJSON_IsString((f = cJSON_GetObjectItem(root, "life"))))
         strncpy(c.life, f->valuestring, sizeof(c.life) - 1);
+    /* centavos mandam quando vêm: o painel formata no idioma dele. Ponte antiga
+       não manda o campo e o caminho legado (strings acima) continua valendo. */
+    if (cJSON_IsNumber((f = cJSON_GetObjectItem(root, "now_cents")))) {
+        c.now_cents = (uint32_t)f->valuedouble;
+        c.has_cents = true;
+    }
+    if (cJSON_IsNumber((f = cJSON_GetObjectItem(root, "week_cents"))))
+        c.week_cents = (uint32_t)f->valuedouble;
+    if (cJSON_IsNumber((f = cJSON_GetObjectItem(root, "life_cents"))))
+        c.life_cents = (uint32_t)f->valuedouble;
     herdr_model_set_cost(&c);
 }
 

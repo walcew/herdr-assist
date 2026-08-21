@@ -78,5 +78,11 @@ jobs:
             scripts/term_parse_test.c src/term_parse.c
           /tmp/tpt
 
+      - name: money_test
+        run: |
+          cc -std=c11 -Wall -Wextra -Isrc -o /tmp/mt \
+            scripts/money_test.c src/money.c
+          /tmp/mt
+
       - name: bridge unit tests
         run: cd plugin && python3 -m unittest discover -s tests -v
