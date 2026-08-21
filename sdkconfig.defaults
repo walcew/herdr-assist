@@ -7,3 +7,8 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # não cabia mais na heap interna com a UI e as pontes de pé — mbedtls_ssl_setup
 # voltava -0x7F00 (ALLOC_FAILED) e a checagem morria antes do manifest.
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+# Nomes longos no cartão SD: o padrão do IDF é 8.3 puro (FATFS_LFN_NONE), em
+# que "spiderman.hav" não cabe. Os pacotes de avatar são nomeados pelo id, que
+# vem de repositório de terceiro — 8 caracteres não é contrato defensável.
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=64
