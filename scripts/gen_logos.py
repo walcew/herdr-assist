@@ -15,7 +15,9 @@ from PIL import Image
 HERE = Path(__file__).resolve().parent / "logos"  # SVGs exportados do Claude Design
 OUT = Path(__file__).resolve().parent.parent / "src" / "assets"
 SCALE = 4
-LOGOS = [("claude", 15), ("codex", 17)]
+# Tamanhos escalados junto com o slot do card da Dash, que passou a cobrir as
+# duas linhas do cabeçalho (título + e-mail): 26 -> 37px de slot.
+LOGOS = [("claude", 21), ("codex", 24)]
 
 
 def rgb565(r, g, b):
