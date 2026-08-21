@@ -26,8 +26,10 @@ static const char *TAG = "sd";
 static sdmmc_card_t *s_card;
 
 /* Uma tentativa completa: sobe o barramento, tenta montar e desfaz tudo se
-   falhar — inclusive o spi_bus_free, para a tentativa seguinte partir do zero. */
-static esp_err_t try_mount(void)
+   falhar — inclusive o spi_bus_free, para a tentativa seguinte partir do zero.
+   `allow_format` só é verdadeiro vindo do sd_format(), depois de o usuário
+   confirmar na tela. */
+static esp_err_t try_mount(bool allow_format)
 {
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
@@ -55,8 +57,9 @@ static esp_err_t try_mount(void)
 
     esp_vfs_fat_mount_config_t mount = {
         /* NUNCA formatar sozinho: o cartão é do usuário e pode ter o que ele
-           quiser. Cartão ilegível vira erro e o painel segue sem ele. */
-        .format_if_mount_failed = false,
+           quiser. Cartão ilegível vira erro e o painel segue sem ele — a menos
+           que ele mesmo tenha pedido a formatação. */
+        .format_if_mount_failed = allow_format,
         .max_files = 4,
         .allocation_unit_size = 16 * 1024,
     };
@@ -85,7 +88,7 @@ esp_err_t sd_mount(void)
        tirar a energia; se acontecer em campo, é desligar e ligar. */
     esp_err_t err = ESP_FAIL;
     for (int attempt = 1; attempt <= 3; attempt++) {
-        err = try_mount();
+        err = try_mount(false);
         if (err == ESP_OK) {
             break;
         }
@@ -118,4 +121,39 @@ uint64_t sd_free_bytes(void)
         return 0;
     }
     return freeb;
+}
+
+esp_err_t sd_format(void)
+{
+    if (!s_card) {
+        /* Uma montagem normal primeiro: se o cartão só estava preso (ver o laço
+           do sd_mount), formatar pela via de baixo evita escrever as tabelas
+           duas vezes. Só o que resistir a isso é ilegível de fato, e aí montar
+           com o format ligado é a única via — o esp_vfs_fat_sdcard_format exige
+           o volume montado. O IDF só formata em FR_NO_FILESYSTEM/FR_INT_ERR, ou
+           seja com o cartão respondendo: slot vazio falha antes, sem formatar
+           nada. */
+        if (sd_mount() != ESP_OK) {
+            return try_mount(true);
+        }
+    }
+
+    esp_err_t err = esp_vfs_fat_sdcard_format(SD_ROOT, s_card);
+
+    /* Se o mkfs deu certo mas a remontagem interna falhou, o IDF já liberou o
+       card e mesmo assim devolve ESP_OK — o s_card ficaria pendurado. Um
+       f_getfree é o teste barato de que o volume seguiu montado. */
+    uint64_t total = 0, freeb = 0;
+    if (esp_vfs_fat_info(SD_ROOT, &total, &freeb) != ESP_OK) {
+        ESP_LOGE(TAG, "o cartão não voltou depois de formatar");
+        s_card = NULL;
+        spi_bus_free(SD_SPI_HOST);   /* para um sd_mount() seguinte partir do zero */
+        return ESP_FAIL;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "formatação falhou: %s", esp_err_to_name(err));
+        return err;
+    }
+    ESP_LOGI(TAG, "cartão formatado: %lluMB livres de %lluMB", freeb >> 20, total >> 20);
+    return ESP_OK;
 }

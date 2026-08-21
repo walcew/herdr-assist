@@ -67,6 +67,13 @@ int avatar_count(void);
 const char *avatar_id_at(int idx);
 
 /**
+ * Revarre o cartão. A lista é montada uma vez, no boot — sem isto um pacote
+ * recém-baixado fica inalcançável pelo toque no mascote e um apagado continua
+ * na roda. Chamar depois de instalar, apagar ou formatar.
+ */
+void avatar_rescan(void);
+
+/**
  * Troca o avatar corrente, salvando a escolha na NVS.
  *
  * Pacote do cartão é lido por uma task separada — a leitura leva segundos e

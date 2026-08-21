@@ -362,6 +362,23 @@ static void adopt(avatar_pack_t *p)
              s_pack.name, s_pack.count, s_zoom, (long)((esp_timer_get_time() - s_t0) / 1000));
 }
 
+void avatar_rescan(void)
+{
+    char cur[ID_LEN];
+    strlcpy(cur, s_ids[s_cur], sizeof(cur));
+    scan_packs();
+    int idx = index_of(cur);
+    if (idx >= 0) {
+        s_cur = idx;
+        return;
+    }
+    /* O que estava tocando saiu do cartão (apagado ou formatado). O pacote já
+       está na PSRAM e segue animando até alguém trocar; só a escolha volta ao
+       de fábrica, para o próximo boot não procurar um arquivo que não existe. */
+    s_cur = 0;
+    save_choice("");
+}
+
 int avatar_count(void)
 {
     return s_count;

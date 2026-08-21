@@ -43,6 +43,7 @@ static const char *TAG = "avatar_store";
 #define EV_REFRESH  BIT0
 #define EV_INSTALL  BIT1
 #define EV_PACK     BIT2
+#define EV_FORMAT   BIT3
 
 static EventGroupHandle_t s_events;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -581,22 +582,55 @@ static void do_install(void)
     set_status(STORE_READY, STORE_ERR_NONE, 100);
 }
 
+/* ---------- formatação ---------- */
+
+static void do_format(void)
+{
+    if (sd_format() != ESP_OK) {
+        set_status(STORE_ERROR, STORE_ERR_FORMAT, 0);
+        return;
+    }
+    /* O catálogo em mãos acabou de ficar falso: o cartão está vazio. Refazê-lo
+       aqui é o mesmo que o usuário veria tocando em atualizar — inclusive o
+       erro de rede, se for o caso, que é honesto e não vem de formatar. */
+    mkdir(AVATAR_DIR, 0777);
+    do_refresh();
+}
+
 /* ---------- API ---------- */
+
+/* Refresh, download e formatação disputam a mesma task e o mesmo cartão. */
+static bool store_busy(void)
+{
+    store_state_t st = s_status.state;
+    return st == STORE_REFRESHING || st == STORE_DOWNLOADING || st == STORE_FORMATTING;
+}
 
 bool avatar_store_refresh(void)
 {
-    store_state_t st = s_status.state;
-    if (st == STORE_REFRESHING || st == STORE_DOWNLOADING) {
+    if (store_busy()) {
         return false;
     }
     xEventGroupSetBits(s_events, EV_REFRESH);
     return true;
 }
 
+bool avatar_store_format(void)
+{
+    if (store_busy()) {
+        return false;
+    }
+    /* O estado sai daqui, e não da task: entre o toque e a task acordar a tela
+       repintaria uma vez ainda dizendo "pronto", e formatar é a operação em que
+       menos se quer dar essa impressão. */
+    set_status(STORE_FORMATTING, STORE_ERR_NONE, 0);
+    xEventGroupSetBits(s_events, EV_FORMAT);
+    return true;
+}
+
 bool avatar_store_install(const char *id)
 {
-    store_state_t st = s_status.state;
-    if (st == STORE_REFRESHING || st == STORE_DOWNLOADING || !id_ok(id)) {
+    if (store_busy() || !id_ok(id)) {
         return false;
     }
     taskENTER_CRITICAL(&s_mux);
@@ -668,7 +702,9 @@ static void store_task(void *arg)
         if (bits & EV_PACK) {
             s_pack_state = avatar_pack_load_file(s_pack_path, &s_pack) ? 2 : -1;
         }
-        if (bits & EV_INSTALL) {
+        if (bits & EV_FORMAT) {
+            do_format();
+        } else if (bits & EV_INSTALL) {
             do_install();
         } else if (bits & EV_REFRESH) {
             do_refresh();
