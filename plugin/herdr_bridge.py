@@ -44,6 +44,7 @@ import urllib.error
 import urllib.request
 
 import accounts
+import claude_cli
 import cost
 import transcript
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
@@ -775,47 +776,28 @@ def iso_epoch(s: str) -> int:
 
 
 def collect_claude(config_dir: str) -> dict:
-    """Uso do Claude Code pelo endpoint OAuth, com o token que o CLI renova.
+    """Uso do Claude Code perguntando ao próprio CLI (ver claude_cli).
 
-    É o mesmo endpoint interno que alimenta o /usage do CLI; formato pode mudar
-    sem aviso, e qualquer surpresa aqui vira falha do provedor, nunca crash
-    (collect_limits embrulha tudo). O array limits[] já vem normalizado —
-    session (5h), weekly_all (7d) e weekly_scoped por modelo. `config_dir` é o
-    CLAUDE_CONFIG_DIR da conta (default ou não) — é dali que vêm credencial e
-    e-mail.
+    Antes isto lia `.credentials.json` e batia no endpoint OAuth. O CLI guarda
+    a credencial onde cada SO manda e renova sozinho: no macOS passou a usar o
+    Keychain e o arquivo congelou expirado, derrubando a coleta sem aviso.
+    Perguntar ao CLI vale em todo sistema, não replica autenticação nenhuma e
+    acompanha a sessão que o usuário já mantém viva dentro do Herdr.
+
+    Duas chamadas por conta (~3s no total, bloqueantes — collect_limits roda no
+    executor): `auth status` dá login/e-mail/plano, `/usage` dá as janelas.
+    Conta sem assinatura logada levanta NotLoggedIn e some do painel.
     """
-    with open(os.path.join(config_dir, ".credentials.json")) as f:
-        cred = json.load(f)["claudeAiOauth"]
-    if cred.get("expiresAt", 0) / 1000 <= time.time():
-        # o CLI renova no próximo uso; request agora seria um 401 garantido
-        raise RuntimeError("token expirado")
-    data = fetch_json("https://api.anthropic.com/api/oauth/usage",
-                      {"Authorization": "Bearer " + cred["accessToken"],
-                       "anthropic-beta": "oauth-2025-04-20"})
-    rows = []
-    for lim in data.get("limits", [])[:4]:      # teto espelhado no firmware
-        kind = lim.get("kind", "")
-        if kind == "session":
-            label = "5h"
-        elif kind == "weekly_all":
-            label = "7d"
-        elif kind == "weekly_scoped":
-            model = ((lim.get("scope") or {}).get("model") or {}).get("display_name") or "?"
-            label = clip("7d " + model, 16)     # cabe em label[20] mesmo truncado
-        else:
-            label = clip(kind, 16)              # kind novo aparece cru, não some
-        wsec = (18000 if kind == "session"
-                else 604800 if kind in ("weekly_all", "weekly_scoped")
-                else 0)
-        rows.append({"label": label, "pct": int(round(lim.get("percent") or 0)),
-                     "resets_at": iso_epoch(lim["resets_at"]) if lim.get("resets_at") else 0,
-                     "window_s": wsec})
-    # o plano vem do próprio arquivo de credencial: default_claude_max_20x → Max 20x
-    tier = cred.get("rateLimitTier", "")
-    plan = (tier.split("claude_")[-1].replace("_", " ").capitalize()
-            if tier else cred.get("subscriptionType", "").capitalize())
+    st = claude_cli.auth_status(config_dir)
+    if not st.get("loggedIn"):
+        raise claude_cli.NotLoggedIn(config_dir)
+    rows = claude_cli.usage_rows(config_dir)
+    # o CLI só expõe o tipo de assinatura ("max"), não o tier detalhado que a
+    # credencial trazia (default_claude_max_20x -> "Max 20x")
+    plan = (st.get("subscriptionType") or "").capitalize()
+    account = st.get("email") or read_account_email("claude", config_dir, HOME)
     return {"name": "Claude", "plan": plan, "limits": rows,
-            "account": clip(read_account_email("claude", config_dir, HOME), 32)}
+            "account": clip(account, 32)}
 
 
 def collect_codex(config_dir: str) -> dict:
@@ -862,8 +844,9 @@ def collect_limits(account_dirs) -> list:
     providers = []
     for agent, cdir in sorted(account_dirs):
         key = (agent, cdir)
-        path = _cred_path(agent, cdir)
-        if not os.path.exists(path):
+        # o claude não tem arquivo para checar: quem responde se a conta está
+        # logada é o CLI, e a resposta chega como NotLoggedIn abaixo
+        if agent != "claude" and not os.path.exists(_cred_path(agent, cdir)):
             limits_last_good.pop(key, None)
             limits_ok.pop(key, None)
             continue
@@ -883,6 +866,10 @@ def collect_limits(account_dirs) -> list:
                          agent, cur.get("account") or os.path.basename(cdir),
                          len(cur["limits"]))
             limits_ok[key] = True
+        except claude_cli.NotLoggedIn:
+            limits_last_good.pop(key, None)
+            limits_ok.pop(key, None)
+            continue
         except Exception as e:  # endpoint interno: qualquer surpresa é falha, não crash
             reason = ("HTTP %d" % e.code if isinstance(e, urllib.error.HTTPError)
                       else str(e) or type(e).__name__)
