@@ -68,6 +68,7 @@ extern const avatar_driver_t avatar_clawd_driver;    /* avatar_clawd.c */
 extern const avatar_driver_t avatar_sonic_driver;    /* avatar_sonic.c */
 extern const avatar_driver_t avatar_mcqueen_driver;  /* avatar_mcqueen.c */
 extern const avatar_driver_t avatar_spiderman_driver;/* avatar_spiderman.c */
+extern const avatar_driver_t avatar_sf_driver;       /* avatar_sf.c (Ryu vs Ken) */
 
 /**
  * Posiciona o sprite no slot; `grow` é o quanto ele cresce por causa do zoom
