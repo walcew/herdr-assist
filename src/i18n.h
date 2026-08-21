@@ -173,6 +173,7 @@ typedef enum {
     X(FW_ERR_CHECK,    "Check failed. Is Wi-Fi up?",  "Falha ao verificar. Wi-Fi ok?")       \
     X(FW_ERR_DOWNLOAD, "Download failed. Try again.", "Falha no download. Tente de novo.")   \
     X(FW_TOAST_SUB,    "Tap to update",               "Toque para atualizar")                 \
+    X(FW_AUTO,         "Automatic updates",           "Atualizações automáticas")             \
     /* --- configurações: bloqueio de tela --- */                                             \
     X(LOCK_ROW,        "Screen lock",                 "Bloqueio de tela")                     \
     X(LOCK_ON,         "On",                          "Ativado")                              \
