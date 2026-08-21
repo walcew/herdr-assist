@@ -8,6 +8,9 @@
 
 #include "esp_system.h"
 
+#include "avatar.h"
+#include "sd.h"
+#include "avatar_store.h"
 #include "fw_update.h"
 #include "herdr_kb.h"
 #include "herdr_ui.h"
@@ -28,6 +31,7 @@ typedef enum {
     VIEW_HOST,
     VIEW_PAIR,
     VIEW_UPDATE,
+    VIEW_AVATAR,
     VIEW_LOCK,
 } view_t;
 
@@ -56,6 +60,10 @@ static lv_obj_t *s_fwup_bar;        /* barra de progresso do download */
 static lv_obj_t *s_fwup_btn;        /* botão de ação (verificar/instalar) */
 static lv_obj_t *s_fwup_btn_label;
 static lv_timer_t *s_fwup_timer;
+static lv_obj_t *s_av_list;         /* container das linhas de avatar */
+static lv_obj_t *s_av_status;       /* linha de estado (cartão, erro, progresso) */
+static lv_obj_t *s_av_repo[STORE_USER_REPOS];
+static lv_timer_t *s_av_timer;
 static lv_obj_t *s_fw_toast;        /* aviso global de versão nova (layer_top) */
 static lv_obj_t *s_fw_toast_title;
 static char s_fw_notified[32];      /* última versão já vista pelo usuário */
@@ -73,6 +81,7 @@ static void show_pass(const char *ssid);
 static void show_host(int idx);
 static void show_pair(void);
 static void show_update(void);
+static void show_avatars(void);
 static void show_lock(void);
 static void update_toast(void);
 
@@ -142,6 +151,19 @@ static lv_obj_t *make_row(lv_event_cb_t cb, void *user_data, lv_coord_t h)
         lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, user_data);
     }
     return row;
+}
+
+/* Tamanho legível: MB com uma casa até 1GB, GB acima. Os pacotes vão de 38KB a
+   1,5MB e o cartão de centenas de MB — três faixas cobrem tudo que aparece. */
+static void fmt_bytes(char *buf, size_t size, uint64_t bytes)
+{
+    if (bytes >= 1024ULL * 1024 * 1024) {
+        snprintf(buf, size, "%.1f GB", (double)bytes / (1024.0 * 1024 * 1024));
+    } else if (bytes >= 1024 * 1024) {
+        snprintf(buf, size, "%.1f MB", (double)bytes / (1024.0 * 1024));
+    } else {
+        snprintf(buf, size, "%u KB", (unsigned)(bytes / 1024));
+    }
 }
 
 static void make_section_label(const char *text)
@@ -815,6 +837,238 @@ static void show_update(void)
     fwup_tick_cb(NULL);           /* primeira pintura sem esperar o tick */
 }
 
+
+/* ---------- view: avatares ---------- */
+
+static void avatars_leave(void)
+{
+    if (s_av_timer) {
+        lv_timer_del(s_av_timer);
+        s_av_timer = NULL;
+    }
+}
+
+static void back_from_avatars_cb(lv_event_t *e)
+{
+    (void)e;
+    avatars_leave();
+    show_main();                  /* um download em curso segue em background */
+}
+
+/* Grava o que estiver nos campos e manda reler todos os repositórios. */
+static void av_refresh_cb(lv_event_t *e)
+{
+    (void)e;
+    for (int i = 0; i < STORE_USER_REPOS; i++) {
+        if (s_av_repo[i]) {
+            avatar_store_set_repo(i, lv_textarea_get_text(s_av_repo[i]));
+        }
+    }
+    avatar_store_refresh();
+}
+
+/* Toque na linha: instalado passa a ser o avatar corrente; o resto baixa. */
+static void av_row_cb(lv_event_t *e)
+{
+    const avatar_entry_t *ent = lv_event_get_user_data(e);
+    if (ent->installed) {
+        avatar_select(ent->builtin ? "" : ent->id);
+    } else {
+        avatar_store_install(ent->id);
+    }
+}
+
+static void av_remove_cb(lv_event_t *e)
+{
+    const avatar_entry_t *ent = lv_event_get_user_data(e);
+    /* Se era o que estava tocando, o motor volta para o de fábrica — senão a
+       home ficaria animando um pacote que não existe mais. */
+    if (strcmp(avatar_current(), ent->id) == 0) {
+        avatar_select("");
+    }
+    avatar_store_remove(ent->id);
+    avatar_store_refresh();       /* remonta a lista do jeito certo */
+}
+
+static const char *av_err_text(store_err_t err)
+{
+    switch (err) {
+    case STORE_ERR_INDEX:    return T(STR_AV_ERR_INDEX);
+    case STORE_ERR_NO_SD:    return T(STR_AV_NO_SD);
+    case STORE_ERR_SPACE:    return T(STR_AV_ERR_SPACE);
+    case STORE_ERR_PACK:     return T(STR_AV_ERR_PACK);
+    case STORE_ERR_DOWNLOAD: return T(STR_AV_ERR_DOWNLOAD);
+    default:                 return T(STR_AV_ERR_NET);
+    }
+}
+
+/* Catálogo copiado a cada repintura: o original é da task do store, e manter
+   ponteiro para lá daria leitura suja no meio de um refresh. */
+static avatar_entry_t s_av_cat[STORE_MAX];
+static int s_av_n;
+
+static void av_build_list(const avatar_store_status_t *st)
+{
+    lv_obj_clean(s_av_list);
+    s_av_n = avatar_store_list(s_av_cat, STORE_MAX);
+    if (s_av_n == 0) {
+        lv_obj_t *l = lv_label_create(s_av_list);
+        lv_label_set_text(l, T(STR_AV_EMPTY));
+        lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(l, UI_MUTED, 0);
+        return;
+    }
+    const char *cur = avatar_current();
+    for (int i = 0; i < s_av_n; i++) {
+        avatar_entry_t *ent = &s_av_cat[i];
+        bool is_cur = strcmp(cur, ent->builtin ? "" : ent->id) == 0;
+        lv_obj_t *row = make_row(av_row_cb, ent, 48);
+
+        lv_obj_t *nm = lv_label_create(row);
+        lv_label_set_text(nm, ent->name);
+        lv_obj_set_style_text_font(nm, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(nm, UI_TEXT, 0);
+        lv_obj_align(nm, LV_ALIGN_LEFT_MID, 0, -9);
+
+        /* sub-linha: tamanho quando o repositório informou, e nada quando não */
+        lv_obj_t *sz = lv_label_create(row);
+        if (ent->builtin) {
+            lv_label_set_text(sz, T(STR_AV_BUILTIN));
+        } else if (ent->size) {
+            char buf[16];
+            fmt_bytes(buf, sizeof(buf), ent->size);
+            lv_label_set_text(sz, buf);
+        } else {
+            lv_label_set_text(sz, T(STR_AV_INSTALLED));
+        }
+        lv_obj_set_style_text_font(sz, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(sz, UI_MUTED, 0);
+        lv_obj_align(sz, LV_ALIGN_LEFT_MID, 0, 10);
+
+        /* estado à direita; a lixeira substitui o rótulo no que dá para apagar */
+        bool busy = st->state == STORE_DOWNLOADING &&
+                    strcmp(st->id, ent->id) == 0;
+        lv_obj_t *tag = lv_label_create(row);
+        if (busy) {
+            lv_label_set_text_fmt(tag, T(STR_AV_DOWNLOADING_FMT), st->pct);
+            lv_obj_set_style_text_color(tag, UI_WORKING, 0);
+        } else if (is_cur) {
+            lv_label_set_text(tag, T(STR_AV_IN_USE));
+            lv_obj_set_style_text_color(tag, UI_IDLE, 0);
+        } else if (ent->installed) {
+            lv_label_set_text(tag, LV_SYMBOL_TRASH);
+            lv_obj_set_style_text_color(tag, UI_MUTED, 0);
+        } else {
+            lv_label_set_text(tag, T(STR_AV_GET));
+            lv_obj_set_style_text_color(tag, UI_MUTED, 0);
+        }
+        lv_obj_set_style_text_font(tag, &lv_font_ui_12, 0);
+        lv_obj_align(tag, LV_ALIGN_RIGHT_MID, 0, 0);
+        if (!busy && !is_cur && ent->installed && !ent->builtin) {
+            lv_obj_add_flag(tag, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_set_ext_click_area(tag, 14);   /* alvo de dedo, não de mouse */
+            lv_obj_add_event_cb(tag, av_remove_cb, LV_EVENT_CLICKED, ent);
+        }
+    }
+}
+
+/**
+ * Pinta conforme o estado do store — a task dele nunca toca a LVGL; este timer
+ * é o único pintor, como no pareamento e no firmware.
+ *
+ * A lista só é remontada quando algo de fato mudou (o estado do store ou o
+ * avatar corrente): com full_refresh, repintar custa um quadro inteiro no QSPI.
+ */
+static void av_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    static store_state_t last_state = (store_state_t)-1;
+    static uint8_t last_pct;
+    static char last_cur[24];
+
+    avatar_store_status_t st;
+    avatar_store_get_status(&st);
+    const char *cur = avatar_current();
+
+    if (st.state == STORE_REFRESHING) {
+        lv_label_set_text(s_av_status, T(STR_AV_REFRESHING));
+        lv_obj_set_style_text_color(s_av_status, UI_WORKING, 0);
+    } else if (st.state == STORE_ERROR) {
+        lv_label_set_text(s_av_status, av_err_text(st.err));
+        lv_obj_set_style_text_color(s_av_status, UI_BLOCKED, 0);
+    } else if (!sd_is_mounted()) {
+        lv_label_set_text(s_av_status, T(STR_AV_NO_SD_HINT));
+        lv_obj_set_style_text_color(s_av_status, UI_MUTED, 0);
+    } else {
+        char buf[16];
+        fmt_bytes(buf, sizeof(buf), sd_free_bytes());
+        lv_label_set_text_fmt(s_av_status, T(STR_AV_CARD_FMT), buf);
+        lv_obj_set_style_text_color(s_av_status, UI_MUTED, 0);
+    }
+
+    /* O progresso entra de 5 em 5: cada remontagem custa um quadro inteiro no
+       QSPI (full_refresh), e repintar a cada 1% seriam ~100 telas por download
+       para mover um número. */
+    if (st.state != last_state || st.pct / 5 != last_pct / 5 ||
+        strcmp(cur, last_cur) != 0) {
+        last_state = st.state;
+        last_pct = st.pct;
+        strlcpy(last_cur, cur, sizeof(last_cur));
+        av_build_list(&st);
+    }
+}
+
+static void show_avatars(void)
+{
+    avatars_leave();              /* reentrar não pode deixar timer órfão */
+    s_view = VIEW_AVATAR;
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
+    build_bar(T(STR_AV_TITLE), back_from_avatars_cb, NULL);
+    hide_kb();
+    lv_obj_clean(s_content);
+
+    s_av_status = lv_label_create(s_content);
+    lv_obj_set_style_text_font(s_av_status, &lv_font_ui_12, 0);
+    lv_obj_set_width(s_av_status, LV_PCT(100));
+    lv_label_set_long_mode(s_av_status, LV_LABEL_LONG_WRAP);
+
+    lv_obj_t *btn = make_row(av_refresh_cb, NULL, 44);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text_fmt(bl, LV_SYMBOL_REFRESH "  %s", T(STR_AV_REFRESH));
+    lv_obj_set_style_text_font(bl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(bl, UI_TEXT, 0);
+    lv_obj_center(bl);
+
+    /* As linhas vivem num container próprio para a repintura periódica não
+       levar junto o botão acima nem os campos abaixo. */
+    s_av_list = ui_plain(s_content);
+    lv_obj_set_width(s_av_list, LV_PCT(100));
+    lv_obj_set_height(s_av_list, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(s_av_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_av_list, 8, 0);
+
+    make_section_label(T(STR_AV_SEC_REPOS));
+    for (int i = 0; i < STORE_USER_REPOS; i++) {
+        char url[STORE_REPO_LEN];
+        avatar_store_get_repo(i, url, sizeof(url));
+        s_av_repo[i] = make_field("URL", url, T(STR_AV_REPO_PH));
+    }
+    lv_obj_t *hint = lv_label_create(s_content);
+    lv_label_set_text(hint, T(STR_AV_REPO_HINT));
+    lv_obj_set_style_text_font(hint, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(hint, UI_MUTED, 0);
+    lv_obj_set_width(hint, LV_PCT(100));
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+
+    s_av_timer = lv_timer_create(av_tick_cb, 500, NULL);
+    av_tick_cb(NULL);             /* primeira pintura sem esperar o tick */
+
+    /* Entrar na tela já pede a lista: sem isso ela nasce vazia e o usuário tem
+       de descobrir que precisa tocar em atualizar. */
+    avatar_store_refresh();
+}
+
 /* ---------- view: bloqueio de tela ---------- */
 
 /* Opções do prazo de tolerância; 0 = pedir o padrão toda vez. */
@@ -1122,6 +1376,12 @@ static void restart_cb(lv_event_t *e)
     restart_now();
 }
 
+static void avatars_open_cb(lv_event_t *e)
+{
+    (void)e;
+    show_avatars();
+}
+
 static void fw_open_cb(lv_event_t *e)
 {
     (void)e;
@@ -1298,6 +1558,24 @@ static void show_main(void)
     lv_obj_set_style_text_font(s_lbl_orient, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(s_lbl_orient, UI_MUTED, 0);
     lv_obj_align(s_lbl_orient, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    /* Quantos pacotes o motor achou no cartão; o de fábrica não conta, porque
+       ele existe sempre e dizer "1" sem cartão nenhum confundiria. */
+    lv_obj_t *avrow = make_row(avatars_open_cb, NULL, 44);
+    lv_obj_t *avl = lv_label_create(avrow);
+    lv_label_set_text(avl, T(STR_AV_ROW));
+    lv_obj_set_style_text_font(avl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(avl, UI_TEXT, 0);
+    lv_obj_align(avl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *avv = lv_label_create(avrow);
+    if (!sd_is_mounted()) {
+        lv_label_set_text(avv, T(STR_AV_NO_SD));
+    } else {
+        lv_label_set_text_fmt(avv, "%d", avatar_count() - 1);
+    }
+    lv_obj_set_style_text_font(avv, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(avv, UI_MUTED, 0);
+    lv_obj_align(avv, LV_ALIGN_RIGHT_MID, 0, 0);
 
     lv_obj_t *lkrow = make_row(lock_row_cb, NULL, 44);
     lv_obj_t *lkl = lv_label_create(lkrow);

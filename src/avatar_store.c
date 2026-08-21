@@ -16,6 +16,8 @@
 #include "freertos/task.h"
 
 #include "avatar_pack.h"
+#include "nvs.h"
+#include "panel_cfg.h"
 #include "sd.h"
 
 static const char *TAG = "avatar_store";
@@ -33,6 +35,10 @@ static const char *TAG = "avatar_store";
 #define DL_CHUNK     4096
 #define MAX_REDIRECT 3
 #define URL_LEN      160
+/* Teto de repositórios por refresh: 1 padrão + 2 do usuário + repos.txt + o
+   que as pontes empurrarem. Passar disso é lido e ignorado, com log. */
+#define MAX_REPOS    8
+#define NVS_NS       "avatar"
 
 #define EV_REFRESH  BIT0
 #define EV_INSTALL  BIT1
@@ -48,6 +54,14 @@ static avatar_entry_t s_cat[STORE_MAX];
 static volatile int s_cat_count;
 
 static char s_want[STORE_ID_LEN];        /* id pedido para instalar */
+
+/* Repositórios da rodada corrente, montados no refresh. s_cat[i].repo indexa
+   aqui, para o download saber de onde veio cada avatar. */
+static char s_repos[MAX_REPOS][STORE_REPO_LEN];
+static int  s_repo_count;
+
+/* Empurrados pela ponte; ver avatar_store_set_bridge_repos. */
+static char s_bridge[CFG_MAX_HOSTS][STORE_BRIDGE_REPOS][STORE_REPO_LEN];
 
 /* Leitura de pacote a pedido do motor. s_pack_state é a barreira: a task só a
    move para pronto depois de s_pack estar inteira. */
@@ -136,7 +150,7 @@ static esp_err_t index_ev(esp_http_client_event_t *ev)
 
 /* Acrescenta ao catálogo o que este repositório anuncia. Id repetido é
    ignorado: vence quem apareceu primeiro, e o padrão é o primeiro a ser lido. */
-static bool read_repo(const char *base)
+static bool read_repo(const char *base, int repo_idx)
 {
     static body_t body;               /* grande demais para a stack da task */
     body.len = 0;
@@ -201,6 +215,7 @@ static bool read_repo(const char *base)
         avatar_entry_t *e = &s_cat[s_cat_count];
         memset(e, 0, sizeof(*e));
         strlcpy(e->id, id->valuestring, sizeof(e->id));
+        e->repo = (uint8_t)repo_idx;
         strlcpy(e->name, cJSON_IsString(nm) ? nm->valuestring : id->valuestring,
                 sizeof(e->name));
         e->size = cJSON_IsNumber(sz) && sz->valuedouble > 0
@@ -243,9 +258,122 @@ static void add_local(void)
         strlcpy(ent->id, id, sizeof(ent->id));
         strlcpy(ent->name, id, sizeof(ent->name));
         ent->installed = true;
+        ent->repo = 255;      /* copiado à mão, ou de repositório que saiu */
         s_cat_count++;
     }
     closedir(d);
+}
+
+void avatar_store_get_repo(int idx, char *out, size_t size)
+{
+    nvs_handle_t h;
+    char key[8];
+    out[0] = '\0';
+    if (idx < 0 || idx >= STORE_USER_REPOS) {
+        return;
+    }
+    snprintf(key, sizeof(key), "repo%d", idx);
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = size;
+        if (nvs_get_str(h, key, out, &len) != ESP_OK) {
+            out[0] = '\0';
+        }
+        nvs_close(h);
+    }
+}
+
+void avatar_store_set_repo(int idx, const char *url)
+{
+    nvs_handle_t h;
+    char key[8];
+    if (idx < 0 || idx >= STORE_USER_REPOS) {
+        return;
+    }
+    snprintf(key, sizeof(key), "repo%d", idx);
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        if (url && url[0]) {
+            nvs_set_str(h, key, url);
+        } else {
+            nvs_erase_key(h, key);   /* campo esvaziado = repositório removido */
+        }
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+void avatar_store_set_bridge_repos(int host, const char *const *urls, int count)
+{
+    if (host < 0 || host >= CFG_MAX_HOSTS) {
+        return;
+    }
+    memset(s_bridge[host], 0, sizeof(s_bridge[host]));
+    for (int i = 0; i < count && i < STORE_BRIDGE_REPOS; i++) {
+        strlcpy(s_bridge[host][i], urls[i], STORE_REPO_LEN);
+    }
+}
+
+/* Acrescenta à lista da rodada, sem repetir URL. */
+static void add_repo(const char *url)
+{
+    if (!url || !url[0] || strlen(url) >= STORE_REPO_LEN) {
+        return;
+    }
+    for (int i = 0; i < s_repo_count; i++) {
+        if (strcmp(s_repos[i], url) == 0) {
+            return;
+        }
+    }
+    if (s_repo_count >= MAX_REPOS) {
+        ESP_LOGW(TAG, "mais de %d repositórios; %s ficou de fora", MAX_REPOS, url);
+        return;
+    }
+    strlcpy(s_repos[s_repo_count++], url, STORE_REPO_LEN);
+}
+
+/* Uma URL por linha; '#' comenta e linha vazia passa. Para quem publica o
+   próprio repositório e prefere escrever no cartão a digitar na tela. */
+static void add_repos_from_card(void)
+{
+    FILE *f = fopen(AVATAR_DIR "/repos.txt", "r");
+    if (!f) {
+        return;
+    }
+    char line[STORE_REPO_LEN + 8];
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        char *end = p + strlen(p);
+        while (end > p && (end[-1] == '\n' || end[-1] == '\r' ||
+                           end[-1] == ' ' || end[-1] == '\t')) {
+            *--end = '\0';
+        }
+        if (*p && *p != '#') {
+            add_repo(p);
+        }
+    }
+    fclose(f);
+}
+
+/* Ordem importa: o padrão primeiro, porque id repetido fica com o primeiro que
+   apareceu — um repositório de terceiro não sequestra o nome de um avatar
+   oficial só por anunciá-lo também. */
+static void collect_repos(void)
+{
+    s_repo_count = 0;
+    add_repo(DEFAULT_REPO);
+    for (int i = 0; i < STORE_USER_REPOS; i++) {
+        char url[STORE_REPO_LEN];
+        avatar_store_get_repo(i, url, sizeof(url));
+        add_repo(url);
+    }
+    add_repos_from_card();
+    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
+        for (int i = 0; i < STORE_BRIDGE_REPOS; i++) {
+            add_repo(s_bridge[h][i]);
+        }
+    }
 }
 
 static void do_refresh(void)
@@ -259,9 +387,14 @@ static void do_refresh(void)
     strlcpy(f->name, "Clawd", sizeof(f->name));
     f->installed = true;
     f->builtin = true;
+    f->repo = 255;
     s_cat_count = 1;
 
-    bool any = read_repo(DEFAULT_REPO);
+    collect_repos();
+    bool any = false;
+    for (int i = 0; i < s_repo_count; i++) {
+        any |= read_repo(s_repos[i], i);
+    }
     add_local();
     set_status(STORE_READY, any ? STORE_ERR_NONE : STORE_ERR_NET, 0);
 }
@@ -302,10 +435,17 @@ static void do_install(void)
     }
 
     uint32_t want = 0;
+    int repo = -1;
     for (int i = 0; i < s_cat_count; i++) {
         if (strcmp(s_cat[i].id, s_want) == 0) {
             want = s_cat[i].size;
+            repo = s_cat[i].repo < s_repo_count ? s_cat[i].repo : -1;
         }
+    }
+    if (repo < 0) {
+        /* só existe no cartão: não há de onde baixar */
+        set_status(STORE_ERROR, STORE_ERR_NET, 0);
+        return;
     }
     if (want && sd_free_bytes() < (uint64_t)want + 64 * 1024) {
         set_status(STORE_ERROR, STORE_ERR_SPACE, 0);
@@ -314,7 +454,7 @@ static void do_install(void)
 
     char leaf[STORE_ID_LEN + 8], url[URL_LEN];
     snprintf(leaf, sizeof(leaf), "%s.hav", s_want);
-    int n = join_url(url, sizeof(url), DEFAULT_REPO, leaf);
+    int n = join_url(url, sizeof(url), s_repos[repo], leaf);
     if (n < 0 || n >= (int)sizeof(url)) {
         set_status(STORE_ERROR, STORE_ERR_DOWNLOAD, 0);
         return;

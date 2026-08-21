@@ -144,6 +144,8 @@ void setup()
   }
 
   logSection("Pontes");
+  /* a ponte empurra as URLs de repositório de avatar no handshake */
+  herdr_conn_set_repos_cb(avatar_store_set_bridge_repos);
   herdr_conn_start();
 
   /* por último: chegar aqui é o critério de "boot são" do rollback */

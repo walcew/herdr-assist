@@ -169,6 +169,30 @@ typedef enum {
     X(FW_TOAST_SUB,    "Tap to update",               "Toque para atualizar")                 \
     X(FW_AUTO,         "Automatic updates",           "Atualizações automáticas")             \
     /* --- configurações: bloqueio de tela --- */                                             \
+    /* --- configurações: avatares --- */                                                     \
+    X(AV_ROW,          "Avatars",                     "Avatares")                            \
+    X(AV_TITLE,        "Avatars",                     "Avatares")                            \
+    X(AV_NO_SD,        "No memory card.",             "Sem cartão de memória.")              \
+    X(AV_NO_SD_HINT,   "Avatars are stored on the card; only the built-in one runs without it.", \
+                       "Os avatares ficam no cartão; sem ele só roda o de fábrica.")         \
+    X(AV_CARD_FMT,     "Card: %s free",               "Cartão: %s livres")                   \
+    X(AV_REFRESH,      "Refresh list",                "Atualizar lista")                     \
+    X(AV_REFRESHING,   "Reading repositories...",     "Lendo repositórios...")               \
+    X(AV_BUILTIN,      "built-in",                    "de fábrica")                          \
+    X(AV_IN_USE,       "in use",                      "em uso")                              \
+    X(AV_INSTALLED,    "installed",                   "instalado")                           \
+    X(AV_GET,          "download",                    "baixar")                              \
+    X(AV_DOWNLOADING_FMT, "downloading %d%%",         "baixando %d%%")                       \
+    X(AV_EMPTY,        "No avatars found.",           "Nenhum avatar encontrado.")           \
+    X(AV_ERR_NET,      "Repository unreachable.",     "Repositório inacessível.")            \
+    X(AV_ERR_INDEX,    "Repository list is invalid.", "A lista do repositório é inválida.")  \
+    X(AV_ERR_SPACE,    "Not enough space on the card.", "Sem espaço no cartão.")             \
+    X(AV_ERR_PACK,     "The package is not valid.",   "O pacote não é válido.")              \
+    X(AV_ERR_DOWNLOAD, "Download failed. Try again.", "Falha no download. Tente de novo.")   \
+    X(AV_SEC_REPOS,    "Repositories",                "Repositórios")                        \
+    X(AV_REPO_PH,      "https://...",                 "https://...")                         \
+    X(AV_REPO_HINT,    "One more comes from /sd/avatars/repos.txt and from the bridge.",     \
+                       "Mais uma vem de /sd/avatars/repos.txt e da ponte.")                  \
     X(LOCK_ROW,        "Screen lock",                 "Bloqueio de tela")                     \
     X(LOCK_ON,         "On",                          "Ativado")                              \
     X(LOCK_OFF,        "Off",                         "Desativado")                           \
