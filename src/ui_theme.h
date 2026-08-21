@@ -95,8 +95,7 @@ LV_FONT_DECLARE(lv_font_terminal_12);
 typedef enum {
     UI_TAB_HOME = 0,
     UI_TAB_SESSIONS,
-    UI_TAB_DASH,
-    UI_TAB_ACTIVITY,
+    UI_TAB_DASH,        /* duas páginas: uso e atividade, no arraste lateral */
     UI_TAB_SETTINGS,
 } ui_tab_t;
 
