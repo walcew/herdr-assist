@@ -17,6 +17,20 @@
 extern "C" {
 #endif
 
+/**
+ * Callback do payload `avatar_repos`, que a ponte envia no handshake com as
+ * URLs de repositório de avatar configuradas no plugin.
+ *
+ * É callback e não chamada direta porque este arquivo é compartilhado com o
+ * porte do Cardputer (cardputer/sync_shared.py), que não tem marketplace — lá
+ * ninguém registra nada e o payload é ignorado, sem flag de build nem
+ * divergência entre os dois firmwares.
+ */
+typedef void (*herdr_repos_cb_t)(int host, const char *const *urls, int count);
+
+/** Registra o consumidor de `avatar_repos`. Chamar antes de herdr_conn_start(). */
+void herdr_conn_set_repos_cb(herdr_repos_cb_t cb);
+
 /** Sobe uma task de conexão por host habilitado (esperam o Wi-Fi sozinhas). */
 esp_err_t herdr_conn_start(void);
 

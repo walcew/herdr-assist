@@ -239,6 +239,38 @@ static void handle_cost(conn_slot_t *s, const cJSON *root)
     herdr_model_set_cost(s->idx, &c);
 }
 
+/* Teto local de URLs por ponte; o consumidor tem o dele e corta o excesso. */
+#define MAX_BRIDGE_REPOS 2
+
+static herdr_repos_cb_t s_repos_cb;
+
+void herdr_conn_set_repos_cb(herdr_repos_cb_t cb)
+{
+    s_repos_cb = cb;
+}
+
+static void handle_repos(conn_slot_t *s, const cJSON *root)
+{
+    const cJSON *list = cJSON_GetObjectItem(root, "repos");
+    if (!s_repos_cb || !cJSON_IsArray(list)) {
+        return;
+    }
+    const char *urls[MAX_BRIDGE_REPOS];
+    int n = 0;
+    const cJSON *it;
+    cJSON_ArrayForEach(it, list) {
+        if (n >= MAX_BRIDGE_REPOS) {
+            break;
+        }
+        if (cJSON_IsString(it) && it->valuestring[0]) {
+            urls[n++] = it->valuestring;
+        }
+    }
+    /* n == 0 também vale: é a ponte dizendo que não tem mais nenhum. */
+    s_repos_cb(s->idx, urls, n);
+    ESP_LOGI(TAG, "[%s] %d repositório(s) de avatar da ponte", s->label, n);
+}
+
 static void handle_line(conn_slot_t *s, char *line, size_t len)
 {
     cJSON *root = cJSON_ParseWithLength(line, len);
@@ -262,6 +294,8 @@ static void handle_line(conn_slot_t *s, char *line, size_t len)
             handle_limits(s, root);
         } else if (strcmp(t, "cost") == 0) {
             handle_cost(s, root);
+        } else if (strcmp(t, "avatar_repos") == 0) {
+            handle_repos(s, root);
         } else if (strcmp(t, "error") == 0) {
             const cJSON *m = cJSON_GetObjectItem(root, "message");
             ESP_LOGW(TAG, "[%s] ponte recusou: %s", s->label,

@@ -55,10 +55,17 @@ SOCK = (os.environ.get("HERDR_SOCK")
         or os.path.expanduser("~/.config/herdr/herdr.sock"))
 PORT = int(os.environ.get("BRIDGE_PORT", "9375"))
 BIND = os.environ.get("BRIDGE_BIND", "0.0.0.0")
-TOKEN_FILE = os.path.join(
-    os.environ.get("HERDR_PLUGIN_CONFIG_DIR", os.path.expanduser("~/.config/herdr-assist")),
-    "token")
+CONFIG_DIR = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
+                            os.path.expanduser("~/.config/herdr-assist"))
+TOKEN_FILE = os.path.join(CONFIG_DIR, "token")
 TOKEN = ""  # carregado em main()
+
+# Repositórios de avatar que o painel deve varrer além do padrão de fábrica:
+# uma URL base por linha, "#" comenta. Mesma convenção do arquivo token ao lado.
+# Lido a cada conexão, não no boot — editar o arquivo e reconectar o painel
+# basta, sem reiniciar a ponte.
+AVATAR_REPOS_FILE = os.path.join(CONFIG_DIR, "avatar_repos")
+AVATAR_REPOS_MAX = 2   # teto espelhado no firmware (STORE_BRIDGE_REPOS)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     datefmt="%H:%M:%S")
@@ -1083,6 +1090,19 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         await deny("comando desconhecido")
 
 
+def avatar_repos() -> list:
+    """URLs de repositório de avatar do config-dir; [] se o arquivo não existe.
+
+    Ausência é o caminho normal: só quem publica avatares cria este arquivo.
+    """
+    try:
+        with open(AVATAR_REPOS_FILE, encoding="utf-8") as fh:
+            urls = [ln.strip() for ln in fh]
+    except OSError:
+        return []
+    return [u for u in urls if u and not u.startswith("#")][:AVATAR_REPOS_MAX]
+
+
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     peer = writer.get_extra_info("peername")
     sock = writer.get_extra_info("socket")
@@ -1120,6 +1140,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         if last_cost_snapshot:    # custo: mesmo trio cache/push/entrega
             writer.write((last_cost_snapshot + "\n").encode())
             await writer.drain()
+        # Repositórios de avatar: sempre enviados, inclusive vazios — lista
+        # vazia é a ponte dizendo "não tenho nenhum", e o painel precisa disso
+        # para esquecer os da conexão anterior.
+        writer.write((json.dumps({"type": "avatar_repos", "repos": avatar_repos()},
+                                 separators=(",", ":")) + "\n").encode())
+        await writer.drain()
         while True:
             line = await reader.readline()
             if not line:

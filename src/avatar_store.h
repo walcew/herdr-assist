@@ -36,6 +36,9 @@ extern "C" {
 #define STORE_ID_LEN    24
 #define STORE_NAME_LEN  24
 #define STORE_MAX       16   /* entradas no catálogo, somando todos os repos */
+#define STORE_REPO_LEN  96   /* uma URL base cabe com folga em 96 */
+#define STORE_USER_REPOS 2   /* slots editáveis na tela; o padrão não conta */
+#define STORE_BRIDGE_REPOS 2 /* quantos cada ponte pode empurrar */
 
 typedef struct {
     char     id[STORE_ID_LEN];
@@ -43,6 +46,7 @@ typedef struct {
     uint32_t size;        /* bytes, do index.json; 0 = repositório não disse */
     bool     installed;   /* já existe em /sd/avatars */
     bool     builtin;     /* o de fábrica: não baixa nem apaga */
+    uint8_t  repo;        /* de qual repositório veio; 255 = só local */
 } avatar_entry_t;
 
 typedef enum {
@@ -101,6 +105,22 @@ bool avatar_store_install(const char *id);
 
 /** Apaga o pacote do cartão (síncrono: é um unlink). false se não deu. */
 bool avatar_store_remove(const char *id);
+
+/**
+ * Repositório do usuário, guardado na NVS (idx 0..STORE_USER_REPOS-1). Vale a
+ * partir do próximo refresh — não exige reiniciar, ao contrário do panel_cfg.
+ */
+void avatar_store_get_repo(int idx, char *out, size_t size);
+void avatar_store_set_repo(int idx, const char *url);
+
+/**
+ * Repositórios empurrados pela ponte, por slot de host.
+ *
+ * Só em RAM, nunca na NVS: o plugin é a fonte de verdade do que ele empurra, e
+ * persistir deixaria entrada velha quando alguém tirasse uma URL de lá. Mesmo
+ * raciocínio do host em descoberta automática (panel_host_is_auto).
+ */
+void avatar_store_set_bridge_repos(int host, const char *const *urls, int count);
 
 /**
  * Copia o catálogo em `out` e devolve quantos. O de fábrica é sempre o
