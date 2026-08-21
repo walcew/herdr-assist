@@ -546,9 +546,14 @@ static void do_install(void)
     }
     avatar_pack_free(&probe);
 
+    /* O FATFS recusa rename com o alvo existente, então o antigo sai primeiro —
+       e entre o unlink e o rename existe uma janela em que o pacote instalado
+       já não está lá. Se o rename falhar (cartão removido no meio), o .part
+       validado FICA: perder o antigo é ruim, perder os dois seria pior, e a
+       varredura ignora .part até alguém tentar de novo. */
     unlink(final);
     if (rename(part, final) != 0) {
-        unlink(part);
+        ESP_LOGW(TAG, "%s: rename falhou; o download fica em .part", s_want);
         set_status(STORE_ERROR, STORE_ERR_DOWNLOAD, 0);
         return;
     }
