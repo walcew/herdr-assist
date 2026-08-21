@@ -7,6 +7,7 @@
 #include "lv_port.h"
 #include "net.h"
 #include "panel_cfg.h"
+#include "sd.h"
 #include "herdr_model.h"
 #include "herdr_ui.h"
 #include "herdr_ui_settings.h"
@@ -83,6 +84,10 @@ void setup()
   ESP_LOGI(TAG, "idioma: %s", i18n_lang_name(i18n_lang()));
   ESP_LOGI(TAG, "orientacao: %s",
            panel_cfg_get()->orient == CFG_ORIENT_LANDSCAPE ? "paisagem" : "retrato");
+
+  /* Onde moram os pacotes de avatar. Falhar é caminho normal (slot vazio):
+     sem cartão o painel roda com o avatar de fábrica e mais nada muda. */
+  sd_mount();
 
   logSection("Initialize panel device");
   // ESP_LOGI(TAG, "Initialize panel device");
