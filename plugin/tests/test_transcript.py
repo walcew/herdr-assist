@@ -46,6 +46,19 @@ class TestSessionMetrics(unittest.TestCase):
         self.assertEqual(m["model"], "Opus 4.8")
         self.assertEqual(m["context_pct"], transcript.context_pct(2 + 488968 + 452))
 
+    def test_effort_vem_do_nivel_superior(self):
+        # regressão: effort é irmão de "message", não campo dentro dela — ler do
+        # lugar errado devolveria "" calado, e a fixture sem o campo passaria
+        with tempfile.TemporaryDirectory() as d:
+            fp = os.path.join(d, "t.jsonl")
+            with open(fp, "w", encoding="utf-8") as fh:
+                fh.write('{"type":"assistant","effort":"max","message":{"role":"assistant","model":"claude-opus-5","usage":{"input_tokens":10}}}\n')
+            self.assertEqual(transcript.session_metrics(fp)["effort"], "max")
+
+    def test_sem_effort_devolve_vazio(self):
+        # caminho normal do Codex e de CLI anterior à 2.1.234
+        self.assertEqual(transcript.session_metrics(FIX)["effort"], "")
+
     def test_arquivo_ausente_devolve_none(self):
         self.assertIsNone(transcript.session_metrics("/naoexiste.jsonl"))
 

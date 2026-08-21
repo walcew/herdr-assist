@@ -41,6 +41,11 @@ typedef struct {
     uint32_t since;
     char    account[33];   /* e-mail da conta (config-dir); "" se desconhecida */
     char    model[16];     /* modelo curto p/ exibição; "" desconhecido */
+    /* Nível de esforço da sessão ("low".."max"), do mesmo transcript que o
+     * modelo. String e não enum de propósito: é campo novo do Claude Code
+     * (CLI >= 2.1.234) e um enum fechado descartaria calado um nível futuro.
+     * "" no Codex e em CLI anterior — ausência é caminho normal. */
+    char    effort[8];
     char    org[24];       /* org (domínio sem sufixo); "" desconhecido */
     uint8_t context_pct;   /* 0-100; 255 = desconhecido */
     bool    corp;          /* true = corporativa, false = pessoal */

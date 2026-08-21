@@ -626,7 +626,9 @@ async def push_agents() -> set[str] | None:
                            for pth, mt in to_read.items()})
         tx_cache.update(fresh)
 
-    # Fase C (no loop): anexa model/context_pct a partir do cache já quente.
+    # Fase C (no loop): anexa model/context_pct/effort a partir do cache já
+    # quente. O effort só entra quando existe (CLI >= 2.1.234): mandar a chave
+    # vazia engordaria o payload de todo mundo que roda CLI anterior.
     for a in agents:
         path = pane_path.get(a["pane_id"])
         cached = tx_cache.get(path) if path else None
@@ -634,6 +636,8 @@ async def push_agents() -> set[str] | None:
         if m:
             a["model"] = m["model"]
             a["context_pct"] = m["context_pct"]
+            if m["effort"]:
+                a["effort"] = m["effort"]
 
     # Poda: só ficam no cache os transcripts de panes vivos neste ciclo —
     # sem isso ele cresceria sem limite conforme sessões (panes) fecham.

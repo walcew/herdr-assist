@@ -123,6 +123,10 @@ static void handle_agents(conn_slot_t *s, const cJSON *root)
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "model")))) {
             strncpy(a->model, f->valuestring, sizeof(a->model) - 1);
         }
+        /* a ponte só manda quando existe; o memset acima garante "" */
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "effort")))) {
+            strncpy(a->effort, f->valuestring, sizeof(a->effort) - 1);
+        }
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "org")))) {
             strncpy(a->org, f->valuestring, sizeof(a->org) - 1);
         }
