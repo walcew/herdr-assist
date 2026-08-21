@@ -37,7 +37,7 @@ static const char *TAG = "avatar_store";
 #define URL_LEN      160
 /* Teto de repositórios por refresh: 1 padrão + 2 do usuário + repos.txt + o
    que as pontes empurrarem. Passar disso é lido e ignorado, com log. */
-#define MAX_REPOS    8
+#define MAX_REPOS    STORE_MAX_REPOS
 #define NVS_NS       "avatar"
 
 #define EV_REFRESH  BIT0
@@ -57,7 +57,7 @@ static char s_want[STORE_ID_LEN];        /* id pedido para instalar */
 
 /* Repositórios da rodada corrente, montados no refresh. s_cat[i].repo indexa
    aqui, para o download saber de onde veio cada avatar. */
-static char s_repos[MAX_REPOS][STORE_REPO_LEN];
+static avatar_repo_t s_repos[MAX_REPOS];
 static int  s_repo_count;
 
 /* Empurrados pela ponte; ver avatar_store_set_bridge_repos. */
@@ -312,27 +312,29 @@ void avatar_store_set_bridge_repos(int host, const char *const *urls, int count)
     }
 }
 
-/* Acrescenta à lista da rodada, sem repetir URL. */
-static void add_repo(const char *url)
+/* Acrescenta ao vetor, sem repetir URL. A primeira procedência vence: uma URL
+   que já veio do padrão não vira "do cartão" só por aparecer lá também. */
+static void add_repo(avatar_repo_t *v, int *n, const char *url, repo_src_t src)
 {
     if (!url || !url[0] || strlen(url) >= STORE_REPO_LEN) {
         return;
     }
-    for (int i = 0; i < s_repo_count; i++) {
-        if (strcmp(s_repos[i], url) == 0) {
+    for (int i = 0; i < *n; i++) {
+        if (strcmp(v[i].url, url) == 0) {
             return;
         }
     }
-    if (s_repo_count >= MAX_REPOS) {
+    if (*n >= MAX_REPOS) {
         ESP_LOGW(TAG, "mais de %d repositórios; %s ficou de fora", MAX_REPOS, url);
         return;
     }
-    strlcpy(s_repos[s_repo_count++], url, STORE_REPO_LEN);
+    strlcpy(v[*n].url, url, STORE_REPO_LEN);
+    v[(*n)++].src = src;
 }
 
 /* Uma URL por linha; '#' comenta e linha vazia passa. Para quem publica o
    próprio repositório e prefere escrever no cartão a digitar na tela. */
-static void add_repos_from_card(void)
+static void add_repos_from_card(avatar_repo_t *v, int *n)
 {
     FILE *f = fopen(AVATAR_DIR "/repos.txt", "r");
     if (!f) {
@@ -350,7 +352,7 @@ static void add_repos_from_card(void)
             *--end = '\0';
         }
         if (*p && *p != '#') {
-            add_repo(p);
+            add_repo(v, n, p, REPO_SRC_CARD);
         }
     }
     fclose(f);
@@ -359,21 +361,34 @@ static void add_repos_from_card(void)
 /* Ordem importa: o padrão primeiro, porque id repetido fica com o primeiro que
    apareceu — um repositório de terceiro não sequestra o nome de um avatar
    oficial só por anunciá-lo também. */
-static void collect_repos(void)
+static int collect_repos(avatar_repo_t *v, int max)
 {
-    s_repo_count = 0;
-    add_repo(DEFAULT_REPO);
+    int n = 0;
+    add_repo(v, &n, DEFAULT_REPO, REPO_SRC_DEFAULT);
     for (int i = 0; i < STORE_USER_REPOS; i++) {
         char url[STORE_REPO_LEN];
         avatar_store_get_repo(i, url, sizeof(url));
-        add_repo(url);
+        add_repo(v, &n, url, REPO_SRC_USER);
     }
-    add_repos_from_card();
+    add_repos_from_card(v, &n);
     for (int h = 0; h < CFG_MAX_HOSTS; h++) {
         for (int i = 0; i < STORE_BRIDGE_REPOS; i++) {
-            add_repo(s_bridge[h][i]);
+            add_repo(v, &n, s_bridge[h][i], REPO_SRC_BRIDGE);
         }
     }
+    (void)max;   /* o teto é MAX_REPOS, checado no add_repo */
+    return n;
+}
+
+int avatar_store_repo_list(avatar_repo_t *out, int max)
+{
+    avatar_repo_t v[MAX_REPOS];
+    int n = collect_repos(v, MAX_REPOS);
+    if (n > max) {
+        n = max;
+    }
+    memcpy(out, v, (size_t)n * sizeof(*out));
+    return n;
 }
 
 static void do_refresh(void)
@@ -390,10 +405,10 @@ static void do_refresh(void)
     f->repo = 255;
     s_cat_count = 1;
 
-    collect_repos();
+    s_repo_count = collect_repos(s_repos, MAX_REPOS);
     bool any = false;
     for (int i = 0; i < s_repo_count; i++) {
-        any |= read_repo(s_repos[i], i);
+        any |= read_repo(s_repos[i].url, i);
     }
     add_local();
     set_status(STORE_READY, any ? STORE_ERR_NONE : STORE_ERR_NET, 0);
@@ -454,7 +469,7 @@ static void do_install(void)
 
     char leaf[STORE_ID_LEN + 8], url[URL_LEN];
     snprintf(leaf, sizeof(leaf), "%s.hav", s_want);
-    int n = join_url(url, sizeof(url), s_repos[repo], leaf);
+    int n = join_url(url, sizeof(url), s_repos[repo].url, leaf);
     if (n < 0 || n >= (int)sizeof(url)) {
         set_status(STORE_ERROR, STORE_ERR_DOWNLOAD, 0);
         return;

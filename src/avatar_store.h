@@ -39,6 +39,7 @@ extern "C" {
 #define STORE_REPO_LEN  96   /* uma URL base cabe com folga em 96 */
 #define STORE_USER_REPOS 2   /* slots editáveis na tela; o padrão não conta */
 #define STORE_BRIDGE_REPOS 2 /* quantos cada ponte pode empurrar */
+#define STORE_MAX_REPOS  8   /* teto por refresh, somando todas as fontes */
 
 typedef struct {
     char     id[STORE_ID_LEN];
@@ -66,6 +67,19 @@ typedef enum {
     STORE_ERR_DOWNLOAD, /* download ou gravação falhou */
     STORE_ERR_PACK,     /* baixou, mas o arquivo não é um pacote válido */
 } store_err_t;
+
+/** De onde uma URL de repositório veio; a tela mostra o que dá para editar. */
+typedef enum {
+    REPO_SRC_DEFAULT = 0,  /* embutido no firmware */
+    REPO_SRC_USER,         /* NVS, editável na tela */
+    REPO_SRC_CARD,         /* /sd/avatars/repos.txt */
+    REPO_SRC_BRIDGE,       /* empurrado pela ponte */
+} repo_src_t;
+
+typedef struct {
+    char       url[STORE_REPO_LEN];
+    repo_src_t src;
+} avatar_repo_t;
 
 typedef struct {
     store_state_t state;
@@ -112,6 +126,14 @@ bool avatar_store_remove(const char *id);
  */
 void avatar_store_get_repo(int idx, char *out, size_t size);
 void avatar_store_set_repo(int idx, const char *url);
+
+/**
+ * Recolhe, na hora, os repositórios que um refresh varreria, com a procedência
+ * de cada um — o padrão, os dois da NVS, os do cartão e os das pontes, já sem
+ * repetir URL. Toca a NVS e lê /sd/avatars/repos.txt, então não é de graça;
+ * serve à tela de repositórios, que abre a pedido. Retorna quantos.
+ */
+int avatar_store_repo_list(avatar_repo_t *out, int max);
 
 /**
  * Repositórios empurrados pela ponte, por slot de host.

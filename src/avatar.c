@@ -24,6 +24,7 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "nvs.h"
 
 #include "avatar_store.h"
@@ -56,8 +57,11 @@ static avatar_pack_t  s_pack;         /* o que está tocando */
 static char           s_ids[MAX_AVATARS][ID_LEN];
 static int            s_count;        /* sempre >= 1: o de fábrica é o índice 0 */
 static int            s_cur;          /* índice em s_ids do avatar tocando */
+static int64_t        s_t0;
 static bool           s_loading;      /* leitura em curso na task de I/O */
 static int            s_req_idx;      /* índice pedido, confirmado ao chegar */
+static lv_obj_t      *s_slot;         /* pai do sprite; o spinner nasce aqui */
+static lv_obj_t      *s_spin;         /* enquanto lê o cartão; NULL fora disso */
 static lv_obj_t      *s_img;
 static lv_img_dsc_t   s_dsc;
 static uint8_t       *s_buf;         /* PSRAM, cabe o maior frame do pacote */
@@ -241,6 +245,7 @@ static void compute_zoom(uint32_t *max_px)
 }
 
 static void adopt(avatar_pack_t *p);
+static void show_spinner(bool on);
 
 static void tick_cb(lv_timer_t *timer)
 {
@@ -270,6 +275,7 @@ static void tick_cb(lv_timer_t *timer)
             if (s_cur > s_req_idx) {
                 s_cur--;
             }
+            show_spinner(false);
             lv_obj_set_style_img_opa(s_img, LV_OPA_COVER, 0);
         }
     }
@@ -308,6 +314,29 @@ static void tick_cb(lv_timer_t *timer)
 
 /* ---------- troca de avatar ---------- */
 
+/* Indicador de leitura do cartão. Criado e destruído junto com a espera, em vez
+   de ficar escondido: é o único objeto animado da home fora do próprio avatar,
+   e um spinner parado atrás de um LV_OBJ_FLAG_HIDDEN continuaria invalidando. */
+static void show_spinner(bool on)
+{
+    if (on == (s_spin != NULL)) {
+        return;
+    }
+    if (!on) {
+        lv_obj_del(s_spin);
+        s_spin = NULL;
+        return;
+    }
+    s_spin = lv_spinner_create(s_slot, 900, 60);
+    lv_obj_set_size(s_spin, 36, 36);
+    lv_obj_clear_flag(s_spin, LV_OBJ_FLAG_CLICKABLE);   /* o toque é do slot */
+    lv_obj_center(s_spin);
+    lv_obj_set_style_arc_width(s_spin, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(s_spin, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(s_spin, UI_PANEL, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(s_spin, UI_IDLE, LV_PART_INDICATOR);
+}
+
 /* Entrega o pacote recém-lido ao motor: descarta o antigo, redimensiona o
    buffer de frame e recomeça no estado corrente. Só na task da LVGL. */
 static void adopt(avatar_pack_t *p)
@@ -325,11 +354,12 @@ static void adopt(avatar_pack_t *p)
     if (!s_buf) {
         ESP_LOGW(TAG, "sem PSRAM para o frame buffer (%u bytes)", (unsigned)(max_px * 3));
     }
+    show_spinner(false);
     lv_obj_set_style_img_opa(s_img, LV_OPA_COVER, 0);
     s_frame = -1;
     play(role_idx((hav_role_t)s_st));
-    ESP_LOGI(TAG, "avatar: %s (%d animações, zoom %d/256)",
-             s_pack.name, s_pack.count, s_zoom);
+    ESP_LOGI(TAG, "avatar: %s (%d animações, zoom %d/256) — leitura %ldms",
+             s_pack.name, s_pack.count, s_zoom, (long)((esp_timer_get_time() - s_t0) / 1000));
 }
 
 int avatar_count(void)
@@ -369,10 +399,13 @@ void avatar_select(const char *id)
     if (!avatar_store_load_pack(path)) {
         return;   /* task ocupada (baixando, por exemplo): o toque não faz nada */
     }
-    /* Esmaece enquanto lê: sem isso o toque fica ~3s sem resposta nenhuma.
+    /* Esmaecer sozinho não dava sinal suficiente de que algo estava acontecendo:
+       o pacote maior leva ~1,3s para ser lido, e o toque parecia ignorado.
        s_cur só muda quando o pacote chega inteiro (ver tick_cb). */
     lv_obj_set_style_img_opa(s_img, LV_OPA_50, 0);
+    show_spinner(true);
     s_req_idx = idx;
+    s_t0 = esp_timer_get_time();
     s_loading = true;
 }
 
@@ -393,6 +426,7 @@ void avatar_create(lv_obj_t *slot)
         return;
     }
 
+    s_slot = slot;
     s_img = lv_img_create(slot);
     lv_obj_clear_flag(s_img, LV_OBJ_FLAG_CLICKABLE);   /* o toque é do slot */
     lv_img_set_antialias(s_img, s_pack.antialias);

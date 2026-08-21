@@ -191,8 +191,17 @@ typedef enum {
     X(AV_ERR_DOWNLOAD, "Download failed. Try again.", "Falha no download. Tente de novo.")   \
     X(AV_SEC_REPOS,    "Repositories",                "Repositórios")                        \
     X(AV_REPO_PH,      "https://...",                 "https://...")                         \
-    X(AV_REPO_HINT,    "One more comes from /sd/avatars/repos.txt and from the bridge.",     \
-                       "Mais uma vem de /sd/avatars/repos.txt e da ponte.")                  \
+    X(AV_SEC_MINE,     "Yours",                       "Seus")                                \
+    X(AV_SEC_OTHER,    "Also in use",                 "Também em uso")                       \
+    X(AV_SRC_DEFAULT,  "built in",                    "de fábrica")                          \
+    X(AV_SRC_CARD,     "card",                        "cartão")                              \
+    X(AV_SRC_BRIDGE,   "bridge",                      "ponte")                               \
+    X(AV_REPO_HINT,    "The card reads /sd/avatars/repos.txt; the bridge pushes what is in "  \
+                       "its config directory.",                                              \
+                       "O cartão lê /sd/avatars/repos.txt; a ponte empurra o que estiver no " \
+                       "config-dir dela.")                                                   \
+    X(AV_REPO_NONE,    "Nothing besides the built-in one.",                                  \
+                       "Nada além do de fábrica.")                                           \
     X(LOCK_ROW,        "Screen lock",                 "Bloqueio de tela")                     \
     X(LOCK_ON,         "On",                          "Ativado")                              \
     X(LOCK_OFF,        "Off",                         "Desativado")                           \
