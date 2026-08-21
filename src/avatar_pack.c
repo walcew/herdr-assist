@@ -1,17 +1,19 @@
 #include "avatar_pack.h"
 
-#include <stdio.h>
+#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 
 static const char *TAG = "avatar_pack";
 
-/* 4KB = 8 setores. A RAM INTERNA é o recurso escasso deste painel (medido: 12KB
-   livres com as pontes conectadas), e o custo por chamada some diante dos
-   ~520KB/s do cartão — pedir 16KB só aumentaria a chance de não ter. */
-#define READ_CHUNK 4096
+/* Pedaço de leitura, em RAM interna. Medido no painel lendo 1,1MB do cartão:
+   4KB dá 926KB/s e 16KB dá 1142KB/s, então vale pedir os 16 — e cair para 4 se
+   não houver, porque a RAM interna aqui é escassa e some ao longo do boot. */
+#define READ_CHUNK      16384
+#define READ_CHUNK_MIN  4096
 
 /* O gerador escreve os structs byte a byte (struct.pack em Python). Se o
    compilador inserir enchimento, tudo lido daqui para frente sai deslocado —
@@ -144,58 +146,62 @@ bool avatar_pack_load_mem(const uint8_t *data, size_t size, avatar_pack_t *out)
 
 bool avatar_pack_load_file(const char *path, avatar_pack_t *out)
 {
-    FILE *f = fopen(path, "rb");
-    if (!f) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) {
         ESP_LOGW(TAG, "não abriu %s", path);
         return false;
     }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    rewind(f);
+    off_t size = lseek(fd, 0, SEEK_END);
+    lseek(fd, 0, SEEK_SET);
     if (size <= 0 || (size_t)size > HAV_MAX_BYTES) {
-        ESP_LOGW(TAG, "%s tem %ld bytes (teto %u)", path, size, HAV_MAX_BYTES);
-        fclose(f);
+        ESP_LOGW(TAG, "%s tem %ld bytes (teto %u)", path, (long)size, HAV_MAX_BYTES);
+        close(fd);
         return false;
     }
 
     uint8_t *blob = heap_caps_malloc((size_t)size, MALLOC_CAP_SPIRAM);
     if (!blob) {
-        ESP_LOGW(TAG, "sem PSRAM para %s (%ld bytes)", path, size);
-        fclose(f);
+        ESP_LOGW(TAG, "sem PSRAM para %s (%ld bytes)", path, (long)size);
+        close(fd);
         return false;
     }
-    /* Em pedaços, por um staging em RAM INTERNA — e não num fread único para a
-       PSRAM. O destino em PSRAM não é alcançável por DMA, então o driver do
-       cartão faria um bounce buffer do tamanho do pedido: 1,5MB de RAM interna
-       que não existe. Medido: o fread único lia 402KB e morria em
-       esp_dma_malloc durante o boot, quando o Wi-Fi disputa a mesma memória. */
-    uint8_t *stage = heap_caps_malloc(READ_CHUNK, MALLOC_CAP_DMA);
+    /* Em pedaços, por um staging em RAM INTERNA — nunca lendo direto para a
+       PSRAM nem pelo stdio, e os dois motivos são o mesmo. O FATFS só entrega a
+       leitura por DMA multi-bloco quando o destino é alcançável por DMA; um
+       destino em PSRAM, ou o buffer interno que o fread do newlib interpõe,
+       derrubam para o caminho bloco a bloco. Medido lendo 1,1MB do cartão:
+       fread 409KB/s, read() para PSRAM 472KB/s, read() para staging DMA
+       1142KB/s. O pedaço cai para 4KB se não houver 16 — a RAM interna aqui é
+       escassa e some ao longo do boot. */
+    size_t chunk = READ_CHUNK;
+    uint8_t *stage = heap_caps_malloc(chunk, MALLOC_CAP_DMA);
+    if (!stage) {
+        chunk = READ_CHUNK_MIN;
+        stage = heap_caps_malloc(chunk, MALLOC_CAP_DMA);
+    }
     if (!stage) {
         ESP_LOGW(TAG, "sem RAM interna para o buffer de leitura");
         heap_caps_free(blob);
-        fclose(f);
+        close(fd);
         return false;
     }
-    ESP_LOGD(TAG, "lendo %s: %u internos livres, maior bloco DMA %u", path,
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
     size_t got = 0;
     while (got < (size_t)size) {
         size_t want = (size_t)size - got;
-        if (want > READ_CHUNK) {
-            want = READ_CHUNK;
+        if (want > chunk) {
+            want = chunk;
         }
-        size_t n = fread(stage, 1, want, f);
-        if (n == 0) {
+        int n = read(fd, stage, want);
+        if (n <= 0) {
             break;
         }
-        memcpy(blob + got, stage, n);
-        got += n;
+        memcpy(blob + got, stage, (size_t)n);
+        got += (size_t)n;
     }
     heap_caps_free(stage);
-    fclose(f);
+    close(fd);
     if (got != (size_t)size) {
-        ESP_LOGW(TAG, "%s: li %u de %ld bytes", path, (unsigned)got, size);
+        ESP_LOGW(TAG, "%s: li %u de %ld bytes", path, (unsigned)got, (long)size);
         heap_caps_free(blob);
         return false;
     }

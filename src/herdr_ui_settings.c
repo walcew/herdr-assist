@@ -32,6 +32,7 @@ typedef enum {
     VIEW_PAIR,
     VIEW_UPDATE,
     VIEW_AVATAR,
+    VIEW_AV_REPOS,
     VIEW_LOCK,
 } view_t;
 
@@ -82,6 +83,7 @@ static void show_host(int idx);
 static void show_pair(void);
 static void show_update(void);
 static void show_avatars(void);
+static void show_av_repos(void);
 static void show_lock(void);
 static void update_toast(void);
 
@@ -138,9 +140,13 @@ static void kb_cb(lv_event_t *e)
 
 /* ---------- peças ---------- */
 
-static lv_obj_t *make_row(lv_event_cb_t cb, void *user_data, lv_coord_t h)
+/* Linha dentro de `parent`. O make_row abaixo é o caso comum (direto no
+   conteúdo da view); quem repinta uma lista sozinha precisa de um container
+   próprio, senão o lv_obj_clean dele não alcança as linhas. */
+static lv_obj_t *make_row_in(lv_obj_t *parent, lv_event_cb_t cb, void *user_data,
+                             lv_coord_t h)
 {
-    lv_obj_t *row = lv_btn_create(s_content);
+    lv_obj_t *row = lv_btn_create(parent);
     lv_obj_set_size(row, LV_PCT(100), h);
     lv_obj_set_style_bg_color(row, UI_PANEL, 0);
     lv_obj_set_style_radius(row, 6, 0);
@@ -151,6 +157,11 @@ static lv_obj_t *make_row(lv_event_cb_t cb, void *user_data, lv_coord_t h)
         lv_obj_add_event_cb(row, cb, LV_EVENT_CLICKED, user_data);
     }
     return row;
+}
+
+static lv_obj_t *make_row(lv_event_cb_t cb, void *user_data, lv_coord_t h)
+{
+    return make_row_in(s_content, cb, user_data, h);
 }
 
 /* Tamanho legível: MB com uma casa até 1GB, GB acima. Os pacotes vão de 38KB a
@@ -855,16 +866,17 @@ static void back_from_avatars_cb(lv_event_t *e)
     show_main();                  /* um download em curso segue em background */
 }
 
-/* Grava o que estiver nos campos e manda reler todos os repositórios. */
 static void av_refresh_cb(lv_event_t *e)
 {
     (void)e;
-    for (int i = 0; i < STORE_USER_REPOS; i++) {
-        if (s_av_repo[i]) {
-            avatar_store_set_repo(i, lv_textarea_get_text(s_av_repo[i]));
-        }
-    }
     avatar_store_refresh();
+}
+
+static void repos_open_cb(lv_event_t *e)
+{
+    (void)e;
+    avatars_leave();          /* o tick pinta a lista de avatares; lá não há */
+    show_av_repos();
 }
 
 /* Toque na linha: instalado passa a ser o avatar corrente; o resto baixa. */
@@ -922,7 +934,7 @@ static void av_build_list(const avatar_store_status_t *st)
     for (int i = 0; i < s_av_n; i++) {
         avatar_entry_t *ent = &s_av_cat[i];
         bool is_cur = strcmp(cur, ent->builtin ? "" : ent->id) == 0;
-        lv_obj_t *row = make_row(av_row_cb, ent, 48);
+        lv_obj_t *row = make_row_in(s_av_list, av_row_cb, ent, 48);
 
         lv_obj_t *nm = lv_label_create(row);
         lv_label_set_text(nm, ent->name);
@@ -1018,6 +1030,103 @@ static void av_tick_cb(lv_timer_t *t)
     }
 }
 
+
+/* ---------- view: repositórios de avatar ---------- */
+
+static void back_from_repos_cb(lv_event_t *e)
+{
+    (void)e;
+    hide_kb();
+    show_avatars();
+}
+
+/* Grava os dois campos e volta, já mandando reler — trocar de repositório sem
+   atualizar a lista não teria efeito visível nenhum. */
+static void repos_save_cb(lv_event_t *e)
+{
+    (void)e;
+    for (int i = 0; i < STORE_USER_REPOS; i++) {
+        if (s_av_repo[i]) {
+            avatar_store_set_repo(i, lv_textarea_get_text(s_av_repo[i]));
+        }
+    }
+    hide_kb();
+    avatar_store_refresh();
+    show_avatars();
+}
+
+static const char *repo_src_name(repo_src_t src)
+{
+    switch (src) {
+    case REPO_SRC_CARD:   return T(STR_AV_SRC_CARD);
+    case REPO_SRC_BRIDGE: return T(STR_AV_SRC_BRIDGE);
+    default:              return T(STR_AV_SRC_DEFAULT);
+    }
+}
+
+static avatar_repo_t s_repo_view[STORE_MAX_REPOS];
+
+static void show_av_repos(void)
+{
+    s_view = VIEW_AV_REPOS;
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
+    build_bar(T(STR_AV_SEC_REPOS), back_from_repos_cb, repos_save_cb);
+    hide_kb();
+    lv_obj_clean(s_content);
+
+    /* O que dá para editar vem primeiro, e separado: o resto desta tela é
+       informação, e misturar os dois faria parecer que tudo é editável. */
+    make_section_label(T(STR_AV_SEC_MINE));
+    for (int i = 0; i < STORE_USER_REPOS; i++) {
+        char url[STORE_REPO_LEN];
+        avatar_store_get_repo(i, url, sizeof(url));
+        s_av_repo[i] = make_field("URL", url, T(STR_AV_REPO_PH));
+    }
+
+    /* Os demais existem e são varridos, mas não se editam daqui — sem mostrá-los
+       não havia como saber o que o painel está de fato consultando. */
+    make_section_label(T(STR_AV_SEC_OTHER));
+    int n = avatar_store_repo_list(s_repo_view, STORE_MAX_REPOS);
+    int shown = 0;
+    for (int i = 0; i < n; i++) {
+        if (s_repo_view[i].src == REPO_SRC_USER) {
+            continue;   /* já está nos campos acima */
+        }
+        lv_obj_t *row = make_row(NULL, NULL, 44);
+        lv_obj_t *tag = lv_label_create(row);
+        lv_label_set_text(tag, repo_src_name(s_repo_view[i].src));
+        lv_obj_set_style_text_font(tag, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(tag, UI_MUTED, 0);
+        lv_obj_align(tag, LV_ALIGN_RIGHT_MID, 0, 0);
+        lv_obj_update_layout(tag);
+
+        lv_obj_t *url = lv_label_create(row);
+        lv_label_set_text(url, s_repo_view[i].url);
+        lv_obj_set_style_text_font(url, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(url, UI_TEXT, 0);
+        /* a largura útil da row menos o rótulo de procedência e o respiro */
+        lv_obj_set_width(url, LV_HOR_RES - UI_DOCK_W - 16 - 24
+                              - lv_obj_get_width(tag) - 8);
+        lv_label_set_long_mode(url, LV_LABEL_LONG_DOT);
+        lv_obj_align(url, LV_ALIGN_LEFT_MID, 0, 0);
+        shown++;
+    }
+    if (shown == 0) {
+        lv_obj_t *l = lv_label_create(s_content);
+        lv_label_set_text(l, T(STR_AV_REPO_NONE));
+        lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(l, UI_MUTED, 0);
+    }
+
+    lv_obj_t *hint = lv_label_create(s_content);
+    lv_label_set_text(hint, T(STR_AV_REPO_HINT));
+    lv_obj_set_style_text_font(hint, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(hint, UI_MUTED, 0);
+    lv_obj_set_width(hint, LV_PCT(100));
+    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+}
+
 static void show_avatars(void)
 {
     avatars_leave();              /* reentrar não pode deixar timer órfão */
@@ -1035,7 +1144,7 @@ static void show_avatars(void)
 
     lv_obj_t *btn = make_row(av_refresh_cb, NULL, 44);
     lv_obj_t *bl = lv_label_create(btn);
-    lv_label_set_text_fmt(bl, LV_SYMBOL_REFRESH "  %s", T(STR_AV_REFRESH));
+    lv_label_set_text(bl, T(STR_AV_REFRESH));
     lv_obj_set_style_text_font(bl, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(bl, UI_TEXT, 0);
     lv_obj_center(bl);
@@ -1048,18 +1157,19 @@ static void show_avatars(void)
     lv_obj_set_flex_flow(s_av_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_av_list, 8, 0);
 
-    make_section_label(T(STR_AV_SEC_REPOS));
-    for (int i = 0; i < STORE_USER_REPOS; i++) {
-        char url[STORE_REPO_LEN];
-        avatar_store_get_repo(i, url, sizeof(url));
-        s_av_repo[i] = make_field("URL", url, T(STR_AV_REPO_PH));
-    }
-    lv_obj_t *hint = lv_label_create(s_content);
-    lv_label_set_text(hint, T(STR_AV_REPO_HINT));
-    lv_obj_set_style_text_font(hint, &lv_font_ui_12, 0);
-    lv_obj_set_style_text_color(hint, UI_MUTED, 0);
-    lv_obj_set_width(hint, LV_PCT(100));
-    lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+    /* Os repositórios ficam em tela própria: digitar URL exige teclado, e o
+       teclado subindo no meio da lista de avatares empurrava tudo. */
+    lv_obj_t *rrow = make_row(repos_open_cb, NULL, 44);
+    lv_obj_t *rl = lv_label_create(rrow);
+    lv_label_set_text(rl, T(STR_AV_SEC_REPOS));
+    lv_obj_set_style_text_font(rl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(rl, UI_TEXT, 0);
+    lv_obj_align(rl, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t *rv = lv_label_create(rrow);
+    lv_label_set_text_fmt(rv, "%d", avatar_store_repo_list(s_repo_view, STORE_MAX_REPOS));
+    lv_obj_set_style_text_font(rv, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(rv, UI_MUTED, 0);
+    lv_obj_align(rv, LV_ALIGN_RIGHT_MID, 0, 0);
 
     s_av_timer = lv_timer_create(av_tick_cb, 500, NULL);
     av_tick_cb(NULL);             /* primeira pintura sem esperar o tick */
