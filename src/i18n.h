@@ -202,6 +202,20 @@ typedef enum {
                        "config-dir dela.")                                                   \
     X(AV_REPO_NONE,    "Nothing besides the built-in one.",                                  \
                        "Nada além do de fábrica.")                                           \
+    X(AV_SEC_CARD,     "Card",                        "Cartão")                              \
+    X(AV_FORMAT,       "Format card",                 "Formatar cartão")                     \
+    X(AV_FORMAT_WARN,  "This erases EVERYTHING on the card, not just the avatars. "          \
+                       "There is no undo.",                                                  \
+                       "Isto apaga TUDO no cartão, não só os avatares. "                     \
+                       "Não há como desfazer.")                                              \
+    X(AV_FORMAT_LOST,  "The installed avatars go with it; they can be downloaded again.",    \
+                       "Os avatares instalados vão junto; dá para baixar de novo.")          \
+    X(AV_FORMAT_UNREAD, "The panel cannot read this card. Formatting should fix it.",        \
+                       "O painel não consegue ler este cartão. Formatar deve resolver.")     \
+    X(AV_FORMAT_GO,    "Erase and format",            "Apagar e formatar")                   \
+    X(AV_FORMATTING,   "Formatting the card...",      "Formatando o cartão...")              \
+    X(AV_ERR_FORMAT,   "The card could not be formatted.",                                   \
+                       "Não foi possível formatar o cartão.")                                \
     X(LOCK_ROW,        "Screen lock",                 "Bloqueio de tela")                     \
     X(LOCK_ON,         "On",                          "Ativado")                              \
     X(LOCK_OFF,        "Off",                         "Desativado")                           \

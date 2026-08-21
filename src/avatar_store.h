@@ -54,6 +54,7 @@ typedef enum {
     STORE_IDLE = 0,     /* nunca atualizou */
     STORE_REFRESHING,
     STORE_DOWNLOADING,  /* pct e id válidos */
+    STORE_FORMATTING,   /* apagando o cartão a pedido do usuário */
     STORE_READY,        /* catálogo em mãos */
     STORE_ERROR,        /* err válido */
 } store_state_t;
@@ -66,6 +67,7 @@ typedef enum {
     STORE_ERR_SPACE,    /* cartão sem espaço para o pacote */
     STORE_ERR_DOWNLOAD, /* download ou gravação falhou */
     STORE_ERR_PACK,     /* baixou, mas o arquivo não é um pacote válido */
+    STORE_ERR_FORMAT,   /* o cartão não aceitou ser formatado */
 } store_err_t;
 
 /** De onde uma URL de repositório veio; a tela mostra o que dá para editar. */
@@ -119,6 +121,15 @@ bool avatar_store_install(const char *id);
 
 /** Apaga o pacote do cartão (síncrono: é um unlink). false se não deu. */
 bool avatar_store_remove(const char *id);
+
+/**
+ * Agenda a formatação do cartão — que apaga TUDO nele, não só os avatares.
+ * false se já há algo em curso. Só chamar com o usuário tendo confirmado.
+ *
+ * Formatar leva segundos, então vai para a mesma task de I/O; ao terminar ela
+ * refaz o catálogo sozinha, como faria um refresh.
+ */
+bool avatar_store_format(void);
 
 /**
  * Repositório do usuário, guardado na NVS (idx 0..STORE_USER_REPOS-1). Vale a

@@ -33,6 +33,7 @@ typedef enum {
     VIEW_UPDATE,
     VIEW_AVATAR,
     VIEW_AV_REPOS,
+    VIEW_AV_FORMAT,
     VIEW_LOCK,
 } view_t;
 
@@ -84,6 +85,7 @@ static void show_pair(void);
 static void show_update(void);
 static void show_avatars(void);
 static void show_av_repos(void);
+static void show_av_format(void);
 static void show_lock(void);
 static void update_toast(void);
 
@@ -879,6 +881,13 @@ static void repos_open_cb(lv_event_t *e)
     show_av_repos();
 }
 
+static void format_open_cb(lv_event_t *e)
+{
+    (void)e;
+    avatars_leave();
+    show_av_format();
+}
+
 /* Toque na linha: instalado passa a ser o avatar corrente; o resto baixa. */
 static void av_row_cb(lv_event_t *e)
 {
@@ -910,6 +919,7 @@ static const char *av_err_text(store_err_t err)
     case STORE_ERR_SPACE:    return T(STR_AV_ERR_SPACE);
     case STORE_ERR_PACK:     return T(STR_AV_ERR_PACK);
     case STORE_ERR_DOWNLOAD: return T(STR_AV_ERR_DOWNLOAD);
+    case STORE_ERR_FORMAT:   return T(STR_AV_ERR_FORMAT);
     default:                 return T(STR_AV_ERR_NET);
     }
 }
@@ -1002,7 +1012,10 @@ static void av_tick_cb(lv_timer_t *t)
     avatar_store_get_status(&st);
     const char *cur = avatar_current();
 
-    if (st.state == STORE_REFRESHING) {
+    if (st.state == STORE_FORMATTING) {
+        lv_label_set_text(s_av_status, T(STR_AV_FORMATTING));
+        lv_obj_set_style_text_color(s_av_status, UI_WORKING, 0);
+    } else if (st.state == STORE_REFRESHING) {
         lv_label_set_text(s_av_status, T(STR_AV_REFRESHING));
         lv_obj_set_style_text_color(s_av_status, UI_WORKING, 0);
     } else if (st.state == STORE_ERROR) {
@@ -1023,6 +1036,12 @@ static void av_tick_cb(lv_timer_t *t)
        para mover um número. */
     if (st.state != last_state || st.pct / 5 != last_pct / 5 ||
         strcmp(cur, last_cur) != 0) {
+        /* Baixar, apagar e formatar mudam o que existe no cartão, e a lista do
+           motor é montada uma vez no boot: sem revarrer aqui, o pacote recém
+           baixado ficaria inalcançável pelo toque no mascote. */
+        if (st.state == STORE_READY && last_state != STORE_READY) {
+            avatar_rescan();
+        }
         last_state = st.state;
         last_pct = st.pct;
         strlcpy(last_cur, cur, sizeof(last_cur));
@@ -1127,6 +1146,63 @@ static void show_av_repos(void)
     lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
 }
 
+/* ---------- view: formatar o cartão ---------- */
+
+static void back_from_format_cb(lv_event_t *e)
+{
+    (void)e;
+    show_avatars();
+}
+
+static void format_go_cb(lv_event_t *e)
+{
+    (void)e;
+    /* O pacote em uso morre junto com o cartão: cair para o de fábrica ANTES
+       evita a home animando um avatar cujo arquivo já não existe. */
+    avatar_select("");
+    avatar_store_format();
+    show_avatars();               /* quem mostra o andamento é o tick de lá */
+}
+
+/**
+ * Tela só de confirmar: apagar o cartão inteiro é irreversível e um toque a
+ * mais na lista de avatares não pode bastar para disparar isso.
+ */
+static void show_av_format(void)
+{
+    s_view = VIEW_AV_FORMAT;
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
+    build_bar(T(STR_AV_FORMAT), back_from_format_cb, NULL);
+    hide_kb();
+    lv_obj_clean(s_content);
+
+    lv_obj_t *warn = lv_label_create(s_content);
+    lv_label_set_text(warn, T(STR_AV_FORMAT_WARN));
+    lv_obj_set_style_text_font(warn, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(warn, UI_BLOCKED, 0);
+    lv_obj_set_width(warn, LV_PCT(100));
+    lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
+
+    /* Sem cartão montado a formatação ainda vale — e é justamente aí que ela
+       mais serve, então a tela diz isso em vez de parecer inútil. */
+    lv_obj_t *sub = lv_label_create(s_content);
+    lv_label_set_text(sub, sd_is_mounted() ? T(STR_AV_FORMAT_LOST)
+                                           : T(STR_AV_FORMAT_UNREAD));
+    lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(sub, UI_MUTED, 0);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
+
+    lv_obj_t *btn = make_row(format_go_cb, NULL, 44);
+    lv_obj_set_style_bg_color(btn, UI_BLOCKED, 0);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, T(STR_AV_FORMAT_GO));
+    lv_obj_set_style_text_font(bl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(bl, UI_TEXT, 0);
+    lv_obj_center(bl);
+}
+
 static void show_avatars(void)
 {
     avatars_leave();              /* reentrar não pode deixar timer órfão */
@@ -1170,6 +1246,17 @@ static void show_avatars(void)
     lv_obj_set_style_text_font(rv, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(rv, UI_MUTED, 0);
     lv_obj_align(rv, LV_ALIGN_RIGHT_MID, 0, 0);
+
+    /* Formatar não é sobre avatares — apaga o cartão inteiro —, mas é aqui que
+       o cartão aparece; a seção própria evita que pareça mais uma linha da
+       lista acima. */
+    make_section_label(T(STR_AV_SEC_CARD));
+    lv_obj_t *frow = make_row(format_open_cb, NULL, 44);
+    lv_obj_t *fl = lv_label_create(frow);
+    lv_label_set_text(fl, T(STR_AV_FORMAT));
+    lv_obj_set_style_text_font(fl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(fl, UI_BLOCKED, 0);
+    lv_obj_align(fl, LV_ALIGN_LEFT_MID, 0, 0);
 
     s_av_timer = lv_timer_create(av_tick_cb, 500, NULL);
     av_tick_cb(NULL);             /* primeira pintura sem esperar o tick */

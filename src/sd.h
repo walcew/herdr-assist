@@ -36,6 +36,19 @@ bool sd_is_mounted(void);
 /** Bytes livres no cartão; 0 sem cartão montado. */
 uint64_t sd_free_bytes(void);
 
+/**
+ * Formata o cartão em FAT, apagando TUDO — não só os avatares. Só existe
+ * porque o usuário pede: nada aqui formata sozinho.
+ *
+ * Serve também ao cartão que o painel NÃO consegue ler (um SD de fábrica em
+ * exFAT, que este FATFS não monta, ou um sistema de arquivos quebrado): sem
+ * cartão montado, a formatação acontece na própria montagem.
+ *
+ * Bloqueia enquanto escreve as tabelas — segundos, e mais em cartão grande.
+ * Chamar da task do avatar_store, nunca da LVGL.
+ */
+esp_err_t sd_format(void);
+
 #ifdef __cplusplus
 }
 #endif
