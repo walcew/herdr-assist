@@ -33,11 +33,6 @@ typedef enum {
 
 /* X(chave, en_US, pt_BR) */
 #define I18N_STRINGS(X)                                                                      \
-    /* --- status dos agentes (vêm crus da ponte) --- */                                     \
-    X(ST_WORKING,      "working",                     "trabalhando")                         \
-    X(ST_BLOCKED,      "blocked",                     "bloqueado")                           \
-    X(ST_IDLE,         "idle",                        "ocioso")                              \
-    X(ST_DONE,         "done",                        "concluído")                           \
     /* --- home --- */                                                                       \
     X(SYNCING,         "syncing",                     "sincronizando")                       \
     X(AGENT_ONE,       "agent",                       "agente")                              \
@@ -215,9 +210,6 @@ const char *i18n_get(str_id_t id);
 
 /** Açúcar de leitura: `T(STR_OFFLINE)` no meio de uma chamada da LVGL. */
 #define T(id) i18n_get(id)
-
-/** Status cru da ponte traduzido; um status desconhecido volta como veio. */
-const char *i18n_status(const char *status);
 
 /** Dia da semana abreviado (0 = domingo). */
 const char *i18n_weekday(int wday);
