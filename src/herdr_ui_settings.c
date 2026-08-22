@@ -1040,6 +1040,18 @@ static void av_build_list(const avatar_store_status_t *st)
         } else if (is_cur) {
             lv_label_set_text(tag, T(STR_AV_IN_USE));
             lv_obj_set_style_text_color(tag, UI_IDLE, 0);
+        } else if (ent->builtin) {
+            /* Embutido no firmware: não se apaga nem se baixa, e tocar na linha
+               já o seleciona — não sobra ação secundária a oferecer. A lixeira
+               chegava a ser desenhada aqui, mas o handler abaixo nunca era
+               registrado: um botão que prometia o que não fazia. */
+            lv_label_set_text(tag, "");
+        } else if (ent->builtin) {
+            /* Embutido no firmware: não se apaga nem se baixa, e tocar na linha
+               já o seleciona — não sobra ação secundária a oferecer. A lixeira
+               chegava a ser desenhada aqui, mas o handler abaixo nunca era
+               registrado: um botão que prometia o que não fazia. */
+            lv_label_set_text(tag, "");
         } else if (ent->installed) {
             lv_label_set_text(tag, LV_SYMBOL_TRASH);
             lv_obj_set_style_text_color(tag, UI_MUTED, 0);
