@@ -34,6 +34,16 @@ void herdr_conn_set_repos_cb(herdr_repos_cb_t cb);
 /** Sobe uma task de conexão por host habilitado (esperam o Wi-Fi sozinhas). */
 esp_err_t herdr_conn_start(void);
 
+/**
+ * Versão que a ponte daquele host anunciou no handshake; "" enquanto ela não
+ * disse (ponte antiga, ou ainda desconectada).
+ *
+ * Diferente do avatar_repos, aqui não cabe callback: o valor é só um buffer, e
+ * o porte do Cardputer — que compartilha este arquivo por sync_shared.py —
+ * simplesmente não chama o getter.
+ */
+const char *herdr_conn_bridge_version(int host);
+
 /* Comandos painel→ponte, roteados pelo índice do host em panel_cfg.
    Retornam ESP_FAIL se o host não estiver conectado. */
 /* cols/rows são a geometria da tela do painel: enquanto ele estiver lendo este

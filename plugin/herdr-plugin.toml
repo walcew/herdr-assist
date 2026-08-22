@@ -1,12 +1,19 @@
 # Plugin herdr-assist: sobe a ponte TCP que o painel físico usa para falar
-# com este Herdr. Instalação num host novo (upgrade = repetir o comando):
+# com este Herdr. Instalação num host novo:
 #   herdr plugin install walcew/herdr-assist/plugin
-# Para desenvolver, o caminho é git clone + herdr plugin link herdr-assist/plugin.
+# Depois disso a ponte se atualiza sozinha (ver update.py): compara esta
+# `version` com a do release mais novo e reinstala. AUTO_UPDATE=0 no arquivo
+# `env` do config-dir desliga.
+# Para desenvolver, o caminho é git clone + herdr plugin link herdr-assist/plugin
+# — checkout linkado nunca é reinstalado por cima.
 # O token de autenticação é gerado na primeira subida (ação show-token exibe).
 
 id = "herdr-assist"
 name = "herdr-assist bridge"
-version = "0.5.0"
+# É a tag do release, sem o `v`: o auto-update compara esta linha com o
+# manifest.json publicado, e o release.yml trava a publicação se as duas
+# divergirem.
+version = "0.10.0"
 min_herdr_version = "0.8.0"
 # Os títulos e descrições abaixo ficam em inglês: o manifest é lido pelo Herdr
 # uma vez, sem campo por idioma, então não há como acompanhar o idioma do painel

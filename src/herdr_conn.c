@@ -69,6 +69,7 @@ typedef struct {
     bool addr_ok;              /* cfg.host/port em RAM valem (descobertos) */
     bool token_shared;         /* outro slot habilitado tem o mesmo token */
     uint8_t disc_fails;        /* falhas seguidas de descoberta (backoff) */
+    char bridge_ver[16];       /* versão que a ponte anunciou no handshake */
 } conn_slot_t;
 
 static conn_slot_t s_slots[CFG_MAX_HOSTS];
@@ -249,6 +250,12 @@ void herdr_conn_set_repos_cb(herdr_repos_cb_t cb)
     s_repos_cb = cb;
 }
 
+const char *herdr_conn_bridge_version(int host)
+{
+    const conn_slot_t *s = slot_for(host);
+    return s ? s->bridge_ver : "";
+}
+
 static void handle_repos(conn_slot_t *s, const cJSON *root)
 {
     const cJSON *list = cJSON_GetObjectItem(root, "repos");
@@ -296,6 +303,12 @@ static void handle_line(conn_slot_t *s, char *line, size_t len)
             handle_cost(s, root);
         } else if (strcmp(t, "avatar_repos") == 0) {
             handle_repos(s, root);
+        } else if (strcmp(t, "bridge_info") == 0) {
+            const cJSON *v = cJSON_GetObjectItem(root, "version");
+            if (cJSON_IsString(v)) {
+                strlcpy(s->bridge_ver, v->valuestring, sizeof(s->bridge_ver));
+                ESP_LOGI(TAG, "[%s] ponte versão %s", s->label, s->bridge_ver);
+            }
         } else if (strcmp(t, "error") == 0) {
             const cJSON *m = cJSON_GetObjectItem(root, "message");
             ESP_LOGW(TAG, "[%s] ponte recusou: %s", s->label,
@@ -628,6 +641,7 @@ static void conn_task(void *arg)
         s->sock = sock;
         xSemaphoreGive(s->tx_mutex);
         s->rx_used = 0;
+        s->bridge_ver[0] = '\0';   /* a ponte pode ter voltado noutra versão */
 
         /* A ponte exige hello com token na primeira linha; sem ele, derruba.
            cJSON escapa o token caso o usuário digite algo fora do hex. */

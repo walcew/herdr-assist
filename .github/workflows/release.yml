@@ -35,6 +35,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The bridge auto-updates by comparing the version it declares with the
+      # one in manifest.json, which IS the tag (see plugin/update.py). If the
+      # manifest version drifts from the tag, every host either never updates
+      # or updates on every check. Fail here rather than ship that.
+      - name: Plugin version must match the tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          DECLARED=$(sed -n 's/^version *= *"\(.*\)"/\1/p' plugin/herdr-plugin.toml | head -1)
+          EXPECTED=${GITHUB_REF_NAME#v}
+          echo "herdr-plugin.toml declares $DECLARED, tag is $EXPECTED"
+          test "$DECLARED" = "$EXPECTED"
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

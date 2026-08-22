@@ -83,9 +83,28 @@ O Herdr clona o repositório, mostra o que o plugin declara e passa a subir a po
 com cada sessão — o segundo comando só evita esperar a próxima. A ponte é stdlib pura do
 Python: funciona com o `python3` de fábrica do macOS (3.9+), sem toolchain.
 
-Para **atualizar** depois, repita os dois comandos: reinstalar substitui o checkout
-gerenciado e não toca no diretório de config (token, overrides do `env`). Para mexer no
+**Depois disso a ponte se atualiza sozinha.** Uma vez por dia ela compara a versão que
+declara com a do release mais novo — o mesmo `manifest.json` que o painel consulta, já que
+a tag é a mesma para os dois — e, havendo versão nova, reinstala e reinicia. Não há
+`herdr plugin update` no Herdr, e trocar os arquivos nunca trocou o processo: a ponte sobe
+destacada e sobrevive a sessões novas, então reiniciar é parte do trabalho.
+
+Ela também confere de minuto em minuto se o código em disco ainda é o que está rodando.
+Isso cobre o `herdr plugin install` feito na mão, cujo par (`restart-bridge`) é o passo
+que todo mundo esquece — em até um minuto a ponte percebe e sobe de novo sozinha.
+
+Para desligar, `AUTO_UPDATE=0` numa linha do arquivo `env` do config-dir. Um checkout
+**linkado** nunca é reinstalado por cima: ali quem atualiza é o `git pull`. Para mexer no
 plugin, o caminho é `git clone` do repositório + `herdr plugin link herdr-assist/plugin`.
+
+> Uma ponte instalada antes desta versão não se atualiza sozinha para ela — não tem o
+> código que faz isso. Esse primeiro salto é manual, uma vez por host:
+> `herdr plugin install walcew/herdr-assist/plugin` seguido de
+> `herdr plugin action invoke herdr-assist.restart-bridge`.
+
+A versão de cada ponte aparece na tela de administração e, no painel, em
+**Settings → Update firmware**, junto da versão instalada — é onde se vê que um host ficou
+para trás.
 
 ### 3. Pareando o painel
 

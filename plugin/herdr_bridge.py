@@ -47,6 +47,7 @@ import accounts
 import claude_cli
 import cost
 import transcript
+import update
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
 from proc_env import read_process_env  # noqa: E402
 
@@ -109,6 +110,16 @@ RECONCILE_IDLE_S = 5.0   # sem painel: só manter o cache morno
 # significa "CLI não instalado", não erro.
 LIMITS_POLL_S = 60.0     # cadência da coleta com painel conectado
 LIMITS_STEP_S = 5.0      # passo do laço: painel que conecta espera pouco
+
+# Atualização da ponte (ver update.py). O passo curto relê o manifesto local,
+# que é um open + regex; o longo é o que sai na rede atrás do release. Mesma
+# divisão do limits_loop, e pelo mesmo motivo: um evento barato não precisa
+# esperar a cadência do caro.
+UPDATE_DELAY_S = 60.0            # respiro antes da primeira ida à rede
+UPDATE_STEP_S = 60.0
+UPDATE_POLL_S = 24 * 60 * 60.0   # diária, como a do painel (fw_update.c)
+UPDATE_TRIES = 3                 # reinícios antes de desistir e gritar no log
+BOOT_VERSION = ""                # versão em disco quando este processo subiu
 LIMITS_HTTP_TIMEOUT = 10
 LIMITS_MAX_CARDS = 8     # teto espelhado no firmware (HERDR_MAX_PROVIDERS)
 HOME = os.path.expanduser("~")  # injetável nos testes
@@ -1019,6 +1030,47 @@ async def limits_loop() -> None:
         await asyncio.sleep(LIMITS_STEP_S)
 
 
+async def update_loop() -> None:
+    """Mantém a ponte na versão publicada e reinicia quando o disco muda.
+
+    Duas coisas, no mesmo laço. A ida à rede é diária e decide se há release
+    novo (update.check). A releitura do manifesto local é de minuto em minuto e
+    responde a uma pergunta diferente: o código em disco ainda é o que este
+    processo está rodando? Quando deixa de ser, reiniciar é a única saída —
+    trocar os arquivos nunca trocou o processo, porque a ponte sobe destacada
+    e o start.py sai cedo se a porta já responde.
+
+    Isso cobre também o `herdr plugin install` feito na mão, que é o passo cujo
+    par (`restart-bridge`) todo mundo esquece: em até um minuto a ponte percebe
+    sozinha e sobe de novo, sem depender de ninguém lembrar.
+    """
+    await asyncio.sleep(UPDATE_DELAY_S)
+    loop = asyncio.get_running_loop()
+    last = None      # sentinela: a base do monotonic varia por plataforma
+    tries = 0
+    while True:
+        if last is None or time.monotonic() - last >= UPDATE_POLL_S:
+            last = time.monotonic()
+            await loop.run_in_executor(None, update.check, HERDR_BIN)
+        disco = update.installed_version()
+        if disco and BOOT_VERSION and disco != BOOT_VERSION and tries <= UPDATE_TRIES:
+            tries += 1
+            if tries > UPDATE_TRIES:
+                # Continuar tentando de minuto em minuto encheria o log sem
+                # mudar nada; parar calado esconderia que a ponte está rodando
+                # código velho. Um erro, uma vez.
+                log.error("a ponte não reiniciou em %d tentativas: rodando %s "
+                          "com %s em disco", UPDATE_TRIES, BOOT_VERSION, disco)
+            else:
+                log.info("versão em disco mudou (%s → %s): reiniciando",
+                         BOOT_VERSION, disco)
+                # Soltar antes de morrer: um pane travado na resolução do painel
+                # ficaria assim, com a ponte que o travou fora do ar.
+                await ctl_release()
+                update.restart_bridge(sys.executable)
+        await asyncio.sleep(UPDATE_STEP_S)
+
+
 async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
     kind = msg.get("type")
     pane_id = msg.get("pane_id", "")
@@ -1148,6 +1200,12 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         writer.write((json.dumps({"type": "avatar_repos", "repos": avatar_repos()},
                                  separators=(",", ":")) + "\n").encode())
         await writer.drain()
+        # Versão da ponte: BOOT_VERSION, e não a do disco — o que interessa ao
+        # painel é o que está no ar, que depois de um install pendente de
+        # reinício não são a mesma coisa.
+        writer.write((json.dumps({"type": "bridge_info", "version": BOOT_VERSION},
+                                 separators=(",", ":")) + "\n").encode())
+        await writer.drain()
         while True:
             line = await reader.readline()
             if not line:
@@ -1242,7 +1300,7 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
 
 
 async def main() -> None:
-    global TOKEN
+    global TOKEN, BOOT_VERSION
     if USE_CLI:
         if not HERDR_BIN or not shutil.which(HERDR_BIN) and not os.path.isfile(HERDR_BIN):
             log.error("binário do herdr não encontrado (%s)", HERDR_BIN)
@@ -1252,8 +1310,11 @@ async def main() -> None:
         log.error("socket do Herdr não encontrado: %s", SOCK)
         sys.exit(1)
     TOKEN = load_token()
+    BOOT_VERSION = update.installed_version()
+    log.info("ponte versão %s", BOOT_VERSION or "?")
     asyncio.create_task(poll_loop() if USE_CLI else event_loop())
     asyncio.create_task(limits_loop())
+    asyncio.create_task(update_loop())
     # porta UDP ocupada não pode derrubar a ponte: sem descoberta ela ainda
     # serve os painéis que já sabem o endereço
     try:
