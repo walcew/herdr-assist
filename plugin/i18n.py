@@ -40,6 +40,7 @@ STRINGS = {
     "act.rotate":     ("Rotate token", "Girar token"),
     "act.restart":    ("Restart bridge", "Reiniciar ponte"),
     "act.keybind":    ("Install shortcut", "Instalar atalho"),
+    "act.update":     ("Update bridge", "Atualizar ponte"),
     "act.quit":       ("Quit", "Sair"),
     "hint.main":      ("click, or ↑↓ + enter — status updates live",
                        "clique, ou ↑↓ + enter — o status atualiza sozinho"),
@@ -48,6 +49,23 @@ STRINGS = {
     "btn.install":    ("Install", "Instalar"),
     "btn.cancel":     ("Cancel", "Cancelar"),
     "restarting":     ("restarting the bridge...", "reiniciando a ponte..."),
+    # --- atualização (ver update.py) ---
+    "version":        ("Version", "Versão"),
+    "version.behind": ("{cur} — {new} available", "{cur} — {new} disponível"),
+    "updating":       ("checking for a new version...", "procurando versão nova..."),
+    # Um texto por estado devolvido pelo update.check; todos existem porque o
+    # t() estoura em chave ausente, e o estado vem de outro módulo.
+    "update.installed": ("updated to {new}, restarting", "atualizada para {new}, reiniciando"),
+    "update.same":    ("already on the newest ({cur})", "já está na mais nova ({cur})"),
+    "update.local":   ("linked checkout — update it with git pull",
+                       "checkout linkado — atualize com git pull"),
+    "update.tried":   ("{new} already failed here; skipping",
+                       "a {new} já falhou aqui; pulando"),
+    "update.failed":  ("install failed, staying on {cur}",
+                       "o install falhou, ficando na {cur}"),
+    "update.unknown": ("could not check", "não deu para verificar"),
+    "update.off":     ("automatic updates are off", "atualizações automáticas desligadas"),
+    "update.available": ("{new} available", "{new} disponível"),
     # --- pareamento ---
     "pair.title":     ("Pair panel", "Parear painel"),
     "pair.where":     ("On the panel: Settings → Pair with a host",

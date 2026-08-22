@@ -29,6 +29,8 @@ import subprocess
 import sys
 import time
 
+import start
+import update
 from i18n import t
 
 PORT = int(os.environ.get("BRIDGE_PORT", "9375"))
@@ -51,13 +53,14 @@ def read_token() -> str:
 
 
 def bridge_pid() -> str:
-    """PID de quem escuta a porta da ponte, ou vazio."""
-    try:
-        out = subprocess.run(["lsof", "-nP", f"-iTCP:{PORT}", "-sTCP:LISTEN", "-t"],
-                             capture_output=True, text=True, timeout=5).stdout
-        return out.split()[0] if out.strip() else ""
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    """PID de quem escuta a porta da ponte, ou vazio.
+
+    Vem do start.py porque é ele quem precisa dessa resposta para matar a ponte
+    anterior; duas implementações do mesmo lsof divergiriam no dia em que uma
+    das duas ganhasse o caminho do Windows — que foi o que aconteceu.
+    """
+    pid = start.listener_pid(PORT)
+    return str(pid) if pid else ""
 
 
 def panels() -> list:
@@ -93,7 +96,12 @@ def lan_ip(peer: str) -> str:
 
 
 def poll_status() -> dict:
-    return {"tok": read_token(), "pid": bridge_pid(), "conn": panels()}
+    # A versão publicada vem do cache que o update_loop da ponte grava, não de
+    # um GET: isto roda a cada 2s e a rede não tem o que fazer nesse ritmo.
+    up = update.load_state()
+    return {"tok": read_token(), "pid": bridge_pid(), "conn": panels(),
+            "ver": update.installed_version(), "latest": up.get("latest", ""),
+            "upstate": up.get("state", "")}
 
 
 def bridge_restart() -> str:
@@ -270,6 +278,7 @@ MENU = (
     ("p", "act.pair"),
     ("r", "act.rotate"),
     ("x", "act.restart"),
+    ("u", "act.update"),
     ("k", "act.keybind"),
     ("q", "act.quit"),
 )
@@ -348,15 +357,21 @@ def draw_status(scr, y: int, st: dict) -> int:
     else:
         row(y + 1, "bridge", t("bridge.down") + " — " + t("bridge.hint"),
             curses.color_pair(C_ERR))
-    row(y + 2, "token", st["tok"] or t("token.missing"),
+    ver, latest = st.get("ver", ""), st.get("latest", "")
+    if latest and ver and latest != ver:
+        row(y + 2, "version", t("version.behind", cur=ver, new=latest),
+            curses.color_pair(C_WARN))
+    else:
+        row(y + 2, "version", ver or "?", curses.A_DIM)
+    row(y + 3, "token", st["tok"] or t("token.missing"),
         0 if st["tok"] else curses.color_pair(C_ERR))
     if st["conn"]:
-        row(y + 3, "panels",
+        row(y + 4, "panels",
             t("panels.some", n=len(st["conn"])) + " — " + ", ".join(st["conn"]),
             curses.color_pair(C_OK))
     else:
-        row(y + 3, "panels", t("panels.none"), curses.A_DIM)
-    return y + 4
+        row(y + 4, "panels", t("panels.none"), curses.A_DIM)
+    return y + 5
 
 
 def screen_pair(scr) -> None:
@@ -585,7 +600,7 @@ def main_screen(scr) -> None:
             act = MENU[sel][0]
         elif ch == 27:
             act = "q"
-        elif 0 <= ch < 256 and chr(ch).lower() in "prxkq":
+        elif 0 <= ch < 256 and chr(ch).lower() in "prxkqu":
             act = chr(ch).lower()
         if act is None:
             continue
@@ -604,6 +619,18 @@ def main_screen(scr) -> None:
             scr.refresh()
             out = bridge_restart()  # bloqueia ~1,5 s (start.py dorme 1 s)
             note = (out, time.time() + 5)
+        elif act == "u":
+            put(scr, hy, 2, " " * 70)
+            put(scr, hy, 2, t("updating"), curses.color_pair(C_WARN))
+            scr.refresh()
+            # force: o `u` é um gesto explícito e passa por cima do AUTO_UPDATE,
+            # como o "Verificar agora" do painel passa por cima do switch dele.
+            up = update.check(herdr_bin(), force=True)
+            if up.get("state") == "installed":
+                bridge_restart()
+            note = (t("update." + up.get("state", "unknown"),
+                      cur=up.get("installed", "?"), new=up.get("latest", "?")),
+                    time.time() + 6)
         st_at = 0.0  # força releitura do status ao voltar
 
 

@@ -80,9 +80,28 @@ Herdr clones the repo, shows what the plugin declares, and starts the bridge wit
 session from then on — the second command just skips waiting for the next one. The bridge
 is pure Python stdlib: it works with the `python3` macOS ships (3.9+), with no toolchain.
 
-To **upgrade** later, run the same two commands again: reinstalling replaces the managed
-checkout and leaves the config directory (token, `env` overrides) untouched. To hack on
-the plugin instead, `git clone` the repo and `herdr plugin link herdr-assist/plugin`.
+**From then on the bridge updates itself.** Once a day it compares the version it declares
+with the newest release — the same `manifest.json` the panel reads, since one tag covers
+both — and reinstalls and restarts when there is a new one. Herdr has no
+`herdr plugin update`, and swapping the files never swapped the process: the bridge runs
+detached and outlives new sessions, so restarting is part of the job.
+
+It also checks every minute whether the code on disk is still the code it is running. That
+covers a `herdr plugin install` done by hand, whose companion step (`restart-bridge`) is
+the one everybody forgets — within a minute the bridge notices and comes back on its own.
+
+To turn it off, put `AUTO_UPDATE=0` on a line of the `env` file in the config directory. A
+**linked** checkout is never reinstalled over: there, `git pull` is what updates it. To
+hack on the plugin, `git clone` the repo and `herdr plugin link herdr-assist/plugin`.
+
+> A bridge installed before this version will not update itself to it — it lacks the code
+> that does so. That first hop is manual, once per host:
+> `herdr plugin install walcew/herdr-assist/plugin` followed by
+> `herdr plugin action invoke herdr-assist.restart-bridge`.
+
+Each bridge's version shows up in the admin screen and, on the panel, under
+**Settings → Update firmware** next to the installed one — that is where you see a host
+that fell behind.
 
 ### 3. Pair the panel
 

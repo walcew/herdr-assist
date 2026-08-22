@@ -12,7 +12,9 @@
 #include "sd.h"
 #include "avatar_store.h"
 #include "fw_update.h"
+#include "herdr_conn.h"
 #include "herdr_kb.h"
+#include "herdr_model.h"
 #include "herdr_ui.h"
 #include "i18n.h"
 #include "lockscreen.h"
@@ -708,6 +710,26 @@ static void fwup_leave(void)
     }
 }
 
+/**
+ * Só o X.Y.Z do começo da versão do painel, sem o `v`.
+ *
+ * Build de trabalho traz `v0.9.0-67-g33f1f15-dirty`; comparar a string inteira
+ * com o que a ponte anuncia acusaria defasagem em toda build local.
+ */
+static void fw_core_version(char *out, size_t size)
+{
+    const char *v = fw_update_current_version();
+    while (*v == 'v' || *v == 'V') {
+        v++;
+    }
+    size_t n = 0;
+    while (v[n] && ((v[n] >= '0' && v[n] <= '9') || v[n] == '.') && n + 1 < size) {
+        n++;
+    }
+    memcpy(out, v, n);
+    out[n] = '\0';
+}
+
 static void back_from_fwup_cb(lv_event_t *e)
 {
     (void)e;
@@ -845,6 +867,47 @@ static void show_update(void)
         strlcpy(s_fw_notified, st.latest, sizeof(s_fw_notified));
     }
     lv_obj_add_flag(s_fw_toast, LV_OBJ_FLAG_HIDDEN);
+
+    /* Pontes conectadas e a versão de cada uma. Fica nesta tela porque é aqui
+       que já se pergunta "que versão é esta"; e é a única forma de ver, do
+       painel, que um host ficou para trás — quem atualiza a ponte é o host,
+       não o painel, então não há botão nem toast, só o fato. */
+    make_section_label(T(STR_FW_SEC_BRIDGES));
+    char mine[16];
+    fw_core_version(mine, sizeof(mine));
+    const panel_cfg_t *cfg = panel_cfg_get();
+    int bridges = 0;
+    for (int i = 0; i < CFG_MAX_HOSTS; i++) {
+        const panel_host_t *h = &cfg->hosts[i];
+        if (panel_host_is_free(h) || herdr_model_get_conn(i) != HERDR_CONN_ONLINE) {
+            continue;
+        }
+        const char *bv = herdr_conn_bridge_version(i);
+        lv_obj_t *row = make_row(NULL, NULL, 44);
+
+        lv_obj_t *nm = lv_label_create(row);
+        lv_label_set_text(nm, h->name[0] ? h->name
+                              : (h->host[0] ? h->host : T(STR_AUTO_SHORT)));
+        lv_obj_set_style_text_font(nm, &lv_font_ui_14, 0);
+        lv_obj_set_style_text_color(nm, UI_TEXT, 0);
+        lv_obj_align(nm, LV_ALIGN_LEFT_MID, 0, 0);
+
+        lv_obj_t *vl = lv_label_create(row);
+        /* Ponte que não anuncia versão é ponte anterior a este recurso — o que
+           já é, em si, a informação de que ela está atrasada. */
+        bool ok = bv[0] && mine[0] && strcmp(bv, mine) == 0;
+        lv_label_set_text(vl, bv[0] ? bv : T(STR_FW_BRIDGE_UNKNOWN));
+        lv_obj_set_style_text_font(vl, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(vl, ok ? UI_IDLE : UI_WORKING, 0);
+        lv_obj_align(vl, LV_ALIGN_RIGHT_MID, 0, 0);
+        bridges++;
+    }
+    if (bridges == 0) {
+        lv_obj_t *l = lv_label_create(s_content);
+        lv_label_set_text(l, T(STR_FW_BRIDGE_NONE));
+        lv_obj_set_style_text_font(l, &lv_font_ui_12, 0);
+        lv_obj_set_style_text_color(l, UI_MUTED, 0);
+    }
 
     s_fwup_timer = lv_timer_create(fwup_tick_cb, 500, NULL);
     fwup_tick_cb(NULL);           /* primeira pintura sem esperar o tick */
