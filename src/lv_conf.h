@@ -60,10 +60,31 @@
     #endif
 
 #else       /*LV_MEM_CUSTOM*/
-    #define LV_MEM_CUSTOM_INCLUDE <stdlib.h>   /*Header for the dynamic memory function*/
-    #define LV_MEM_CUSTOM_ALLOC   malloc
-    #define LV_MEM_CUSTOM_FREE    free
-    #define LV_MEM_CUSTOM_REALLOC realloc
+    /* A LVGL sai da RAM interna e vai para a PSRAM.
+     *
+     * Com o `malloc` do IDF e CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096, todo
+     * objeto da LVGL (dezenas de bytes) caía na RAM interna, que é o recurso
+     * escasso deste painel: dos 242KB, o boot já gasta display 80KB, UI 43KB,
+     * Wi-Fi 66KB e pontes 22KB. O feed de atividade cheio (64 eventos x 5
+     * objetos) pede 50-60KB de uma vez ao abrir a Dash — não cabia, a interna
+     * era drenada até zero e a próxima alocação que EXIGE interna (descritor
+     * DMA, buffer do Wi-Fi) morria em assert, reiniciando o painel.
+     *
+     * Preferir a PSRAM não custa desempenho aqui: o framebuffer já mora nela
+     * (esp_bsp.c, buff_spiram) e o painel roda com full_refresh, então o
+     * desenho já era PSRAM-bound. Os buffers DMA de transporte pedem
+     * MALLOC_CAP_DMA explicitamente em lv_port.c e não passam por aqui.
+     *
+     * A interna fica como segunda opção: se a PSRAM faltar, alocar devagar
+     * ainda é melhor que devolver NULL. */
+    #define LV_MEM_CUSTOM_INCLUDE "esp_heap_caps.h"
+    #define LV_MEM_CUSTOM_ALLOC(size)      heap_caps_malloc_prefer((size), 2,   \
+                                               MALLOC_CAP_SPIRAM   | MALLOC_CAP_8BIT, \
+                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+    #define LV_MEM_CUSTOM_REALLOC(p, size) heap_caps_realloc_prefer((p), (size), 2, \
+                                               MALLOC_CAP_SPIRAM   | MALLOC_CAP_8BIT, \
+                                               MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+    #define LV_MEM_CUSTOM_FREE             heap_caps_free
 #endif     /*LV_MEM_CUSTOM*/
 
 /*Number of the intermediate memory buffer used during rendering and other internal processing mechanisms.
@@ -271,8 +292,13 @@
 #define LV_USE_ASSERT_OBJ           0   /*Check the object's type and existence (e.g. not deleted). (Slow)*/
 
 /*Add a custom handler when assert happens e.g. to restart the MCU*/
-#define LV_ASSERT_HANDLER_INCLUDE <stdint.h>
-#define LV_ASSERT_HANDLER while(1);   /*Halt by default*/
+/* `while(1)` prendia a task da LVGL segurando o mutex dela: como
+ * CONFIG_ESP_TASK_WDT_PANIC está desligado, o painel congelava para sempre, sem
+ * reboot e sem backtrace — a pior forma de falhar, porque não deixa pista.
+ * `abort()` imprime "abort() was called at PC ..." e o esp32_exception_decoder
+ * do platformio.ini resolve o backtrace para arquivo:linha. */
+#define LV_ASSERT_HANDLER_INCLUDE <stdlib.h>
+#define LV_ASSERT_HANDLER abort();
 
 /*-------------
  * Others

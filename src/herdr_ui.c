@@ -8,6 +8,7 @@
 #include <lvgl.h>
 
 #include <esp_heap_caps.h>
+#include <esp_log.h>
 
 #include "assets/logo_claude.h"
 #include "assets/logo_codex.h"
@@ -112,6 +113,7 @@ static lv_obj_t *s_kb_ta;
 static lv_obj_t *s_keyboard;
 
 /* --- estado --- */
+static const char *TAG = "herdr_ui";
 static ui_tab_t s_tab = UI_TAB_HOME;
 static herdr_agent_t s_ui_agents[HERDR_MAX_AGENTS_TOTAL];
 static int s_ui_agent_count;
@@ -123,6 +125,7 @@ static char s_kb_pane[HERDR_ID_LEN];
 static int s_kb_host = -1;
 static uint32_t s_last_generation = UINT32_MAX;
 static int s_poll_tick;
+static int s_heap_tick;
 static int s_last_minute = -1;
 
 static const char *host_label(int host)
@@ -1261,6 +1264,13 @@ static void add_activity_row(const activity_event_t *e, time_t now, bool multi_h
     }
 
     lv_obj_t *row = ui_plain(s_activity_list);
+    /* Sem RAM a LVGL devolve NULL em silêncio (lv_mem_alloc não faz assert),
+       e daqui para baixo são dezenas de chamadas que o usam sem checar. Parar
+       aqui transforma "acabou a memória" em algumas linhas a menos no feed,
+       em vez de um panic no meio do rebuild. */
+    if (!row) {
+        return;
+    }
     lv_obj_set_size(row, LV_PCT(100), ACT_ROW_H);
     /* Nada aqui se clica, e não ser clicável mantém o alvo do toque no tile —
        que a reconstrução não apaga. Antes isso vinha de graça, porque a linha
@@ -1867,9 +1877,32 @@ static bool ui_drag_active(void)
     return false;
 }
 
+/* Tick próprio, e não o virar do minuto de refresh_clock: aquele só anda com o
+   SNTP sincronizado, e é justamente num painel sem relógio que este log faz
+   falta. 400 ticks de 150ms = 1 minuto. */
+#define HEAP_LOG_TICKS 400
+
+/**
+ * O maior bloco livre junto do total é o que separa fragmentação de
+ * esgotamento: a UI destrói e recria centenas de objetos a cada mudança do
+ * modelo, e o total pode parecer saudável quando nenhum bloco já serve.
+ */
+static void log_heap(void)
+{
+    if (++s_heap_tick < HEAP_LOG_TICKS) {
+        return;
+    }
+    s_heap_tick = 0;
+    ESP_LOGI(TAG, "heap interna: %u livres, maior bloco %u (mínimo %u)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+}
+
 static void ui_timer_cb(lv_timer_t *timer)
 {
     (void)timer;
+    log_heap();
     refresh_clock();
     /* antes do early-out por geração: o cronômetro corre com o relógio, não
        com as mudanças de estado, e esse return é o caminho da maioria dos ticks */
