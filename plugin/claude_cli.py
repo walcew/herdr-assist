@@ -9,9 +9,15 @@ foi exatamente o que quebrou quando o macOS passou a renovar no Keychain e o
 pelo CLI dentro do Herdr, delegar a ele vale em todo SO e não toca em token
 nenhum.
 
-`claude -p "/usage"` não gasta tokens (num_turns 0, custo 0), não deixa
-transcript no config-dir e respeita CLAUDE_CONFIG_DIR — o multi-conta continua
-valendo. Chamadas são bloqueantes (subprocess): só de dentro do executor.
+`claude -p "/usage"` não gasta tokens (num_turns 0, custo 0) e respeita
+CLAUDE_CONFIG_DIR — o multi-conta continua valendo. Mas cada invocação grava
+uma sessão em projects/<cwd-codificado>/ do config-dir: com o cwd herdado da
+ponte, uma coleta por minuto despejou milhares de jsonl no diretório de
+projeto do plugin e quebrou a resolução de transcript por cwd dos panes
+abertos ali (o "mais recente por mtime" virava um fantasma sem assistant).
+Por isso _run roda com cwd=config_dir — existe sempre, nunca é cwd de pane de
+trabalho, e o cleanup de 30 dias do próprio CC apaga o resíduo. Chamadas são
+bloqueantes (subprocess): só de dentro do executor.
 
 parse_usage/parse_reset são puras — testáveis sem invocar o CLI.
 """
@@ -170,7 +176,7 @@ def _run(args, config_dir: str, timeout: int) -> str:
         env["CLAUDE_CONFIG_DIR"] = config_dir
     try:
         p = subprocess.run([exe] + args, capture_output=True, text=True,
-                           timeout=timeout, env=env)
+                           timeout=timeout, env=env, cwd=config_dir)
     except (subprocess.TimeoutExpired, OSError) as e:
         raise ClaudeCliError(str(e) or type(e).__name__)
     if p.returncode != 0:

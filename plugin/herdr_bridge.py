@@ -46,6 +46,7 @@ import urllib.request
 import accounts
 import claude_cli
 import cost
+import rollout
 import transcript
 import update
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
@@ -170,6 +171,14 @@ tx_cache: dict = {}   # path -> (mtime, {"model","context_pct"} | None)
 # UUID/cwd usada para tx_cache): é o que _session_paths() devolve para a
 # agregação de custo "agora" sem precisar chamar o Herdr de novo.
 pane_paths: dict = {}  # pane_id -> transcript path
+# Codex: rollout escolhido por pane, SEPARADO de pane_paths de propósito —
+# _session_paths() alimenta a agregação de custo, que só entende transcript de
+# Claude; um rollout ali contaria custo errado em silêncio. O cache de headers
+# guarda o cwd da 1ª linha de cada candidato (imutável após criado): é ele que
+# permite escolher o rollout no event loop sem abrir arquivo nenhum — headers
+# novos são lidos no executor e valem a partir do ciclo seguinte.
+codex_paths: dict = {}         # pane_id -> rollout path
+rollout_meta_cache: dict = {}  # rollout path -> cwd do session_meta
 
 # Custo (ver cost.py): cache por (mtime, size) — só relê um transcript se ele
 # cresceu — e snapshot para o dedup do broadcast "cost", nos mesmos moldes de
@@ -529,16 +538,46 @@ def trim_ansi(raw: str, keep: int) -> str:
     return "\n".join(lines)
 
 
+def _session_from_pid(p: dict, acc: tuple):
+    """sessionId do registro <config-dir>/sessions/<pid>.json do Claude Code.
+
+    O CC escreve esse arquivo ao subir (pid, sessionId, cwd...) e o remove ao
+    sair — pid→sessão determinístico, imune ao desempate por mtime. O pid vem
+    do process_info do pane (pane_pid_cache): se o registro existe para ele,
+    foi o claude vivo desse pane que o escreveu, então não precisa de
+    validação extra. Falha de forma limpa quando o foreground do pane é um
+    FILHO do claude (um tool em execução no instante da resolução do pid) —
+    não há registro para o filho e a cascata segue. É formato interno do CC,
+    não documentado — mais um motivo para ser a primeira tentativa, nunca a
+    única. ~500 bytes de tamanho fixo: leitura
+    barata o bastante para o event loop, ao contrário do transcript.
+    """
+    pid = pane_pid_cache.get((p["pane_id"], p.get("agent")))
+    if not pid:
+        return None
+    try:
+        with open(os.path.join(acc[1], "sessions", str(pid) + ".json"),
+                  encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return rec.get("sessionId") if isinstance(rec, dict) else None
+
+
 def _resolve_transcript_path(p: dict, acc: tuple) -> str | None:
     """Transcript do Claude Code para o pane `p`, na conta `acc` (agent, config_dir).
 
-    Por UUID (`agent_session`) quando o Herdr o expõe; senão pelo cwd, achando
-    o dir de projects/ e pegando o .jsonl mais recente por mtime (sessão
-    ativa). Extraída de push_agents porque a mesma resolução alimenta agora
-    também _session_paths()/aggregate_cost — glob e stat são baratos o
-    bastante para rodar direto no event loop (nunca abrir/ler o jsonl aqui).
+    Pelo pid (registro sessions/ que o próprio CC mantém — ver
+    _session_from_pid); senão por UUID (`agent_session`) quando o Herdr o
+    expõe; senão pelo cwd, achando o dir de projects/ e pegando o .jsonl mais
+    recente por mtime (sessão ativa). O desempate por mtime é o elo fraco dos
+    fallbacks: duas sessões no mesmo diretório se confundem, e qualquer jsonl
+    recém-gravado ali rouba a vez. Extraída de push_agents porque a mesma
+    resolução alimenta também _session_paths()/aggregate_cost — glob e stat
+    são baratos o bastante para rodar direto no event loop (nunca abrir/ler o
+    jsonl aqui).
     """
-    sess = (p.get("agent_session") or {}).get("value")
+    sess = _session_from_pid(p, acc) or (p.get("agent_session") or {}).get("value")
     if sess:
         hits = glob.glob(os.path.join(acc[1], "projects", "*", sess + ".jsonl"))
         return hits[0] if hits else None
@@ -553,6 +592,24 @@ def _resolve_transcript_path(p: dict, acc: tuple) -> str | None:
         return max(hits, key=os.path.getmtime)
     except OSError:
         return None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
+
+
+def _resolve_rollout_path(p: dict, acc: tuple, to_meta: set, cands_out: set):
+    """Rollout do Codex para o pane `p`: candidato de cwd casado ou, sem um,
+    o path que o pane já tinha (sessão mais velha que a janela de descoberta).
+
+    Sem I/O de conteúdo aqui: a escolha usa só rollout_meta_cache; candidato
+    com header ainda desconhecido entra em `to_meta` para a fase B ler no
+    executor e concorre a partir do ciclo seguinte — um ciclo de atraso, só na
+    primeira vez que o arquivo aparece.
+    """
+    cwd = p.get("cwd")
+    if not cwd:
+        return None
+    cands = rollout.recent_paths(acc[1])
+    cands_out.update(pth for pth, _ in cands)
+    to_meta.update(pth for pth, _ in cands if pth not in rollout_meta_cache)
+    return rollout.pick(cands, cwd, rollout_meta_cache) or codex_paths.get(p["pane_id"])
 
 
 def _session_paths() -> list:
@@ -599,7 +656,10 @@ async def push_agents() -> set[str] | None:
     # aqui). pane_path guarda o candidato deste ciclo; to_read só os misses
     # (path ausente do cache ou com mtime diferente).
     pane_path: dict = {}   # pane_id -> transcript path (candidatos deste ciclo)
-    to_read: dict = {}     # path -> mtime (misses a reler no executor)
+    codex_path: dict = {}  # pane_id -> rollout path (idem, panes codex)
+    to_read: dict = {}     # path -> (mtime, parser) (misses a reler no executor)
+    to_meta: set = set()   # rollouts com header fora do cache (ler no executor)
+    codex_cands: set = set()   # candidatos do ciclo, p/ poda do cache de headers
     for p in panes:
         if not p.get("agent"):
             continue
@@ -617,55 +677,72 @@ async def push_agents() -> set[str] | None:
             org, corp = accounts.org_and_corp(a["account"])
             if org:
                 a["org"], a["corp"] = org, corp
-        path = None
+        path, parser, bucket = None, transcript.session_metrics, pane_path
         if p.get("agent") == "claude" and acc:
             path = _resolve_transcript_path(p, acc)
+        elif p.get("agent") == "codex" and acc:
+            path = _resolve_rollout_path(p, acc, to_meta, codex_cands)
+            parser, bucket = rollout.session_metrics, codex_path
         if path:
             try:
                 mt = os.path.getmtime(path)
             except OSError:
                 mt = None  # arquivo sumiu entre o glob e o stat: ignora este ciclo
             if mt is not None:
-                pane_path[pid] = path
+                bucket[pid] = path
                 cached = tx_cache.get(path)
                 if cached is None or cached[0] != mt:
-                    to_read[path] = mt
+                    to_read[path] = (mt, parser)
         if status == "working":
             # só o primeiro ciclo em working cria o carimbo; os seguintes o herdam
             new_since[pid] = working_since.get(pid, now)
             a["since"] = int(new_since[pid])
         agents.append(a)
 
-    # Fase B (executor): só os transcripts que mudaram de mtime, fora do event
-    # loop — ler um jsonl inteiro é I/O bloqueante, o mesmo cuidado do
-    # _read_env_filtered/refresh_accounts do multi-conta.
-    if to_read:
+    # Fase B (executor): só os transcripts/rollouts que mudaram de mtime e os
+    # headers de rollout inéditos, fora do event loop — ler conteúdo é I/O
+    # bloqueante, o mesmo cuidado do _read_env_filtered/refresh_accounts do
+    # multi-conta. Header ilegível entra como None no cache de propósito:
+    # nunca casa com cwd nenhum e não é relido a cada ciclo.
+    if to_read or to_meta:
         loop = asyncio.get_running_loop()
-        fresh = await loop.run_in_executor(
-            None, lambda: {pth: (mt, transcript.session_metrics(pth))
-                           for pth, mt in to_read.items()})
+        metas, fresh = await loop.run_in_executor(
+            None, lambda: ({pth: rollout.head_cwd(pth) for pth in to_meta},
+                           {pth: (mt, parser(pth))
+                            for pth, (mt, parser) in to_read.items()}))
+        rollout_meta_cache.update(metas)
         tx_cache.update(fresh)
 
     # Fase C (no loop): anexa model/context_pct/effort a partir do cache já
-    # quente. O effort só entra quando existe (CLI >= 2.1.234): mandar a chave
-    # vazia engordaria o payload de todo mundo que roda CLI anterior.
+    # quente. model e effort só entram quando existem (effort exige CLI >=
+    # 2.1.234; rollout sem turn_context no tail vem sem modelo): mandar chave
+    # vazia engordaria o payload de todo mundo.
     for a in agents:
-        path = pane_path.get(a["pane_id"])
+        path = pane_path.get(a["pane_id"]) or codex_path.get(a["pane_id"])
         cached = tx_cache.get(path) if path else None
         m = cached[1] if cached else None
         if m:
-            a["model"] = m["model"]
+            if m["model"]:
+                a["model"] = m["model"]
             a["context_pct"] = m["context_pct"]
             if m["effort"]:
                 a["effort"] = m["effort"]
 
-    # Poda: só ficam no cache os transcripts de panes vivos neste ciclo —
-    # sem isso ele cresceria sem limite conforme sessões (panes) fecham.
-    live_paths = set(pane_path.values())
+    # Poda: só ficam no cache os transcripts/rollouts de panes vivos neste
+    # ciclo — sem isso ele cresceria sem limite conforme sessões fecham. O
+    # cache de headers mantém também os candidatos do ciclo: podá-los faria a
+    # fase B reler os headers dos rollouts vizinhos a cada segundo.
+    live_paths = set(pane_path.values()) | set(codex_path.values())
     for k in list(tx_cache):
         if k not in live_paths:
             tx_cache.pop(k, None)
+    keep_meta = codex_cands | set(codex_path.values())
+    for k in list(rollout_meta_cache):
+        if k not in keep_meta:
+            rollout_meta_cache.pop(k, None)
     pane_paths = pane_path  # publica o mapa desta rodada para _session_paths()
+    codex_paths.clear()     # idem para os rollouts (mutação in-place: sem global)
+    codex_paths.update(codex_path)
 
     # reconstruir em vez de mutar poda de graça quem saiu de working ou sumiu
     working_since = new_since

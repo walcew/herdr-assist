@@ -5,7 +5,9 @@ Rodar de dentro de plugin/: python -m unittest discover -s tests
 import datetime
 import os
 import sys
+import types
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -46,6 +48,20 @@ class TestParseUsage(unittest.TestCase):
         rows = claude_cli.parse_usage(
             "Current week (Modelo De Nome Muito Longo): 7% used\n", REF)
         self.assertLessEqual(len(rows[0]["label"]), 16)
+
+
+class TestRunNoConfigDir(unittest.TestCase):
+    def test_subprocess_roda_no_config_dir(self):
+        # regressão: sem cwd= o /usage herdava o cwd da ponte e semeava uma
+        # sessão-fantasma por minuto no projects/ do diretório do plugin,
+        # quebrando a resolução de transcript por mtime dos panes abertos ali
+        fake = mock.Mock(return_value=types.SimpleNamespace(
+            returncode=0, stdout="ok", stderr=""))
+        with mock.patch.object(claude_cli.subprocess, "run", fake), \
+                mock.patch.object(claude_cli, "_find_claude",
+                                  return_value="/x/claude"):
+            claude_cli._run(["auth", "status"], "/tmp/conta-x", 5)
+        self.assertEqual(fake.call_args.kwargs["cwd"], "/tmp/conta-x")
 
 
 class TestParseReset(unittest.TestCase):
