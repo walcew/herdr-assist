@@ -203,6 +203,37 @@ carrega numa task separada: o avatar atual segue animando, esmaecido, até o nov
 
 Pinout relevante em `src/esp_bsp.h`; esquemáticos e datasheets em `docs/`.
 
+### Fita de LED (opcional)
+
+Uma fita de **7 LEDs endereçáveis WS2812B** no conector **P3** (JST 1,25 mm, 4 pinos)
+mostra o mesmo estado global do mascote, legível de relance do outro lado da sala — mesmo
+com a tela bloqueada. O P4 (1,0 mm) tem os mesmos sinais e também serve.
+
+| Pino do P3 | Sinal | Fita |
+|---|---|---|
+| 1 | GND | GND |
+| 2 | 3.3V | VCC |
+| 3 | IO17 | IN (dados) |
+| 4 | IO18 | sem uso |
+
+> **Confira o cabo com o multímetro antes de ligar a fita.** A cor do fio não garante a
+> ordem: com o painel ligado, entre o preto e o vermelho deve dar ~3,3 V. Inverter VCC e
+> GND queima a fita. O fio de dados vai na ponta **DIN** da fita (a seta aponta para longe
+> dela).
+
+| Estado | Cor | Animação |
+|---|---|---|
+| Bloqueado (um agente precisa de você) | vermelho | pulso duplo rápido e pausa, no ritmo do sino |
+| Finalizado (terminou, ainda não aberto) | ciano | respiração, ~2 s |
+| Trabalhando | âmbar | cometa de ponta a ponta, ~1 volta/s |
+| Ocioso | verde | respiração lenta, ~6 s |
+| Nenhum host online | branco fraco | um único LED pisca a cada ~3 s |
+
+No boot a fita pisca vermelho → verde → azul para provar que todos os LEDs funcionam e que a
+ordem de cor está certa. **Configurações → Dispositivo → Fita de LED** liga e desliga na
+hora, sem reiniciar. O brilho tem teto (`LED_FX_MAX` em `src/led_fx.h`) porque a fita divide
+o regulador de 3.3V com o ESP32 e o display.
+
 ### Outras placas: M5Stack Cardputer
 
 Em `cardputer/` há um porte para o **M5Stack Cardputer** (240×135 e um teclado de

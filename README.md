@@ -201,6 +201,37 @@ new one is ready.
 
 Relevant pinout in `src/esp_bsp.h`; schematics and datasheets in `docs/`.
 
+### LED strip (optional)
+
+A strip of **7 addressable WS2812B LEDs** on the **P3** connector (JST 1.25 mm, 4 pins)
+shows the same global state as the mascot, readable at a glance from across the room — even
+with the screen locked. P4 (1.0 mm) carries the same signals and works too.
+
+| P3 pin | Signal | Strip |
+|---|---|---|
+| 1 | GND | GND |
+| 2 | 3.3V | VCC |
+| 3 | IO17 | IN (data) |
+| 4 | IO18 | not used |
+
+> **Check the cable with a multimeter before plugging the strip in.** Wire colours do not
+> guarantee the order: with the panel powered, black-to-red should read ~3.3 V. Swapping
+> VCC and GND kills the strip. The data wire goes to the strip's **DIN** end (the arrow
+> points away from it).
+
+| State | Colour | Animation |
+|---|---|---|
+| Blocked (an agent needs you) | red | fast double pulse and pause, in step with the bell |
+| Done (finished, not opened yet) | cyan | breathing, ~2 s |
+| Working | amber | comet running end to end, ~1 lap/s |
+| Idle | green | slow breathing, ~6 s |
+| No host online | dim white | a single LED blinks every ~3 s |
+
+On boot the strip flashes red → green → blue to prove all LEDs work and the colour order is
+right. **Settings → Device → LED strip** turns it off and on instantly, no reboot. Brightness
+is capped (`LED_FX_MAX` in `src/led_fx.h`) because the strip shares the 3.3 V regulator with
+the ESP32 and the display.
+
 ### Other boards: M5Stack Cardputer
 
 `cardputer/` holds a port to the **M5Stack Cardputer** (240×135 plus a 56-key
