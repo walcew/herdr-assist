@@ -6,6 +6,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <led_strip.h>
+#include <nvs.h>
 
 #include "led_fx.h"
 
@@ -22,15 +23,45 @@ _Static_assert(LED_FX_DISCONNECTED == (int)AVATAR_ST_DISCONNECTED &&
                LED_FX_BLOCKED == (int)AVATAR_ST_BLOCKED,
                "led_fx_state_t e avatar_state_t divergiram");
 
+#define NVS_NS  "ledstrip"
+#define KEY_OFF "off"   /* negado: chave ausente = ligada, o padrão de fábrica */
+
 static led_strip_handle_t s_strip;
+/* escrito pela task da LVGL (toggle), lido pela da fita */
+static volatile bool s_enabled = true;
 /* escrito pela task da LVGL, lido pela da fita: um int é atômico no Xtensa */
 static volatile int s_state = AVATAR_ST_DISCONNECTED;
+
+/* Autoteste do boot: R, G e B na fita inteira. Confirma que os 7 LEDs estão
+   vivos e que a ordem de cor está certa — vermelho saindo verde = fita RGB,
+   não GRB (trocar color_component_format abaixo). */
+static void self_test(void)
+{
+    static const uint8_t rgb[3][3] = {
+        {LED_FX_MAX, 0, 0}, {0, LED_FX_MAX, 0}, {0, 0, LED_FX_MAX},
+    };
+    for (int c = 0; c < 3; c++) {
+        for (int i = 0; i < LED_FX_COUNT; i++) {
+            led_strip_set_pixel(s_strip, i, rgb[c][0], rgb[c][1], rgb[c][2]);
+        }
+        led_strip_refresh(s_strip);
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
 
 static void led_task(void *arg)
 {
     (void)arg;
+    if (s_enabled) {
+        self_test();
+    }
     led_rgb_t px[LED_FX_COUNT];
     for (;;) {
+        if (!s_enabled) {
+            led_strip_clear(s_strip);
+            vTaskDelay(pdMS_TO_TICKS(FRAME_MS * 5));
+            continue;
+        }
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         led_fx_render((led_fx_state_t)s_state, now, px);
         for (int i = 0; i < LED_FX_COUNT; i++) {
@@ -43,6 +74,15 @@ static void led_task(void *arg)
 
 void led_status_init(void)
 {
+    /* A NVS já foi inicializada no boot pelo panel_cfg_init(). */
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        uint8_t off = 0;
+        nvs_get_u8(h, KEY_OFF, &off);
+        s_enabled = off == 0;
+        nvs_close(h);
+    }
+
     const led_strip_config_t cfg = {
         .strip_gpio_num = LED_GPIO,
         .max_leds = LED_FX_COUNT,
@@ -69,4 +109,20 @@ void led_status_init(void)
 void led_status_set_state(avatar_state_t st)
 {
     s_state = st;
+}
+
+bool led_status_enabled(void)
+{
+    return s_enabled;
+}
+
+void led_status_set_enabled(bool enabled)
+{
+    s_enabled = enabled;
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, KEY_OFF, enabled ? 0 : 1);
+        nvs_commit(h);
+        nvs_close(h);
+    }
 }

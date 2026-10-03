@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include <stdbool.h>
+
 #include "avatar.h"
 
 #ifdef __cplusplus
@@ -20,6 +22,12 @@ void led_status_init(void);
 
 /** Estado a mostrar; troca na hora. Pode ser chamada de qualquer task. */
 void led_status_set_state(avatar_state_t st);
+
+/** Toggle "Fita de LED" das Configurações; ligado de fábrica. */
+bool led_status_enabled(void);
+
+/** Liga/desliga a fita na hora e salva na NVS (sem reiniciar). */
+void led_status_set_enabled(bool enabled);
 
 #ifdef __cplusplus
 }

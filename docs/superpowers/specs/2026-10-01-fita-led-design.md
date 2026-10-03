@@ -64,8 +64,9 @@ desligada no menu e faz um autoteste de cores ao ligar.
   | IDLE | verde | respiração lenta, ciclo ~6 s |
   | DISCONNECTED | branco fraco | um único LED pisca a cada ~3 s |
 
-- **Brilho:** teto fixo (~25%) num único `#define`; sem slider.
-- **Toggle:** novo campo booleano na configuração persistente do painel (NVS), ligado por padrão; switch em Configurações → Dispositivo com rótulo em PT e EN via i18n. Aplica na hora, sem reboot.
+- **Brilho:** teto fixo num único `#define`; sem slider.
+- **Toggle:** chave própria na NVS (namespace da fita, negada: ausente = ligada), no mesmo padrão do lockscreen — a configuração persistente do painel só vale após reiniciar e é compartilhada com o Cardputer, então não serve. Switch em Configurações → Dispositivo com rótulo em PT e EN via i18n. Aplica na hora, sem reboot.
+- **Brilho calibrado no hardware:** teto final 200 (~78%); o pior estado (ciano na fita inteira) fica em ~160 mA.
 - **Lockscreen:** a fita ignora o bloqueio de tela; só o toggle a apaga.
 - **Autoteste:** no boot, R, G, B por ~200 ms cada em todos os LEDs, depois entra no estado corrente. Respeita o toggle: desligado, não acende.
 - **Escopo de alvo:** só o painel JC3248W535EN. Nada entra na lista do `sync_shared.py` do Cardputer.
