@@ -62,7 +62,8 @@ static void led_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(FRAME_MS * 5));
             continue;
         }
-        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+        /* 6000 = MMC dos períodos de led_fx: a fase segue contínua no wrap */
+        uint32_t now = (uint32_t)((esp_timer_get_time() / 1000) % 6000);
         led_fx_render((led_fx_state_t)s_state, now, px);
         for (int i = 0; i < LED_FX_COUNT; i++) {
             led_strip_set_pixel(s_strip, i, px[i].r, px[i].g, px[i].b);
@@ -92,17 +93,22 @@ void led_status_init(void)
     const led_strip_rmt_config_t rmt = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = 10 * 1000 * 1000,
+        /* Os 4 blocos TX do S3 (4 x 48): o quadro inteiro (7 x 24 bits + reset)
+           cabe na memória do RMT, sem reabastecer pela ISR — que não é IRAM-safe
+           e atrasaria durante escrita em flash (OTA, avatar, NVS), mandando cor
+           velha para os últimos LEDs. Nada mais no painel usa RMT. */
+        .mem_block_symbols = 4 * 48,
     };
     esp_err_t err = led_strip_new_rmt_device(&cfg, &rmt, &s_strip);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "fita sem RMT: %s", esp_err_to_name(err));
         return;
     }
-    /* Criada cedo no boot pelo mesmo motivo da avatar_store: depois do display,
-       da UI e do Wi-Fi a RAM interna não comporta mais uma pilha. */
-    if (xTaskCreate(led_task, "led_status", 3072, NULL, 2, NULL) != pdPASS) {
-        ESP_LOGE(TAG, "sem RAM para a task (%u livres)",
-                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    /* Pilha na PSRAM: a RAM interna do painel é escassa depois do boot e a task
+       nunca escreve em flash/NVS (o toggle grava pela task da LVGL). */
+    if (xTaskCreateWithCaps(led_task, "led_status", 3072, NULL, 2, NULL,
+                            MALLOC_CAP_SPIRAM) != pdPASS) {
+        ESP_LOGE(TAG, "sem memória para a task");
     }
 }
 

@@ -95,7 +95,8 @@ void setup()
      boot em diante o painel não tem mais isso (o display, a UI, o Wi-Fi e as
      pontes consomem 225KB dos 242KB). Ela só acorda quando alguém pede. */
   avatar_store_init();
-  /* idem: a task da fita também precisa nascer antes do display */
+  /* Cedo também: o canal RMT da fita aloca na RAM interna (a pilha da task
+     vai para a PSRAM). */
   led_status_init();
 
   logSection("Initialize panel device");

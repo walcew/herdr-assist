@@ -1,7 +1,7 @@
 # Fita de LED de status — design
 
 **Data:** 2026-10-01
-**Estado:** proposto (aguardando tickets)
+**Estado:** implementado (branch feat/fita-led)
 
 ## Problem Statement
 
@@ -49,7 +49,7 @@ desligada no menu e faz um autoteste de cores ao ligar.
 
 ## Implementation Decisions
 
-- **Hardware:** 7 LEDs WS2812B (ordem GRB presumida, confirmada pelo autoteste) alimentados em 3.3V pelo P3: pino 1 GND, pino 2 3.3V, pino 3 IO17 como dado. IO18 (pino 4) fica sem uso. 3.3V dispensa level shifter.
+- **Hardware:** 7 LEDs WS2812B (ordem GRB presumida, confirmada pelo autoteste) alimentados em 3.3V pelo P3: pino 1 GND, pino 2 3.3V, pino 3 IO17 como dado. IO18 (pino 4) fica sem uso. 3.3V dispensa level shifter. O P4 (SH 1,0 mm) tem a mesma pinagem no esquemático e também serve.
 - **Módulo novo de efeito (puro):** função de renderização que recebe o estado do avatar e o tempo em ms e preenche 7 cores RGB já com o teto de brilho aplicado. C11 puro, sem ESP-IDF nem LVGL. É todo o comportamento visível e o único seam de teste.
 - **Módulo novo de driver da fita:** dono do RMT no IO17, de uma task própria que chama o render a ~50 Hz e envia para a fita, do autoteste no boot e do liga/desliga. Interface mínima: iniciar, definir o estado, ligar/desligar.
 - **Driver de LED:** componente oficial `espressif/led_strip` (backend RMT) pelo gerenciador de componentes do ESP-IDF, mantido pela Espressif, sem vendor de terceiros (preferido a um encoder RMT próprio).
