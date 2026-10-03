@@ -92,6 +92,14 @@ typedef enum {
     X(PENDING_TITLE,   "Pending changes",             "Configurações pendentes")             \
     X(PENDING_SUB,     "Tap to apply and restart",    "Toque para aplicar e reiniciar")      \
     X(RESTARTING,      "Restarting...",               "Reiniciando...")                      \
+    X(FACTORY_RESET,   "Factory reset",               "Restaurar padrões de fábrica")        \
+    X(FACTORY_WARN,    "This erases Wi-Fi, paired hosts, lock pattern and every setting. "   \
+                       "There is no undo.",                                                  \
+                       "Isto apaga Wi-Fi, hosts pareados, padrão de bloqueio e todos os "    \
+                       "ajustes. Não há como desfazer.")                                     \
+    X(FACTORY_KEEP,    "The firmware and the SD card stay as they are.",                     \
+                       "O firmware e o cartão SD ficam como estão.")                         \
+    X(FACTORY_GO,      "Erase and restart",           "Apagar e reiniciar")                  \
     /* --- configurações: Wi-Fi --- */                                                       \
     X(WIFI_NETWORKS,   "Wi-Fi networks",              "Redes Wi-Fi")                         \
     X(SCANNING,        "Scanning networks...",        "Buscando redes...")                   \

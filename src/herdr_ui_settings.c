@@ -7,6 +7,7 @@
 #include <lvgl.h>
 
 #include "esp_system.h"
+#include "nvs_flash.h"
 
 #include "avatar.h"
 #include "sd.h"
@@ -39,6 +40,7 @@ typedef enum {
     VIEW_AV_REPOS,
     VIEW_AV_FORMAT,
     VIEW_LOCK,
+    VIEW_FACTORY,
 } view_t;
 
 static lv_obj_t *s_panel;
@@ -1704,6 +1706,51 @@ static void restart_cb(lv_event_t *e)
     restart_now();
 }
 
+/* ---------- view: padrões de fábrica ---------- */
+
+static void factory_go_cb(lv_event_t *e)
+{
+    (void)e;
+    /* Apaga a partição NVS inteira (config, Wi-Fi, bloqueio, brilho, LED,
+       avatar escolhido); o boot seguinte recria tudo zerado, como de fábrica.
+       Firmware (partições OTA) e cartão SD não são tocados. */
+    nvs_flash_erase();
+    restart_now();
+}
+
+static void factory_open_cb(lv_event_t *e)
+{
+    (void)e;
+    s_view = VIEW_FACTORY;
+    lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);
+    update_toast();
+    build_bar(T(STR_FACTORY_RESET), back_to_main_cb, NULL);
+    hide_kb();
+    lv_obj_clean(s_content);
+
+    lv_obj_t *warn = lv_label_create(s_content);
+    lv_label_set_text(warn, T(STR_FACTORY_WARN));
+    lv_obj_set_style_text_font(warn, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(warn, UI_BLOCKED, 0);
+    lv_obj_set_width(warn, LV_PCT(100));
+    lv_label_set_long_mode(warn, LV_LABEL_LONG_WRAP);
+
+    lv_obj_t *sub = lv_label_create(s_content);
+    lv_label_set_text(sub, T(STR_FACTORY_KEEP));
+    lv_obj_set_style_text_font(sub, &lv_font_ui_12, 0);
+    lv_obj_set_style_text_color(sub, UI_MUTED, 0);
+    lv_obj_set_width(sub, LV_PCT(100));
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
+
+    lv_obj_t *btn = make_row(factory_go_cb, NULL, 44);
+    lv_obj_set_style_bg_color(btn, UI_BLOCKED, 0);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_label_set_text(bl, T(STR_FACTORY_GO));
+    lv_obj_set_style_text_font(bl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(bl, UI_TEXT, 0);
+    lv_obj_center(bl);
+}
+
 static void avatars_open_cb(lv_event_t *e)
 {
     (void)e;
@@ -1927,6 +1974,13 @@ static void show_main(void)
     lv_obj_set_style_text_font(rsl, &lv_font_ui_14, 0);
     lv_obj_set_style_text_color(rsl, UI_TEXT, 0);
     lv_obj_center(rsl);
+
+    lv_obj_t *frst = make_row(factory_open_cb, NULL, 44);
+    lv_obj_t *frl = lv_label_create(frst);
+    lv_label_set_text(frl, T(STR_FACTORY_RESET));
+    lv_obj_set_style_text_font(frl, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(frl, UI_BLOCKED, 0);
+    lv_obj_center(frl);
 
     /* versão instalada + atalho de atualização; o valor à direita da segunda
        linha só aparece quando a checagem já anunciou uma versão diferente */
