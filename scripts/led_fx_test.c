@@ -23,7 +23,7 @@ static led_rgb_t px[LED_FX_COUNT];
 
 static void render(led_fx_state_t st, uint32_t t)
 {
-    led_fx_render(st, t, px);
+    led_fx_render(st, t, 100, px);
 }
 
 static int lit(const led_rgb_t *p)
@@ -79,7 +79,7 @@ int main(void)
         for (unsigned s = 0; s < sizeof(per) / sizeof(per[0]); s++) {
             for (uint32_t t = 0; t < per[s].period; t += 37) {
                 led_rgb_t a[LED_FX_COUNT];
-                led_fx_render(per[s].st, t, a);
+                led_fx_render(per[s].st, t, 100, a);
                 render(per[s].st, t + per[s].period * 5);
                 for (int i = 0; i < LED_FX_COUNT; i++) {
                     CHECK(a[i].r == px[i].r && a[i].g == px[i].g && a[i].b == px[i].b,
@@ -149,6 +149,30 @@ int main(void)
         render(LED_FX_IDLE, 0);
         CHECK(px[0].g < peak.g, "IDLE devia respirar (vale mais fraco que o pico)");
     }
+
+    /* 7. nível do slider: 0 apaga tudo; nível baixo nunca apaga um pixel que
+          acende em 100 nem passa dele */
+    for (unsigned s = 0; s < sizeof(all) / sizeof(all[0]); s++) {
+        for (uint32_t t = 0; t < 6000; t += 13) {
+            led_rgb_t full[LED_FX_COUNT];
+            led_fx_render(all[s], t, 100, full);
+            led_fx_render(all[s], t, 0, px);
+            CHECK(count_lit() == 0, "estado %d t=%u: nível 0 devia apagar", all[s], t);
+            for (uint8_t lv = 5; lv < 100; lv += 5) {
+                led_fx_render(all[s], t, lv, px);
+                for (int i = 0; i < LED_FX_COUNT; i++) {
+                    CHECK(lit(&px[i]) == lit(&full[i]),
+                          "estado %d t=%u nível %u led %d: aceso mudou", all[s], t, lv, i);
+                    CHECK(px[i].r <= full[i].r && px[i].g <= full[i].g && px[i].b <= full[i].b,
+                          "estado %d t=%u nível %u led %d: passou do 100%%", all[s], t, lv, i);
+                }
+            }
+        }
+    }
+    render(LED_FX_BLOCKED, 100);
+    led_rgb_t full = px[0];
+    led_fx_render(LED_FX_BLOCKED, 100, 50, px);
+    CHECK(px[0].r < full.r && px[0].r > 0, "nível 50 devia dimmar o vermelho");
 
     if (failures) {
         printf("%d falha(s)\n", failures);

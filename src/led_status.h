@@ -10,6 +10,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "avatar.h"
 
@@ -23,11 +24,11 @@ void led_status_init(void);
 /** Estado a mostrar; troca na hora. Pode ser chamada de qualquer task. */
 void led_status_set_state(avatar_state_t st);
 
-/** Toggle "Fita de LED" das Configurações; ligado de fábrica. */
-bool led_status_enabled(void);
+/** Nível do slider "LED" das Configurações (0..100; 0 = apagada); 100 de fábrica. */
+uint8_t led_status_level(void);
 
-/** Liga/desliga a fita na hora e salva na NVS (sem reiniciar). */
-void led_status_set_enabled(bool enabled);
+/** Aplica o nível na hora; `save` grava na NVS (só ao soltar o slider). */
+void led_status_set_level(uint8_t pct, bool save);
 
 #ifdef __cplusplus
 }

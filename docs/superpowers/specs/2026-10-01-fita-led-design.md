@@ -20,7 +20,7 @@ vermelho pulsando rápido quando algum agente precisa de ação, ciano respirand
 quando algum terminou, âmbar em movimento enquanto trabalham, verde respirando
 devagar quando está tudo ocioso e um único ponto branco fraco piscando quando
 não há host online. A fita continua viva com a tela bloqueada, pode ser
-desligada no menu e faz um autoteste de cores ao ligar.
+dimmada ou apagada por um slider no menu e faz um autoteste de cores ao ligar.
 
 ## User Stories
 
@@ -33,10 +33,11 @@ desligada no menu e faz um autoteste de cores ao ligar.
 7. Como usuário, quero que a fita mostre o pior estado entre todos os agentes, na mesma prioridade do avatar (desconectado > bloqueado > finalizado > trabalhando > ocioso), para que fita e avatar nunca discordem.
 8. Como usuário, quero que a troca de estado seja instantânea, para que um bloqueio chame atenção no momento em que acontece.
 9. Como usuário, quero que a fita continue mostrando o estado com a tela bloqueada, para ler o status sem desbloquear.
-10. Como usuário, quero um toggle "Fita de LED" em Configurações → Dispositivo, para apagar a fita à noite sem desconectar o cabo.
-11. Como usuário, quero que o toggle venha ligado de fábrica, para que a fita funcione assim que for conectada.
-12. Como usuário, quero que a escolha do toggle sobreviva a reinício e a atualização OTA, para não reconfigurar a cada boot.
-13. Como usuário, quero que, ao desligar o toggle, a fita apague na hora, e ao religar volte ao estado corrente, sem reiniciar o painel.
+10. Como usuário, quero um slider "LED" em Configurações → Dispositivo (0–100%, passos de 5%), para baixar a fita à noite ou apagá-la em 0 sem desconectar o cabo.
+11. Como usuário, quero que o slider venha em 100% de fábrica, para que a fita funcione assim que for conectada.
+12. Como usuário, quero que o nível sobreviva a reinício e a atualização OTA, para não reconfigurar a cada boot.
+13. Como usuário, quero que o nível mude na hora enquanto arrasto, sem reiniciar o painel, e que em níveis baixos todo estado continue visível (só o 0 apaga).
+13a. Como usuário, quero um slider "Brilho da tela" (10–100%) logo acima, para dimmar o backlight; o piso evita uma tela preta sem caminho de volta.
 14. Como usuário, quero que a fita acenda vermelho, verde e azul por ~200 ms cada ao ligar o painel, para confirmar que os 7 LEDs estão vivos e que a ordem das cores está certa.
 15. Como usuário, quero que o brilho fique limitado a um teto seguro, para que os 7 LEDs no regulador de 3.3V não resetem o painel.
 16. Como mantenedor, quero o teto de brilho num único valor no código, para calibrar se a fita ficar fraca ou forte demais.
@@ -64,24 +65,24 @@ desligada no menu e faz um autoteste de cores ao ligar.
   | IDLE | verde | respiração lenta, ciclo ~6 s |
   | DISCONNECTED | branco fraco | um único LED pisca a cada ~3 s |
 
-- **Brilho:** teto fixo num único `#define`; sem slider.
-- **Toggle:** chave própria na NVS (namespace da fita, negada: ausente = ligada), no mesmo padrão do lockscreen — a configuração persistente do painel só vale após reiniciar e é compartilhada com o Cardputer, então não serve. Switch em Configurações → Dispositivo com rótulo em PT e EN via i18n. Aplica na hora, sem reboot.
+- **Brilho:** teto fixo num único `#define` (= 100% do slider); o render recebe o nível 0..100 e escala por cima dele, com piso de 1/255 em todo canal aceso.
+- **Sliders:** LED (0–100%, 0 apaga) e Brilho da tela (10–100%, PWM do backlight), em passos de 5%, cada um com chave própria na NVS (`ledstrip/level`, `backlight/level`; ausente = 100), no mesmo padrão do lockscreen — a configuração persistente do painel só vale após reiniciar e é compartilhada com o Cardputer, então não serve. Aplicam na hora ao arrastar e gravam na NVS ao soltar. Substituem o toggle da primeira versão (a chave `ledstrip/off` deixou de ser lida).
 - **Brilho calibrado no hardware:** teto final 200 (~78%); o pior estado (ciano na fita inteira) fica em ~160 mA.
-- **Lockscreen:** a fita ignora o bloqueio de tela; só o toggle a apaga.
-- **Autoteste:** no boot, R, G, B por ~200 ms cada em todos os LEDs, depois entra no estado corrente. Respeita o toggle: desligado, não acende.
+- **Lockscreen:** a fita ignora o bloqueio de tela; só o slider em 0 a apaga.
+- **Autoteste:** no boot, R, G, B por ~200 ms cada em todos os LEDs, depois entra no estado corrente. Roda no nível do slider; em 0, não acende.
 - **Escopo de alvo:** só o painel JC3248W535EN. Nada entra na lista do `sync_shared.py` do Cardputer.
 
 ## Testing Decisions
 
 - **Seam único:** o render puro. Um bom teste verifica a saída (cores dos 7 LEDs) para estado e tempo dados: cor dominante por estado, teto de brilho nunca excedido, DISCONNECTED com só um LED aceso no pico e todos apagados fora dele, BLOCKED com fita inteira acesa no pulso e apagada na pausa, WORKING com o ponto mais brilhante avançando com o tempo, periodicidade (t e t + período dão a mesma saída). Não testa curvas exatas nem valores internos.
 - **Prior art:** testes de host em C dos módulos puros, rodados no job `host-test` do CI (`term_parse_test`, `money_test`, `limits_merge_test`): um `*_test.c` com `CHECK`, compilado com `cc` junto do `.c` do módulo. O novo teste segue o mesmo molde e entra no CI.
-- **Hardware:** driver, task e toggle são validados à mão no painel novo (gravação USB do `update.bin`, preservando a NVS): autoteste no boot, cada um dos 5 estados, toggle ligando/desligando sem reboot, lockscreen ativo.
+- **Hardware:** driver, task e sliders são validados à mão no painel novo (gravação USB do `update.bin`, preservando a NVS): autoteste no boot, cada um dos 5 estados, slider dimmando e apagando em 0 sem reboot, brilho da tela em 10% legível, lockscreen ativo.
 - **Build:** `pio run` do painel e do Cardputer verdes, para provar que o Cardputer não foi afetado.
 
 ## Out of Scope
 
 - Um LED por agente ou por host; a fita mostra só o estado global.
-- Slider de brilho, escolha de cores ou de animações pelo usuário.
+- Escolha de cores ou de animações pelo usuário.
 - Fade entre estados.
 - Fita no Cardputer (ele não tem P3; o LED interno dele também fica de fora).
 - Fitas de outros tamanhos ou pino configurável; 7 LEDs e IO17 são constantes.

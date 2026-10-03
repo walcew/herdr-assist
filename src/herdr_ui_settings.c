@@ -17,6 +17,7 @@
 #include "herdr_model.h"
 #include "herdr_ui.h"
 #include "i18n.h"
+#include "backlight.h"
 #include "led_status.h"
 #include "lockscreen.h"
 #include "net.h"
@@ -1642,12 +1643,58 @@ static void auto_update_cb(lv_event_t *e)
     update_toast();
 }
 
-/* Fita de LED do P3: diferente dos demais ajustes, vale na hora e se salva
-   sozinha (como o lockscreen) — não passa pela cópia em edição. */
-static void led_strip_cb(lv_event_t *e)
+/* Sliders de brilho (tela e LED do P3): diferente dos demais ajustes, valem
+   na hora e se salvam sozinhos (como o lockscreen) — não passam pela cópia em
+   edição. O slider anda em passos de 5%; a NVS só grava ao soltar. */
+static void show_level(lv_obj_t *val, uint8_t pct, bool led)
 {
-    lv_obj_t *sw = lv_event_get_target(e);
-    led_status_set_enabled(lv_obj_has_state(sw, LV_STATE_CHECKED));
+    if (led && pct == 0) {
+        lv_label_set_text(val, T(STR_LED_OFF));
+    } else {
+        lv_label_set_text_fmt(val, "%u%%", (unsigned)pct);
+    }
+}
+
+/* VALUE_CHANGED aplica na hora; RELEASED (ao soltar) grava na NVS */
+static void led_level_cb(lv_event_t *e)
+{
+    uint8_t pct = (uint8_t)(lv_slider_get_value(lv_event_get_target(e)) * 5);
+    led_status_set_level(pct, lv_event_get_code(e) == LV_EVENT_RELEASED);
+    show_level(lv_event_get_user_data(e), pct, true);
+}
+
+static void screen_level_cb(lv_event_t *e)
+{
+    uint8_t pct = (uint8_t)(lv_slider_get_value(lv_event_get_target(e)) * 5);
+    backlight_set_level(pct, lv_event_get_code(e) == LV_EVENT_RELEASED);
+    show_level(lv_event_get_user_data(e), pct, false);
+}
+
+/** Linha de dois andares: rótulo e valor em cima, slider na largura toda. */
+static void make_level_row(const char *label, uint8_t pct, uint8_t min_pct,
+                           lv_event_cb_t cb, bool led)
+{
+    lv_obj_t *row = make_row(NULL, NULL, 72);
+    lv_obj_t *l = lv_label_create(row);
+    lv_label_set_text(l, label);
+    lv_obj_set_style_text_font(l, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(l, UI_TEXT, 0);
+    lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 4);
+    lv_obj_t *val = lv_label_create(row);
+    lv_obj_set_style_text_font(val, &lv_font_ui_14, 0);
+    lv_obj_set_style_text_color(val, UI_MUTED, 0);
+    lv_obj_align(val, LV_ALIGN_TOP_RIGHT, 0, 4);
+    show_level(val, pct, led);
+
+    lv_obj_t *sl = lv_slider_create(row);
+    lv_obj_set_width(sl, LV_PCT(100));
+    lv_obj_align(sl, LV_ALIGN_BOTTOM_MID, 0, -12);
+    lv_obj_set_ext_click_area(sl, 12);
+    lv_obj_set_style_bg_color(sl, UI_SWITCH_OFF, LV_PART_MAIN);
+    lv_slider_set_range(sl, min_pct / 5, 20);
+    lv_slider_set_value(sl, pct / 5, LV_ANIM_OFF);
+    lv_obj_add_event_cb(sl, cb, LV_EVENT_VALUE_CHANGED, val);
+    lv_obj_add_event_cb(sl, cb, LV_EVENT_RELEASED, val);
 }
 
 /** Reinício avulso: o que estiver pendente de salvar é descartado. */
@@ -1870,21 +1917,9 @@ static void show_main(void)
     lv_obj_set_style_text_color(lkv, UI_MUTED, 0);
     lv_obj_align(lkv, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    lv_obj_t *ledrow = make_row(NULL, NULL, 44);
-    lv_obj_t *ledl = lv_label_create(ledrow);
-    lv_label_set_text(ledl, T(STR_LED_STRIP));
-    lv_obj_set_style_text_font(ledl, &lv_font_ui_14, 0);
-    lv_obj_set_style_text_color(ledl, UI_TEXT, 0);
-    lv_obj_align(ledl, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t *ledsw = lv_switch_create(ledrow);
-    lv_obj_set_size(ledsw, 48, 26);
-    lv_obj_set_ext_click_area(ledsw, 12);
-    lv_obj_align(ledsw, LV_ALIGN_RIGHT_MID, 0, 0);
-    lv_obj_set_style_bg_color(ledsw, UI_SWITCH_OFF, 0);
-    if (led_status_enabled()) {
-        lv_obj_add_state(ledsw, LV_STATE_CHECKED);
-    }
-    lv_obj_add_event_cb(ledsw, led_strip_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    make_level_row(T(STR_SCREEN_BRIGHT), backlight_level(), BACKLIGHT_MIN,
+                   screen_level_cb, false);
+    make_level_row(T(STR_LED), led_status_level(), 0, led_level_cb, true);
 
     lv_obj_t *rst = make_row(restart_cb, NULL, 44);
     lv_obj_t *rsl = lv_label_create(rst);

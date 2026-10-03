@@ -228,9 +228,11 @@ with the screen locked. P4 (1.0 mm) carries the same signals and works too.
 | No host online | dim white | a single LED blinks every ~3 s |
 
 On boot the strip flashes red → green → blue to prove all LEDs work and the colour order is
-right. **Settings → Device → LED strip** turns it off and on instantly, no reboot. Brightness
-is capped (`LED_FX_MAX` in `src/led_fx.h`) because the strip shares the 3.3 V regulator with
-the ESP32 and the display.
+right. The **Settings → Device → LED** slider sets the strip brightness in 5% steps, applied
+instantly with no reboot; 0 turns it off (and skips the boot flash). 100% is the cap
+(`LED_FX_MAX` in `src/led_fx.h`), because the strip shares the 3.3 V regulator with the ESP32
+and the display. The **Screen brightness** slider right above it dims the display backlight
+(10–100%).
 
 ### Other boards: M5Stack Cardputer
 

@@ -230,9 +230,11 @@ com a tela bloqueada. O P4 (1,0 mm) tem os mesmos sinais e também serve.
 | Nenhum host online | branco fraco | um único LED pisca a cada ~3 s |
 
 No boot a fita pisca vermelho → verde → azul para provar que todos os LEDs funcionam e que a
-ordem de cor está certa. **Configurações → Dispositivo → Fita de LED** liga e desliga na
-hora, sem reiniciar. O brilho tem teto (`LED_FX_MAX` em `src/led_fx.h`) porque a fita divide
-o regulador de 3.3V com o ESP32 e o display.
+ordem de cor está certa. O slider **Configurações → Dispositivo → LED** ajusta o brilho da
+fita em passos de 5%, na hora e sem reiniciar; em 0 ela apaga (e pula o pisca do boot). O 100%
+é o teto (`LED_FX_MAX` em `src/led_fx.h`), porque a fita divide o regulador de 3.3V com o
+ESP32 e o display. O slider **Brilho da tela**, logo acima, ajusta o backlight do display
+(10–100%).
 
 ### Outras placas: M5Stack Cardputer
 

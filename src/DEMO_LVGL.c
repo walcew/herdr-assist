@@ -14,6 +14,7 @@
 #include "herdr_conn.h"
 #include "fw_update.h"
 #include "avatar_store.h"
+#include "backlight.h"
 #include "led_status.h"
 #include <esp_log.h>   // Add this line to include the header file that declares ESP_LOGI
 #include <esp_flash.h> // Add this line to include the header file that declares esp_flash_t
@@ -112,7 +113,7 @@ void setup()
   cfg.lvgl_port_cfg.task_stack = 8192;
 
   bsp_display_start_with_config(&cfg);
-  bsp_display_backlight_on();
+  backlight_init();   /* no nível salvo do slider de brilho */
 
   logSection("Create UI");
   /* Lock the mutex due to the LVGL APIs are not thread-safe */

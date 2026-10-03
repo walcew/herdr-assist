@@ -23,12 +23,12 @@ _Static_assert(LED_FX_DISCONNECTED == (int)AVATAR_ST_DISCONNECTED &&
                LED_FX_BLOCKED == (int)AVATAR_ST_BLOCKED,
                "led_fx_state_t e avatar_state_t divergiram");
 
-#define NVS_NS  "ledstrip"
-#define KEY_OFF "off"   /* negado: chave ausente = ligada, o padrão de fábrica */
+#define NVS_NS    "ledstrip"
+#define KEY_LEVEL "level"   /* 0..100; ausente = 100, o padrão de fábrica */
 
 static led_strip_handle_t s_strip;
-/* escrito pela task da LVGL (toggle), lido pela da fita */
-static volatile bool s_enabled = true;
+/* nível do slider, escrito pela task da LVGL e lido pela da fita */
+static volatile uint8_t s_level = 100;
 /* escrito pela task da LVGL, lido pela da fita: um int é atômico no Xtensa */
 static volatile int s_state = AVATAR_ST_DISCONNECTED;
 
@@ -37,9 +37,9 @@ static volatile int s_state = AVATAR_ST_DISCONNECTED;
    não GRB (trocar color_component_format abaixo). */
 static void self_test(void)
 {
-    static const uint8_t rgb[3][3] = {
-        {LED_FX_MAX, 0, 0}, {0, LED_FX_MAX, 0}, {0, 0, LED_FX_MAX},
-    };
+    /* no nível do slider: um reboot de madrugada não clareia o quarto */
+    uint8_t v = LED_FX_MAX * s_level / 100;
+    const uint8_t rgb[3][3] = {{v, 0, 0}, {0, v, 0}, {0, 0, v}};
     for (int c = 0; c < 3; c++) {
         for (int i = 0; i < LED_FX_COUNT; i++) {
             led_strip_set_pixel(s_strip, i, rgb[c][0], rgb[c][1], rgb[c][2]);
@@ -52,19 +52,20 @@ static void self_test(void)
 static void led_task(void *arg)
 {
     (void)arg;
-    if (s_enabled) {
+    if (s_level) {
         self_test();
     }
     led_rgb_t px[LED_FX_COUNT];
     for (;;) {
-        if (!s_enabled) {
+        uint8_t level = s_level;
+        if (!level) {
             led_strip_clear(s_strip);
             vTaskDelay(pdMS_TO_TICKS(FRAME_MS * 5));
             continue;
         }
         /* 6000 = MMC dos períodos de led_fx: a fase segue contínua no wrap */
         uint32_t now = (uint32_t)((esp_timer_get_time() / 1000) % 6000);
-        led_fx_render((led_fx_state_t)s_state, now, px);
+        led_fx_render((led_fx_state_t)s_state, now, level, px);
         for (int i = 0; i < LED_FX_COUNT; i++) {
             led_strip_set_pixel(s_strip, i, px[i].r, px[i].g, px[i].b);
         }
@@ -78,9 +79,9 @@ void led_status_init(void)
     /* A NVS já foi inicializada no boot pelo panel_cfg_init(). */
     nvs_handle_t h;
     if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
-        uint8_t off = 0;
-        nvs_get_u8(h, KEY_OFF, &off);
-        s_enabled = off == 0;
+        uint8_t level = 100;
+        nvs_get_u8(h, KEY_LEVEL, &level);
+        s_level = level > 100 ? 100 : level;
         nvs_close(h);
     }
 
@@ -105,7 +106,7 @@ void led_status_init(void)
         return;
     }
     /* Pilha na PSRAM: a RAM interna do painel é escassa depois do boot e a task
-       nunca escreve em flash/NVS (o toggle grava pela task da LVGL). */
+       nunca escreve em flash/NVS (o slider grava pela task da LVGL). */
     if (xTaskCreateWithCaps(led_task, "led_status", 3072, NULL, 2, NULL,
                             MALLOC_CAP_SPIRAM) != pdPASS) {
         ESP_LOGE(TAG, "sem memória para a task");
@@ -117,17 +118,17 @@ void led_status_set_state(avatar_state_t st)
     s_state = st;
 }
 
-bool led_status_enabled(void)
+uint8_t led_status_level(void)
 {
-    return s_enabled;
+    return s_level;
 }
 
-void led_status_set_enabled(bool enabled)
+void led_status_set_level(uint8_t pct, bool save)
 {
-    s_enabled = enabled;
+    s_level = pct > 100 ? 100 : pct;
     nvs_handle_t h;
-    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
-        nvs_set_u8(h, KEY_OFF, enabled ? 0 : 1);
+    if (save && nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, KEY_LEVEL, s_level);
         nvs_commit(h);
         nvs_close(h);
     }

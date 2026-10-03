@@ -41,8 +41,12 @@ typedef struct {
     uint8_t r, g, b;
 } led_rgb_t;
 
-/** Preenche `out` com a cor de cada LED para o estado no instante `t_ms`. */
-void led_fx_render(led_fx_state_t st, uint32_t t_ms, led_rgb_t out[LED_FX_COUNT]);
+/**
+ * Preenche `out` com a cor de cada LED para o estado no instante `t_ms`, no
+ * nível do slider `pct` (0..100 do teto LED_FX_MAX; 0 apaga tudo).
+ */
+void led_fx_render(led_fx_state_t st, uint32_t t_ms, uint8_t pct,
+                   led_rgb_t out[LED_FX_COUNT]);
 
 #ifdef __cplusplus
 }

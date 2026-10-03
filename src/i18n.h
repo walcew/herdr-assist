@@ -168,7 +168,9 @@ typedef enum {
     X(FW_ERR_DOWNLOAD, "Download failed. Try again.", "Falha no download. Tente de novo.")   \
     X(FW_TOAST_SUB,    "Tap to update",               "Toque para atualizar")                 \
     X(FW_AUTO,         "Automatic updates",           "Atualizações automáticas")             \
-    X(LED_STRIP,       "LED strip",                   "Fita de LED")                          \
+    X(SCREEN_BRIGHT,   "Screen brightness",           "Brilho da tela")                       \
+    X(LED,             "LED",                         "LED")                                  \
+    X(LED_OFF,         "Off",                         "Desligado")                            \
     X(FW_SEC_BRIDGES,  "Bridges",                     "Pontes")                               \
     X(FW_BRIDGE_UNKNOWN, "does not report",           "não informa")                          \
     X(FW_BRIDGE_NONE,  "No bridge connected.",        "Nenhuma ponte conectada.")             \
