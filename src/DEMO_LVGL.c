@@ -14,6 +14,7 @@
 #include "herdr_conn.h"
 #include "fw_update.h"
 #include "avatar_store.h"
+#include "led_status.h"
 #include <esp_log.h>   // Add this line to include the header file that declares ESP_LOGI
 #include <esp_flash.h> // Add this line to include the header file that declares esp_flash_t
 #include <esp_chip_info.h>
@@ -94,6 +95,8 @@ void setup()
      boot em diante o painel não tem mais isso (o display, a UI, o Wi-Fi e as
      pontes consomem 225KB dos 242KB). Ela só acorda quando alguém pede. */
   avatar_store_init();
+  /* idem: a task da fita também precisa nascer antes do display */
+  led_status_init();
 
   logSection("Initialize panel device");
   // ESP_LOGI(TAG, "Initialize panel device");

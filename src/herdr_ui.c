@@ -15,6 +15,7 @@
 #include "activity_log.h"
 #include "avatar.h"
 #include "i18n.h"
+#include "led_status.h"
 #include "herdr_model.h"
 #include "money.h"
 #include "herdr_conn.h"
@@ -641,10 +642,12 @@ static void refresh_home(void)
             break;
         }
     }
-    avatar_set_state(!online ? AVATAR_ST_DISCONNECTED :
-                     blocked ? AVATAR_ST_BLOCKED :
-                     done    ? AVATAR_ST_DONE :
-                     working ? AVATAR_ST_WORKING : AVATAR_ST_IDLE);
+    avatar_state_t st = !online ? AVATAR_ST_DISCONNECTED :
+                        blocked ? AVATAR_ST_BLOCKED :
+                        done    ? AVATAR_ST_DONE :
+                        working ? AVATAR_ST_WORKING : AVATAR_ST_IDLE;
+    avatar_set_state(st);
+    led_status_set_state(st);   /* a fita do P3 mostra o mesmo estado */
     update_beacon(blocked);
 
     for (int w = 0; w < s_hw_count; w++) {
