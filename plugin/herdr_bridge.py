@@ -752,7 +752,8 @@ async def push_agents() -> set[str] | None:
     panes = result.get("panes", [])
     # nome amigável do agente = rótulo da aba no Herdr ("OMP", "agent-claude");
     # o basename do cwd ("tmp", "luispoveda93") não diz nada a quem olha a tela
-    tabs_res = await herdr_request("tab.list") or {}
+    # a CLI não tem equivalente de tab.list: no Windows fica o basename
+    tabs_res = {} if USE_CLI else await herdr_request("tab.list") or {}
     tab_label = {t.get("tab_id"): (t.get("label") or "")
                  for t in tabs_res.get("tabs", [])}
     # Composição de panes (todos, não só os com agente) chaveada por

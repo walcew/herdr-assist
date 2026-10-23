@@ -140,3 +140,28 @@ class TestRefreshMachines(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTabLabelNoCli(unittest.TestCase):
+    """A CLI (Windows) não tem tab.list: pedir a cada ciclo só enchia o log."""
+
+    def test_modo_cli_nao_pede_tab_list_e_usa_o_basename(self):
+        calls = []
+
+        async def herdr_request(method, params=None):
+            calls.append(method)
+            if method == "pane.list":
+                return {"panes": [{"pane_id": "w1:p1", "agent": "claude",
+                                   "agent_status": "idle", "cwd": "/home/luis/app",
+                                   "workspace_id": "w1", "tab_id": "w1:t1"}]}
+            return None
+
+        for name, value in (("herdr_request", herdr_request), ("USE_CLI", True),
+                            ("remote_agents", []), ("last_snapshot", "")):
+            old = getattr(b, name)
+            setattr(b, name, value)
+            self.addCleanup(setattr, b, name, old)
+        asyncio.run(b.push_agents())
+        self.assertNotIn("tab.list", calls)
+        agents = json.loads(b.last_snapshot)["agents"]
+        self.assertEqual(agents[0]["project"], "app")
