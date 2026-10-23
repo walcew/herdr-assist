@@ -50,10 +50,6 @@ static const char *TAG = "herdr_conn";
    tempo a task não tenta mais nada, não faz ping e nem percebe a ponte
    voltar. 5 s é folgado para uma LAN. */
 #define CONNECT_TIMEOUT_S 5
-/* Teto do backoff de conexão. Sem ele, ponte fora do ar = uma tentativa a
-   cada 3 s para sempre, cada uma acordando o rádio — num device a bateria
-   isso é o gasto dominante, e descobrir a ponte 1 min depois custa pouco. */
-#define RETRY_CAP_MS    60000
 /* A espera pelo Wi-Fi também recua: 1 s para sempre é pior que 30 s. */
 #define WIFI_POLL_MIN_MS 1000
 #define WIFI_POLL_MAX_MS 30000
@@ -647,7 +643,9 @@ static bool discover_slot(conn_slot_t *s)
     return found;
 }
 
-static uint32_t s_retry_cap_ms = RETRY_CAP_MS;
+/* 0 = sem backoff: intervalos fixos de sempre (painel e Cardputer, na tomada).
+   Só um device a bateria liga o recuo, chamando herdr_conn_set_retry_cap_ms. */
+static uint32_t s_retry_cap_ms;
 static volatile bool s_suspended;   /* dormindo na tela de avatar */
 
 void herdr_conn_set_retry_cap_ms(uint32_t ms)
@@ -678,9 +676,12 @@ void herdr_conn_wake(void)
     notify_slots();
 }
 
-/* base dobrando a cada falha, com teto. */
+/* base dobrando a cada falha, com teto; sem backoff ligado, sempre a base. */
 static uint32_t backoff_ms(uint8_t fails, uint32_t base, uint32_t cap)
 {
+    if (!s_retry_cap_ms) {
+        return base;
+    }
     uint32_t d = base;
     for (uint8_t i = 0; i < fails && d < cap; i++) {
         d <<= 1;

@@ -44,9 +44,11 @@ esp_err_t herdr_conn_start(void);
  */
 const char *herdr_conn_bridge_version(int host);
 
-/* Teto do backoff de reconexão, em ms (padrão 60 s). Suba quando a bateria
-   estiver curta: cada tentativa acorda o rádio, e num device a bateria isso
-   custa mais do que a latência de reconectar um ou dois minutos depois. */
+/* Liga o backoff de reconexão com este teto, em ms. Sem esta chamada as
+   tentativas seguem nos intervalos fixos (Wi-Fi 1 s, descoberta 30 s, conexão
+   3 s). Suba o teto quando a bateria estiver curta: cada tentativa acorda o
+   rádio, e num device a bateria isso custa mais do que a latência de
+   reconectar um ou dois minutos depois. */
 void herdr_conn_set_retry_cap_ms(uint32_t ms);
 
 /* Suspende as tentativas (bateria) e só volta com herdr_conn_wake().
