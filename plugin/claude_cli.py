@@ -10,14 +10,19 @@ pelo CLI dentro do Herdr, delegar a ele vale em todo SO e não toca em token
 nenhum.
 
 `claude -p "/usage"` não gasta tokens (num_turns 0, custo 0) e respeita
-CLAUDE_CONFIG_DIR — o multi-conta continua valendo. Mas cada invocação grava
-uma sessão em projects/<cwd-codificado>/ do config-dir: com o cwd herdado da
-ponte, uma coleta por minuto despejou milhares de jsonl no diretório de
-projeto do plugin e quebrou a resolução de transcript por cwd dos panes
-abertos ali (o "mais recente por mtime" virava um fantasma sem assistant).
-Por isso _run roda com cwd=config_dir — existe sempre, nunca é cwd de pane de
-trabalho, e o cleanup de 30 dias do próprio CC apaga o resíduo. Chamadas são
-bloqueantes (subprocess): só de dentro do executor.
+CLAUDE_CONFIG_DIR — o multi-conta continua valendo. Mas, sem flags, cada
+invocação é uma sessão completa: grava um jsonl em projects/<cwd-codificado>/
+(uma coleta por minuto chegou a ~1.400 arquivos/dia) e dispara os hooks de
+SessionStart do usuário — inclusive o de estado de agente do Herdr. Por isso o
+/usage roda com USAGE_FLAGS: sem persistência de sessão, sem MCP e sem hooks.
+O --bare faria o mesmo de uma vez, mas não lê OAuth nem Keychain e mataria o
+login por assinatura.
+
+_run roda com cwd=config_dir: existe sempre, nunca é cwd de pane de trabalho
+(um transcript que escapasse não viraria fantasma na resolução por mtime dos
+panes) e já tem pasta em projects/ — um cwd novo faz o CLI criar
+projects/<cwd>/memory mesmo sem persistência. Chamadas são bloqueantes
+(subprocess): só de dentro do executor.
 
 parse_usage/parse_reset são puras — testáveis sem invocar o CLI.
 """
@@ -63,6 +68,11 @@ _USAGE_RE = re.compile(
 _RESET_RE = re.compile(
     r"^(?P<mon>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+at\s+"
     r"(?P<hour>\d{1,2}):(?P<min>\d{2})\s*(?P<ampm>[ap]m)")
+
+# --settings (1.0.61) e disableAllHooks (1.0.68) são antigos; as outras duas
+# flags precedem o changelog. Hooks gerenciados por política continuam rodando.
+USAGE_FLAGS = ["--no-session-persistence", "--strict-mcp-config",
+               "--settings", '{"disableAllHooks":true}']
 
 WINDOW_SESSION_S = 18000    # 5h
 WINDOW_WEEK_S = 604800      # 7d
@@ -196,8 +206,8 @@ def auth_status(config_dir: str) -> dict:
 
 def usage_rows(config_dir: str) -> list:
     """Limites da conta pelo /usage. NotLoggedIn quando não há assinatura."""
-    out = _run(["-p", "/usage", "--output-format", "json"], config_dir,
-               USAGE_TIMEOUT_S)
+    out = _run(["-p", "/usage", "--output-format", "json"] + USAGE_FLAGS,
+               config_dir, USAGE_TIMEOUT_S)
     try:
         result = json.loads(out).get("result") or ""
     except ValueError as e:

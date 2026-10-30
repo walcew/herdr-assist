@@ -63,6 +63,21 @@ class TestRunNoConfigDir(unittest.TestCase):
             claude_cli._run(["auth", "status"], "/tmp/conta-x", 5)
         self.assertEqual(fake.call_args.kwargs["cwd"], "/tmp/conta-x")
 
+    def test_usage_nao_persiste_sessao_nem_roda_hooks(self):
+        # regressão: cada coleta gravava um transcript e disparava os hooks
+        fake = mock.Mock(return_value=types.SimpleNamespace(
+            returncode=0, stdout='{"result": ""}', stderr=""))
+        with mock.patch.object(claude_cli.subprocess, "run", fake), \
+                mock.patch.object(claude_cli, "_find_claude",
+                                  return_value="/x/claude"):
+            with self.assertRaises(claude_cli.NotLoggedIn):
+                claude_cli.usage_rows("/tmp/conta-x")
+        argv = fake.call_args.args[0]
+        self.assertIn("--no-session-persistence", argv)
+        self.assertIn("--strict-mcp-config", argv)
+        self.assertIn('{"disableAllHooks":true}', argv)
+        self.assertNotIn("--bare", argv)  # --bare não lê OAuth/Keychain
+
 
 class TestParseReset(unittest.TestCase):
     def test_hora_local_am(self):
