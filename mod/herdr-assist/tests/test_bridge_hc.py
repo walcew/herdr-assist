@@ -302,12 +302,32 @@ class TestBridgeOverFakeHc(BridgeHarness):
         self.assertTrue(content.startswith("0") and content.splitlines()[-1].startswith("39"))
         self.assertLess(len(content.splitlines()), 40)   # as mais antigas caíram
 
-    def test_send_text_chega_ao_core_ja_com_force(self):
+    def test_send_text_digita_no_pane_travado_sem_enter(self):
+        # o painel manda send_keys ["Enter"] logo depois: o terminal.send (que
+        # cola e já aperta Enter) submeteria duas vezes
         s, rf = self.connect_ready()
+        self.read_locked(s, rf)
         self.assertEqual(self.command(s, rf, {"type": "send_text", "pane_id": "t1a",
                                               "text": "oi agente"}), [])
-        self.assertEqual(self.calls("terminal.send"),
-                         [{"terminal": "t1a", "text": "oi agente", "force": True}])
+        self.assertEqual(self.calls_until("frame.data"), [{"channel": 1, "text": "oi agente"}])
+        self.assertEqual(self.calls("terminal.send"), [])
+        self.assertEqual(len(self.calls("terminal.attach")), 1)
+
+    def test_send_text_sem_trava_trava_no_tamanho_atual_do_terminal(self):
+        self.set_terminals([terminal("t1a", cols=120, rows=40)])
+        s, rf = self.connect_ready()
+        self.assertEqual(self.command(s, rf, {"type": "send_text", "pane_id": "t1a",
+                                              "text": "oi"}), [])
+        self.assertEqual(self.calls("terminal.attach"),
+                         [{"terminal": "t1a", "cols": 120, "rows": 40}])
+        self.assertEqual(self.calls_until("frame.data"), [{"channel": 1, "text": "oi"}])
+
+    def test_send_text_troca_caracteres_de_controle_por_espaco(self):
+        # digitado cru, um \n submeteria no meio e um ESC viraria sequência
+        s, rf = self.connect_ready()
+        self.read_locked(s, rf)
+        self.command(s, rf, {"type": "send_text", "pane_id": "t1a", "text": "a\nb\x1bc\x7fé"})
+        self.assertEqual(self.calls_until("frame.data")[0]["text"], "a b c é")
 
     def test_send_text_vazio_ou_longo_e_erro_sem_chegar_ao_core(self):
         s, rf = self.connect_ready()

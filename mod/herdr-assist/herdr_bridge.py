@@ -927,6 +927,34 @@ async def ctl_scroll(pane_id: str, up: bool, lines: int, col: int, row: int) -> 
     return True
 
 
+async def ctl_type(pane_id: str, text: str) -> bool:
+    """Digita `text` no pane sem Enter, como DATA no attach da trava.
+
+    O painel manda send_keys ["Enter"] logo depois (firmware congelado), e o
+    terminal.send cola e já aperta Enter: submeteria duas vezes. Nenhum
+    parâmetro do send desliga o Enter, o terminal.keys não aceita pontuação e
+    o attach com observe ignora input, então vai pela trava. Sem trava neste
+    pane, trava no tamanho atual do terminal (não redimensiona); ela fica até
+    o release_pane, como a da leitura. Controles viram espaço: um \n cru
+    submeteria no meio e um ESC viraria sequência.
+    """
+    if not ctl_alive(pane_id):
+        t = terminals.get(pane_id) or {}
+        cols, rows = t.get("cols"), t.get("rows")
+        if not (isinstance(cols, int) and isinstance(rows, int)):
+            return False
+        await ctl_acquire(pane_id, cols, rows)
+        if not ctl_alive(pane_id):
+            return False
+    clean = "".join(" " if ord(c) < 0x20 or c == "\x7f" else c for c in text)
+    try:
+        _frame(ctl["proc"], ctl["ch"], 0, clean.encode())
+        await ctl["proc"].stdin.drain()
+    except OSError:
+        return False
+    return True
+
+
 async def hc_call(method: str, params: dict):
     """Request ao core pela conexão do hc_loop; None em erro ou sem conexão."""
     return await rpc_conn.request(method, params) if rpc_conn else None
@@ -1355,10 +1383,7 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
 
     elif kind == "send_text":
         log.info("send_text pane=%s (%d chars)", pane_id, len(text))
-        # force: o painel quer o texto já, inclusive num agente bloqueado
-        # esperando resposta; sem wait, que o envio só confirma a entrega.
-        if await hc_call("terminal.send", {"terminal": pane_id, "text": text,
-                                           "force": True}) is None:
+        if not await ctl_type(pane_id, text):
             await deny("send failed")
 
     elif kind == "send_keys":
