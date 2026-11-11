@@ -50,7 +50,8 @@ jobs:
           test "$DECLARED" = "$EXPECTED"
 
       # Fora do pacote: os testes, o que o `herdr-app check` gera
-      # (gpui-kit.d.ts, jsconfig.json) e o .gitignore. O update trata a
+      # (gpui-kit.d.ts, jsconfig.json), o .gitignore e o RECIPE.md/preview.png
+      # (vitrine do herdr.dev, não fazem parte da instalação). O update trata a
       # presença de tests/ como checkout de desenvolvimento e não troca a
       # pasta, então ele NÃO pode entrar aqui.
       - name: Package mod
@@ -59,6 +60,7 @@ jobs:
           tar -czf dist/herdr-assist-mod.tar.gz -C mod \
             --owner=0 --group=0 --numeric-owner \
             --exclude='herdr-assist/tests' --exclude='herdr-assist/.gitignore' \
+            --exclude='herdr-assist/RECIPE.md' --exclude='herdr-assist/preview.png' \
             --exclude='herdr-assist/gpui-kit.d.ts' --exclude='herdr-assist/jsconfig.json' \
             --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
             herdr-assist
