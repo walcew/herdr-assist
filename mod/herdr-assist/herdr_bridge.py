@@ -539,26 +539,40 @@ def friendly_name(label: str, cwd: str) -> str:
 def agent_panes() -> list:
     """Os agentes do core no formato de pane que o resto da ponte já usa.
 
-    Agente = terminal vivo que reporta status. Ficam de fora a própria ponte
-    (rótulo herdr-assist=bridge) e os terminais de outras máquinas
-    (`machine/t7`), que o painel não espelha. Space e tab vêm do rótulo `where`
-    ("space / tab"), e o pid é o do processo em primeiro plano.
+    Agente = terminal vivo que reporta status. Fica de fora a própria ponte
+    (rótulo herdr-assist=bridge). Terminais de outras máquinas (`machine/t7`)
+    entram: o core local já os espelha e encaminha read/send/keys/attach para
+    lá. Space e tab vêm do rótulo `where` ("space / tab"), e o pid é o do
+    processo em primeiro plano — só nesta máquina, porque o de outra não serve
+    para achar conta, transcript ou rollout aqui.
     """
     panes = []
     for addr, t in sorted(terminals.items()):
         st = t.get("status") or {}
         labels = t.get("labels") or {}
-        if (t.get("state") != "live" or not st or "/" in addr
+        if (t.get("state") != "live" or not st
                 or labels.get("herdr-assist") == "bridge"):
             continue
         space, _, tab = (labels.get("where") or "").partition(" / ")
         fg = t.get("foreground") or {}
+        machine = addr.split("/", 1)[0] if "/" in addr else ""
         panes.append({"pane_id": addr,
                       "agent": AGENT_NAMES.get(st.get("app"), st.get("app") or ""),
                       "agent_status": st.get("state") or "unknown",
                       "cwd": fg.get("cwd") or t.get("cwd") or "",
-                      "space": space, "tab": tab, "pid": fg.get("pid")})
+                      "space": space, "tab": tab, "machine": machine,
+                      "pid": None if machine else fg.get("pid")})
     return panes
+
+
+def machine_code(name: str) -> str:
+    """Rótulo curto (3 letras) que caiba na linha do painel: "Hermes VM" -> HVM."""
+    words = [w for w in re.split(r"[^A-Za-z0-9]+", name or "") if w]
+    if not words:
+        return "REM"
+    if len(words) == 1:
+        return words[0][:3].upper()
+    return "".join(w[0] for w in words)[:3].upper()
 
 
 async def push_agents() -> None:
@@ -599,7 +613,11 @@ async def push_agents() -> None:
             "project": friendly_name(p["tab"], p["space"]) or os.path.basename(p["cwd"]),
             "workspace_id": p["space"],
         }
-        acc = pane_account.get(pid)
+        if p["machine"]:
+            # mesmo formato da ponte do TUI: código da máquina antes do projeto
+            a["project"] = f"{machine_code(p['machine'])}/{a['project']}"
+            a["machine"] = p["machine"]
+        acc = None if p["machine"] else pane_account.get(pid)
         if acc:
             a["account"] = acc_email_cache.get(acc, "")
             org, corp = accounts.org_and_corp(a["account"])

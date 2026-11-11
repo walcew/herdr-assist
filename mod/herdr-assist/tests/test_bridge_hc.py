@@ -254,6 +254,29 @@ class TestBridgeOverFakeHc(BridgeHarness):
         self.assertIsInstance(a["since"], int)
         self.assertEqual((b["status"], b["project"]), ("idle", "eletrilha"))  # tab numérica
 
+    def test_agente_de_outra_maquina_aparece_com_o_codigo_dela(self):
+        # o core local já espelha os terminais das máquinas que ele conhece
+        _, rf = self.connect()
+        self.ready(rf)
+        self.set_terminals([terminal("t1a", "working", "herdr-assist / review"),
+                            terminal("walcewair/t2", "done", "bnmp / 1")])
+        self.notify("event", {"type": "created", "terminal": "walcewair/t2", "seq": 2, "data": {}})
+        agents = self.agents_until(rf, lambda ag: "walcewair/t2" in ag)
+        r = agents["walcewair/t2"]
+        self.assertEqual((r["status"], r["project"], r["machine"]),
+                         ("done", "WAL/bnmp", "walcewair"))
+        self.assertNotIn("account", r)     # pid é da outra máquina: sem conta/contexto
+        self.assertNotIn("machine", agents["t1a"])
+
+    def test_comandos_alcancam_o_agente_de_outra_maquina(self):
+        self.set_terminals([terminal("walcewair/t2", "idle", "bnmp / 1")])
+        s, rf = self.connect_ready()
+        self.command(s, rf, {"type": "send_keys", "pane_id": "walcewair/t2", "keys": ["Enter"]})
+        self.assertEqual(self.calls("terminal.keys"),
+                         [{"terminal": "walcewair/t2", "keys": ["enter"]}])
+        self.assertEqual(self.command(s, rf, {"type": "focus", "pane_id": "walcewair/t2"}), [])
+        self.assertEqual(self.app_calls(), [["do", "agent.focus", "--terminal", "walcewair/t2"]])
+
     def test_evento_status_gera_agents_novo_na_hora(self):
         _, rf = self.connect()
         self.ready(rf)
@@ -383,7 +406,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
 
     def test_pane_desconhecido_ou_de_outra_maquina_e_erro(self):
         s, rf = self.connect_ready()
-        for pane in ("t9z", "t1c", "m1/t1a", ""):    # t1c existe mas não é agente
+        for pane in ("t9z", "t1c", "m1/t9z", ""):    # t1c existe mas não é agente
             for msg in ({"type": "read_pane"}, {"type": "send_text", "text": "x"},
                         {"type": "send_keys", "keys": ["Enter"]}, {"type": "focus"}):
                 out = self.command(s, rf, dict(msg, pane_id=pane))
