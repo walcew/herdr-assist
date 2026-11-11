@@ -10,7 +10,7 @@
 
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, appHome, theme, props, run } from "herdr";
+import { exec, appHome, theme, props, run, terminals } from "herdr";
 
 // chave: [en, pt]
 const STRINGS = {
@@ -18,6 +18,8 @@ const STRINGS = {
   "bridge.up": ["running ({t}, pid {pid})", "ativa ({t}, pid {pid})"],
   "bridge.down": ["stopped", "parada"],
   version: ["Version", "Versão"],
+  "version.pending": ["{run} running, {disk} on disk: restart to apply",
+    "{run} rodando, {disk} em disco: reinicie para aplicar"],
   port: ["Port", "Porta"],
   ip: ["LAN IP", "IP na LAN"],
   panels: ["Panels", "Painéis"],
@@ -70,16 +72,31 @@ export default class HerdrAssist extends View {
     this.found = [];       // painéis da última escuta
     this.scanning = false;
     this.scanError = "";
-    // Toda cópia garante a Ponte. O indicador segue com o timer mesmo oculto,
-    // então consulta devagar; o dialog só vive enquanto está aberto.
+    this.ensuredAt = 0;
+    // Toda cópia garante a Ponte. Viva/parada vem do terminals(), ao vivo; o
+    // status (painéis, porta ocupada) é poll: o indicador segue com o timer
+    // mesmo oculto, então consulta devagar; o dialog só vive enquanto aberto.
+    this.ensure(cx);
+    cx.timer.every(props()?.overlay ? 3000 : 60000, (cx) => {
+      if (this.tab === "pair") cx.spawn(async (cx) => this.scan(cx));
+      cx.spawn(async (cx) => this.refresh(cx));
+    });
+  }
+
+  // Sobe a Ponte se ela sumiu; no máximo uma vez a cada 30 s, porque o render
+  // que chama isto roda a cada mudança de terminal e a subida leva segundos.
+  ensure(cx) {
+    if (Date.now() - this.ensuredAt < 30000) return;
+    this.ensuredAt = Date.now();
     cx.spawn(async (cx) => {
       await this.ctl("ensure");
       await this.refresh(cx);
     });
-    cx.timer.every(props()?.overlay ? 3000 : 10000, (cx) => {
-      if (this.tab === "pair") cx.spawn(async (cx) => this.scan(cx));
-      cx.spawn(async (cx) => this.refresh(cx));
-    });
+  }
+
+  // Ponte viva segundo o core, sem esperar o poll.
+  bridgeAlive() {
+    return terminals().some((t) => t.labels?.["herdr-assist"] === "bridge" && t.state === "live");
   }
 
   // Uma escuta de ~2,5 s; o timer emenda a próxima enquanto a aba Parear estiver aberta.
@@ -142,8 +159,8 @@ export default class HerdrAssist extends View {
   }
 
   // Chip: ponto (viva, parada, porta ocupada por outra), nome e nº de painéis.
-  indicator(th, st) {
-    const color = !st ? th.unknown : st.holder && !st.holder.is_bridge ? th.blocked : st.alive ? th.done : th.idle;
+  indicator(th, st, alive) {
+    const color = !st ? th.unknown : st.holder && !st.holder.is_bridge ? th.blocked : alive ? th.done : th.idle;
     return h_flex().id("herdr-assist").size_full().bg(th.chrome).text_size(12).child(
       h_flex().id("chip").h_full().px(10).gap(6).items_center().cursor_pointer()
         .hover((s) => s.bg(th.hover)).on_click(() => run("mod.open", { name: "herdr-assist" }))
@@ -155,7 +172,11 @@ export default class HerdrAssist extends View {
   render(cx) {
     const th = theme();
     const st = this.st;
-    if (!props()?.overlay) return this.indicator(th, st);
+    if (!props()?.overlay) {
+      const alive = this.bridgeAlive();
+      if (!alive && st && !this.busy) this.ensure(cx);
+      return this.indicator(th, st, alive);
+    }
     const button = (id, label, primary, onClick) =>
       h_flex().id(id).h(30).px(12).items_center().rounded(8).border_1()
         .border_color(primary ? th.solid : th.input).bg(primary ? th.solid : th.raised)
@@ -193,7 +214,9 @@ export default class HerdrAssist extends View {
       row(this.t("bridge"),
         st.alive ? this.t("bridge.up", { t: st.terminal, pid: st.pids.join(", ") || "?" }) : this.t("bridge.down"),
         st.alive ? th.done : th.blocked),
-      row(this.t("version"), st.version || "?"),
+      st.restart_pending
+        ? row(this.t("version"), this.t("version.pending", { run: st.running, disk: st.version }), th.blocked)
+        : row(this.t("version"), st.version || "?"),
       row(this.t("port"), String(st.port)),
       row(this.t("ip"), st.ip || "?"),
       row(this.t("panels"),
