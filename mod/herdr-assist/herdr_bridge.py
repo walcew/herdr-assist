@@ -35,6 +35,7 @@ import re
 import secrets
 import shutil
 import socket
+import struct
 import sys
 import time
 import urllib.error
@@ -99,6 +100,7 @@ CONTENT_MAX_B = 12000
 WIRE_MAX_B = 20000
 # Nome da tecla do painel -> nome do `hc keys`; as demais só mudam a caixa.
 HC_KEYS = {"Escape": "esc", "C-c": "ctrl+c", "BSpace": "backspace"}
+CTL_SETTLE_S = 0.4       # tempo para a TUI reflowar antes da primeira leitura
 
 # CLI do Herdr TUI: só o que ainda não migrou (máquinas SSH, update.check).
 HERDR_BIN = (os.environ.get("HERDR_BIN") or shutil.which("herdr")
@@ -756,6 +758,156 @@ class Hc:
 
 rpc_conn = None   # conexão de requests do hc_loop; None enquanto desconectado
 
+# Trava de resolução: um `hc connect` framed só dela, com um terminal.attach no
+# tamanho do painel. Um pane travado por vez; o processo morre com a trava.
+ctl = {"pane": None, "size": None, "proc": None, "ch": None, "modes": {}}
+# Liga/desliga do mouse tracking no stream; a repintura do attach zera os modos
+# e religa os ativos, então o último visto é o estado atual.
+MOUSE_RE = re.compile(rb"\x1b\[\?100[0-3]([hl])")
+
+
+def _frame(proc, ch: int, kind: int, payload: bytes = b"") -> None:
+    proc.stdin.write(struct.pack("<IBI", ch, kind, len(payload)) + payload)
+
+
+async def _ctl_pump(proc, attached: asyncio.Future, modes: dict) -> None:
+    """Lê os frames da conexão da trava até ela cair.
+
+    A resposta do attach (canal 0) resolve `attached`. O stream do terminal é
+    descartado, mas cada DATA devolve CREDIT: sem isso o core para de mandar
+    depois da janela de 256 KiB; dele só se guarda se o mouse tracking está
+    ligado (modes["mouse"]). Se o core fechar o stream (terminal perdido),
+    fecha o stdin para o processo sair e a próxima leitura travar de novo.
+    """
+    try:
+        while True:
+            ch, kind, n = struct.unpack("<IBI", await proc.stdout.readexactly(9))
+            payload = await proc.stdout.readexactly(n)
+            if ch == 0 and kind == 0 and not attached.done():
+                attached.set_result(json.loads(payload))
+            elif ch and kind == 0:
+                _frame(proc, ch, 1, struct.pack("<I", n))
+                # shortcut: sequência partida entre dois frames passa batida; vale
+                # se a roda falhar em app que liga o mouse em rajadas grandes
+                hits = MOUSE_RE.findall(payload)
+                if hits:
+                    modes["mouse"] = hits[-1] == b"h"
+            elif ch and kind == 2:
+                proc.stdin.close()
+    except (asyncio.IncompleteReadError, OSError, ValueError):
+        pass
+    if not attached.done():
+        attached.set_result({})
+
+
+def ctl_alive(pane_id: str) -> bool:
+    proc = ctl["proc"]
+    return ctl["pane"] == pane_id and proc is not None and proc.returncode is None \
+        and not proc.stdin.is_closing()
+
+
+async def ctl_release() -> None:
+    """Solta a trava: o terminal volta ao tamanho dos outros viewers (ou ao padrão)."""
+    proc, pane, ch = ctl["proc"], ctl["pane"], ctl["ch"]
+    ctl.update(pane=None, size=None, proc=None, ch=None, modes={})
+    if not proc or proc.returncode is not None:
+        return
+    try:
+        if not proc.stdin.is_closing():
+            _frame(proc, ch, 2)
+            await proc.stdin.drain()
+            proc.stdin.close()
+        await asyncio.wait_for(proc.wait(), 2)
+    except (OSError, asyncio.TimeoutError):
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+    log.info("pane %s solto", pane)
+
+
+async def ctl_acquire(pane_id: str, cols: int, rows: int) -> bool:
+    """Trava o pane em cols x rows. True se o tamanho acabou de mudar.
+
+    Já travado, reenvia RESIZE mesmo no mesmo tamanho: entre viewers do mesmo
+    terminal vence o último que agiu, e o herdr-app pode ter retomado o seu.
+    O stdin em pipe é o cinto de segurança: se esta ponte morrer de qualquer
+    jeito, o `hc connect` vê EOF e o core devolve o tamanho.
+    """
+    if ctl_alive(pane_id):
+        changed = ctl["size"] != (cols, rows)
+        ctl["size"] = (cols, rows)
+        try:
+            _frame(ctl["proc"], ctl["ch"], 3, struct.pack("<HH", cols, rows))
+            await ctl["proc"].stdin.drain()
+        except OSError:
+            return False
+        return changed
+    await ctl_release()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            HC_BIN, "connect", stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+            creationflags=NO_WINDOW)
+    except (OSError, ValueError) as exc:
+        log.warning("resolução não travada em %s: %s", pane_id, exc)
+        return False
+    attached = asyncio.get_running_loop().create_future()
+    modes = {"mouse": False}
+    try:
+        # o hello é a última linha JSON; depois dele os dois sentidos são frames
+        proc.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"hello",'
+                         b'"params":{"framed":true,"generation":1}}\n')
+        await asyncio.wait_for(proc.stdout.readline(), 5)
+        asyncio.create_task(_ctl_pump(proc, attached, modes))
+        _frame(proc, 0, 0, json.dumps({
+            "jsonrpc": "2.0", "id": 2, "method": "terminal.attach",
+            "params": {"terminal": pane_id, "cols": cols, "rows": rows}}).encode())
+        await proc.stdin.drain()
+        ch = (await asyncio.wait_for(attached, 5)).get("result", {}).get("channel")
+    except (OSError, asyncio.TimeoutError):
+        ch = None
+    if not ch:
+        log.warning("resolução não travada em %s: attach falhou", pane_id)
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
+        return False
+    ctl.update(pane=pane_id, size=(cols, rows), proc=proc, ch=ch, modes=modes)
+    log.info("pane %s travado em %dx%d", pane_id, cols, rows)
+    return True
+
+
+def wheel_events(lines: int) -> int:
+    """Eventos de roda para rolar ~`lines` linhas.
+
+    Não é linear: o Claude Code acelera rajadas (medido no #6: 3 eventos ≈ 3
+    linhas, 12 numa rajada ≈ 26). Até 3 vai um por linha; acima, um a cada
+    duas, então os 20 do painel viram 11 eventos (~24 linhas).
+    """
+    return lines if lines <= 3 else 3 + (lines - 3) // 2
+
+
+async def ctl_scroll(pane_id: str, up: bool, lines: int, col: int, row: int) -> bool:
+    """Roda de mouse SGR no pane travado, na célula sob o dedo.
+
+    O app com mouse tracking rola o próprio conteúdo; a posição importa porque
+    TUIs costumam rolar só a região sob o ponteiro. col/row do painel são
+    0-based; o SGR é 1-based. Sem trava neste pane não há canal, e sem mouse
+    tracking o core entregaria a roda como texto digitado: nos dois casos, nada.
+    """
+    if not ctl_alive(pane_id) or not ctl["modes"].get("mouse"):
+        return False
+    cols, rows = ctl["size"]
+    seq = "\x1b[<%d;%d;%dM" % (64 if up else 65, max(0, min(col, cols - 1)) + 1,
+                                max(0, min(row, rows - 1)) + 1)
+    await ctl_acquire(pane_id, cols, rows)   # retoma o tamanho antes da roda
+    if not ctl_alive(pane_id):
+        return False
+    try:
+        _frame(ctl["proc"], ctl["ch"], 0, seq.encode() * wheel_events(lines))
+        await ctl["proc"].stdin.drain()
+    except OSError:
+        return False
+    return True
+
 
 async def hc_call(method: str, params: dict):
     """Request ao core pela conexão do hc_loop; None em erro ou sem conexão."""
@@ -1118,6 +1270,9 @@ async def update_loop() -> None:
             else:
                 log.info("versão em disco mudou (%s → %s): reiniciando",
                          BOOT_VERSION, disco)
+                # Soltar antes de morrer: um pane travado na resolução do painel
+                # ficaria assim, com a ponte que o travou fora do ar.
+                await ctl_release()
                 update.restart_bridge(sys.executable)
         await asyncio.sleep(UPDATE_STEP_S)
 
@@ -1160,7 +1315,11 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
 
     elif kind == "read_pane":
         lines = max(1, min(int(msg.get("lines", PANE_LINES)), 60))
-        # cols/rows do painel e a trava de resolução ficam para o ticket #11
+        # O painel manda a geometria da própria tela: enquanto ele estiver lendo
+        # este pane, a sessão fica nesse tamanho e o conteúdo cabe sem arrastar.
+        cols, rows = int(msg.get("cols", 0)), int(msg.get("rows", 0))
+        if 4 <= cols <= 400 and 2 <= rows <= 200 and await ctl_acquire(pane_id, cols, rows):
+            await asyncio.sleep(CTL_SETTLE_S)
         res = await hc_call("terminal.read", {"terminal": pane_id, "lines": lines})
         if res is None:
             return await deny("read failed")
@@ -1200,9 +1359,14 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
                          binary=HERDR_APP_BIN) is None:
             await deny("focus failed")
 
-    elif kind in ("scroll_pane", "release_pane"):
-        # shortcut: rolagem e trava de resolução ainda não portadas (ticket #11)
-        return await deny("not supported yet")
+    elif kind == "scroll_pane":
+        lines = max(1, min(int(msg.get("lines", 1)), 20))
+        await ctl_scroll(pane_id, msg.get("dir") != "down", lines,
+                         int(msg.get("col", 0)), int(msg.get("row", 0)))
+
+    elif kind == "release_pane":
+        if ctl["pane"] == pane_id:
+            await ctl_release()
 
     elif kind == "ping":
         # Com push, ficar em silêncio é normal — o painel usa isto para saber
@@ -1290,6 +1454,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     finally:
         clients.discard(writer)
         writer.close()
+        if not clients:   # ninguém mais olhando: devolve a sessão ao tamanho normal
+            await ctl_release()
         log.info("painel desconectado: %s", peer)
 
 

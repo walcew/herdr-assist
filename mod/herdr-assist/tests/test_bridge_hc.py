@@ -83,6 +83,19 @@ class TestBridgeOverFakeHc(unittest.TestCase):
         with open(os.path.join(self.dir, "calls.jsonl")) as fh:
             return [c["params"] for c in map(json.loads, fh) if c["method"] == method]
 
+    def calls_until(self, method, n=1, timeout=5):
+        """Os frames chegam ao hc falso por outro processo: espera o n-ésimo."""
+        deadline = time.time() + timeout
+        while len(self.calls(method)) < n:
+            if time.time() > deadline:
+                self.fail("%s: menos de %d em %ss" % (method, n, timeout))
+            time.sleep(0.02)
+        return self.calls(method)
+
+    def read_locked(self, s, rf, pane="t1a", cols=50, rows=20):
+        return self.command(s, rf, {"type": "read_pane", "pane_id": pane, "lines": 5,
+                                    "cols": cols, "rows": rows})
+
     def app_calls(self):
         path = os.path.join(self.dir, "app.jsonl")
         if not os.path.exists(path):
@@ -210,7 +223,7 @@ class TestBridgeOverFakeHc(unittest.TestCase):
                                 "content": "linha 1\nlinha 2 ação"}])
         self.assertEqual(self.calls("terminal.read"), [{"terminal": "t1a", "lines": 40}])
 
-    def test_read_pane_corta_por_linhas_e_ignora_cols_rows(self):
+    def test_read_pane_corta_por_linhas(self):
         self.set_screen("\n".join("l%d" % n for n in range(10)) + "\n\n\n")
         s, rf = self.connect_ready()
         out = self.command(s, rf, {"type": "read_pane", "pane_id": "t1a", "lines": 3,
@@ -295,11 +308,103 @@ class TestBridgeOverFakeHc(unittest.TestCase):
             out = self.command(s, rf, dict(msg, pane_id="t1a"))
             self.assertEqual([m["type"] for m in out], ["error"], msg)
 
-    def test_scroll_e_release_seguem_nao_suportados(self):
+    def test_read_pane_com_geometria_trava_o_terminal_no_tamanho_do_painel(self):
+        self.set_screen("tela")
         s, rf = self.connect_ready()
-        for kind in ("scroll_pane", "release_pane"):
-            out = self.command(s, rf, {"type": kind, "pane_id": "t1a"})
-            self.assertEqual(out, [{"type": "error", "message": "not supported yet"}])
+        out = self.read_locked(s, rf)
+        self.assertEqual(out[0]["content"], "tela")
+        self.assertEqual(self.calls("terminal.attach"),
+                         [{"terminal": "t1a", "cols": 50, "rows": 20}])
+        # a ponte descarta o stream, mas devolve o crédito da repintura
+        self.assertEqual(self.calls_until("frame.credit")[0],
+                         {"channel": 1, "n": len(b"\x1b[?1000l\x1b[?1006l\x1b[2J"
+                                                 b"\x1b[?1000h\x1b[?1006hrepaint")})
+        # mesma trava: nada de novo attach, só retoma o tamanho (o app pode ter tomado)
+        self.read_locked(s, rf)
+        self.assertEqual(len(self.calls("terminal.attach")), 1)
+        self.assertEqual(self.calls_until("frame.resize"),
+                         [{"channel": 1, "cols": 50, "rows": 20}])
+        self.read_locked(s, rf, cols=60, rows=30)
+        self.assertEqual(self.calls_until("frame.resize", 2)[-1],
+                         {"channel": 1, "cols": 60, "rows": 30})
+
+    def test_read_pane_sem_geometria_valida_nao_trava(self):
+        s, rf = self.connect_ready()
+        for cols, rows in ((0, 0), (3, 20), (401, 20), (50, 1), (50, 201)):
+            self.assertEqual(self.read_locked(s, rf, cols=cols, rows=rows)[0]["type"],
+                             "pane_content")
+        self.assertEqual(self.calls("terminal.attach"), [])
+
+    def test_travar_outro_pane_solta_o_anterior(self):
+        s, rf = self.connect_ready()
+        self.read_locked(s, rf, "t1a")
+        self.read_locked(s, rf, "t1b")
+        self.assertEqual([c["terminal"] for c in self.calls("terminal.attach")],
+                         ["t1a", "t1b"])
+        self.assertEqual(self.calls_until("frame.close"), [{"channel": 1}])
+
+    def test_scroll_pane_manda_a_roda_na_celula_sob_o_dedo(self):
+        s, rf = self.connect_ready()
+        self.read_locked(s, rf)                      # trava em 50x20
+        self.assertEqual(self.command(s, rf, {"type": "scroll_pane", "pane_id": "t1a",
+                                              "dir": "up", "lines": 3,
+                                              "col": 9, "row": 4}), [])
+        self.assertEqual(self.calls_until("frame.data")[0],
+                         {"channel": 1, "text": "\x1b[<64;10;5M" * 3})
+        # célula fora da tela vai para a borda; muitas linhas viram menos eventos
+        self.command(s, rf, {"type": "scroll_pane", "pane_id": "t1a", "dir": "down",
+                             "lines": 20, "col": 999, "row": -5})
+        self.assertEqual(self.calls_until("frame.data", 2)[1]["text"],
+                         "\x1b[<65;50;1M" * b.wheel_events(20))
+        self.assertEqual(len(self.calls("frame.resize")), 2)   # cada roda retoma o tamanho
+
+    def test_wheel_events_cresce_devagar_por_causa_da_aceleracao(self):
+        self.assertEqual([b.wheel_events(n) for n in (1, 2, 3, 4, 5, 11, 20)],
+                         [1, 2, 3, 3, 4, 7, 11])
+
+    def test_scroll_pane_sem_trava_nao_faz_nada(self):
+        s, rf = self.connect_ready()
+        msg = {"type": "scroll_pane", "pane_id": "t1a", "dir": "up", "lines": 3}
+        self.assertEqual(self.command(s, rf, msg), [])
+        self.read_locked(s, rf, "t1b")
+        self.assertEqual(self.command(s, rf, msg), [])     # trava é de outro pane
+        time.sleep(0.2)
+        self.assertEqual(self.calls("frame.data"), [])
+
+    def test_scroll_pane_sem_mouse_tracking_nao_digita_a_roda_no_app(self):
+        # sem mouse tracking o core repassa a roda como texto (medido num bash)
+        self.set_terminals([terminal("t1a", mouse=False)])
+        s, rf = self.connect_ready()
+        self.read_locked(s, rf)
+        self.calls_until("frame.credit")             # a repintura já passou pela ponte
+        self.command(s, rf, {"type": "scroll_pane", "pane_id": "t1a", "dir": "up",
+                             "lines": 3})
+        time.sleep(0.2)
+        self.assertEqual(self.calls("frame.data"), [])
+
+    def test_release_pane_solta_a_trava(self):
+        s, rf = self.connect_ready()
+        self.read_locked(s, rf)
+        self.assertEqual(self.command(s, rf, {"type": "release_pane", "pane_id": "t1b"}), [])
+        self.assertEqual(self.command(s, rf, {"type": "release_pane", "pane_id": "t1a"}), [])
+        self.assertEqual(self.calls_until("frame.close"), [{"channel": 1}])
+        self.command(s, rf, {"type": "scroll_pane", "pane_id": "t1a", "dir": "up",
+                             "lines": 1})
+        time.sleep(0.2)
+        self.assertEqual(self.calls("frame.data"), [])
+
+    def test_ultimo_painel_saindo_solta_a_trava(self):
+        s, rf = self.connect_ready()
+        self.read_locked(s, rf)
+        rf.close()      # o makefile segura o socket aberto
+        s.close()
+        self.assertEqual(self.calls_until("frame.close"), [{"channel": 1}])
+
+    def test_ponte_morrendo_nao_deixa_o_terminal_travado(self):
+        s, rf = self.connect_ready()
+        self.read_locked(s, rf)
+        self.proc.kill()                     # SIGKILL: sem chance de soltar nada
+        self.assertEqual(self.calls_until("frame.eof"), [{"channels": [1]}])
 
 
 if __name__ == "__main__":
