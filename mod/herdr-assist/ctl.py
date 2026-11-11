@@ -112,9 +112,14 @@ def bridge_port() -> int:
 
 
 def bridge_terminals() -> list:
-    """Endereços dos terminais vivos com o rótulo da Ponte."""
+    """Endereços dos terminais vivos com o rótulo da Ponte, só desta máquina.
+
+    O core espelha os terminais das máquinas que conhece (`walcewair/t2b`): a
+    Ponte de outra máquina tem o mesmo rótulo, mas não serve esta.
+    """
     data = hc_json(["ls", "--label", LABEL]) or {}
-    return [t["address"] for t in data.get("terminals", []) if t.get("state") == "live"]
+    return [t["address"] for t in data.get("terminals", [])
+            if t.get("state") == "live" and "/" not in t["address"]]
 
 
 def bridge_pids(addresses: list) -> set:

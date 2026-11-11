@@ -65,6 +65,16 @@ class TestRunningVersion(unittest.TestCase):
                              ("0.15.0", running, pending))
 
 
+class TestBridgeTerminals(unittest.TestCase):
+    def test_ponte_de_outra_maquina_nao_conta(self):
+        # o core espelha a Ponte de outra máquina com o mesmo rótulo
+        ls = {"terminals": [{"address": "walcewpro/t2b", "state": "live"},
+                            {"address": "t9", "state": "finished"},
+                            {"address": "t7", "state": "live"}]}
+        with mock.patch.object(ctl, "hc_json", return_value=ls):
+            self.assertEqual(ctl.bridge_terminals(), ["t7"])
+
+
 class TestListeners(unittest.TestCase):
     def test_parse_do_lsof(self):
         out = "p37040\ncPython\nf5\nn*:9375\np99\ncnode\n"

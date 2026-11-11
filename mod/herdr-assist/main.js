@@ -96,7 +96,9 @@ export default class HerdrAssist extends View {
 
   // Ponte viva segundo o core, sem esperar o poll.
   bridgeAlive() {
-    return terminals().some((t) => t.labels?.["herdr-assist"] === "bridge" && t.state === "live");
+    // Só a Ponte desta máquina: o core também espelha a de outras (`maquina/t2b`).
+    return terminals().some((t) => t.labels?.["herdr-assist"] === "bridge" && t.state === "live"
+      && !String(t.address ?? "").includes("/") && !t.machine);
   }
 
   // Uma escuta de ~2,5 s; o timer emenda a próxima enquanto a aba Parear estiver aberta.
