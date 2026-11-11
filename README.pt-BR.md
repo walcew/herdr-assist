@@ -99,7 +99,7 @@ forma atômica e reinicia a si mesma. Ela também percebe em até um minuto se o
 disco mudou por baixo dela.
 
 Para desligar, ponha `"auto_update": false` no doc `herdr-assist` do core (veja o README
-do mod). Uma pasta **symlink** (ou um checkout com `tests/`) nunca é trocada: ali quem
+do mod). Uma pasta **symlink** (ou com `.git`) nunca é trocada: ali quem
 atualiza é o `git pull`. Para mexer no mod, `git clone` do repositório +
 `ln -s <checkout>/mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist`.
 

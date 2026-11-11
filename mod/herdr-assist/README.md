@@ -107,7 +107,7 @@ A cópia comum (`cp -R` do checkout, com `tests/` e tudo) se atualiza normalment
 ## Ver o que está acontecendo
 
 ```sh
-python3 ctl.py status                      # Ponte, porta, painéis e quem escuta a porta (JSON)
+python3 ctl.py status                      # Ponte, versão (disco e no ar), porta, painéis, quem escuta (JSON)
 python3 ctl.py discover                    # painéis em modo de pareamento na LAN (JSON)
 hc ls --label herdr-assist=bridge          # o terminal da Ponte (endereço, estado)
 hc read <endereço> --lines 200             # o log da Ponte: é a saída do terminal

@@ -28,7 +28,7 @@ Every copy, indicator or dialog, calls `ctl.py ensure` when it starts: if no liv
 - Rotate token: writes a new token to the `herdr-assist` doc of the core; the bridge applies it on the `doc` event and drops the panels that had the old one.
 - Pair: sends the host name, address, port and token to the panel over TCP and shows `Paired with <id>: the panel restarts and connects to this host.`
 
-Once a day the bridge looks for a newer release of the mod, swaps its own folder and restarts. It never touches a folder that is a symlink or a checkout (it has `tests/`), and `auto_update: false` in the doc turns it off.
+Once a day the bridge looks for a newer release of the mod, swaps its own folder and restarts. It checks the package against the release `SHA256SUMS`, and never touches a folder that is a symlink or holds `.git`, and `auto_update: false` in the doc turns it off.
 
 ## Built from
 
@@ -62,4 +62,4 @@ Once a day the bridge looks for a newer release of the mod, swaps its own folder
 - With another process listening on port 9375 and no bridge, the dot is red and the Status tab shows the busy box; Stop it asks for confirmation before sending anything.
 - The Token tab shows the token masked until Show; Rotate token changes it and panels paired with the old one disconnect.
 - With a panel in pairing mode on the same network, the Pair tab lists its code and IP within about 3 s, and Pair makes it restart and connect.
-- With `mod/herdr-assist` as a symlink or with a `tests/` folder in it, no update ever replaces the folder.
+- With `mods/herdr-assist` as a symlink or with a `.git` folder in it, no update ever replaces the folder.

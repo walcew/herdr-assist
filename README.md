@@ -95,7 +95,7 @@ covers both), downloads `herdr-assist-mod.tar.gz`, swaps the mod folder atomical
 restarts itself. It also notices within a minute if the code on disk changed under it.
 
 To turn it off set `"auto_update": false` in the `herdr-assist` doc of the core (see the
-mod README). A folder that is a **symlink** (or a checkout with `tests/`) is never swapped:
+mod README). A folder that is a **symlink** (or holds `.git`) is never swapped:
 there, `git pull` is what updates it. To hack on the mod, `git clone` the repo and
 `ln -s <checkout>/mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist`.
 
