@@ -128,21 +128,21 @@ typedef enum {
     X(STARTING,        "Starting...",                 "Iniciando...")                        \
     X(PAIR_STEPS_INSTALL, "On the host (the machine running Herdr, on the same "             \
                        "Wi-Fi network as the panel):\n\n"                                    \
-                       "1. Install the bridge plugin — only once:",                          \
+                       "1. Install the herdr-assist mod in the Herdr app — only once:",                          \
                        "No host (a máquina com o Herdr, na mesma rede Wi-Fi "                \
                        "do painel):\n\n"                                                     \
-                       "1. Instale o plugin da ponte — uma vez só:")                         \
-    X(PAIR_STEPS_ADMIN, "2. In a Herdr pane, open the admin screen:",                        \
-                       "2. Num pane do Herdr, abra a tela de administração:")                 \
-    X(PAIR_STEPS_PICK, "3. Press p (Pair panel) and pick the code shown above "              \
+                       "1. Instale o mod herdr-assist no app Herdr — uma vez só:")                         \
+    X(PAIR_STEPS_ADMIN, "2. Open the control dialog (or click herdr-assist at the bottom of the window):",                        \
+                       "2. Abra o dialog de controle (ou clique em herdr-assist no rodapé da janela):")                 \
+    X(PAIR_STEPS_PICK, "3. Open the Pair tab and pick the code shown above "              \
                        "from the list.\n\n"                                                  \
                        "The host sends name, address and token — nothing is "                \
-                       "typed on the panel. Windows or SSH without a TUI: "                  \
-                       "python3 pair.py (see the manual).",                                  \
-                       "3. Tecle p (Parear painel) e escolha na lista o código "             \
+                       "typed on the panel. Without the app (SSH): "                  \
+                       "python3 ctl.py pair (see the manual).",                                  \
+                       "3. Na aba Parear, escolha na lista o código "             \
                        "mostrado acima.\n\n"                                                 \
                        "O host envia nome, endereço e token — nada é digitado "              \
-                       "no painel. Windows ou SSH sem TUI: python3 pair.py "                 \
+                       "no painel. Sem o app (SSH): python3 ctl.py pair "                 \
                        "(veja o manual).")                                                   \
     X(PAIR_NO_WIFI,    "No Wi-Fi: connect to a network first (Settings " LV_SYMBOL_RIGHT     \
                        " Wi-Fi network).",                                                   \

@@ -36,8 +36,8 @@ TERM_BG, TERM_TEXT = "#0a0a0b", "#aebfa0"
 FA_WIFI, FA_PLUS, FA_RIGHT, FA_SAVE, FA_LEFT = "", "", "", "", ""
 FA_HOME, FA_LIST, FA_DASH, FA_COG = "", "", "", ""
 
-CMD_INSTALL = "herdr plugin install walcew/herdr-assist/plugin"
-CMD_ADMIN = "herdr plugin pane open --plugin herdr-assist --entrypoint admin"
+CMD_INSTALL = "curl -L https://github.com/walcew/herdr-assist/releases/latest/download/herdr-assist-mod.tar.gz | tar -xz -C ~/.config/herdr-app/mods"
+CMD_ADMIN = "herdr-app do mod.open --name herdr-assist"
 
 # textos por idioma, espelhando src/i18n.h (pareamento) e a tela principal
 T = {
@@ -54,13 +54,13 @@ T = {
         "waiting": "Waiting for a host... (172s)",
         "p1": "On the host (the machine running Herdr, on the same "
               "Wi-Fi network as the panel):\n\n"
-              "1. Install the bridge plugin — only once:",
-        "p2": "2. In a Herdr pane, open the admin screen:",
-        "p3": "3. Press p (Pair panel) and pick the code shown above "
+              "1. Install the herdr-assist mod in the Herdr app — only once:",
+        "p2": "2. Open the control dialog (or click herdr-assist at the bottom of the window):",
+        "p3": "3. Open the Pair tab and pick the code shown above "
               "from the list.\n\n"
               "The host sends name, address and token — nothing is "
-              "typed on the panel. Windows or SSH without a TUI: "
-              "python3 pair.py (see the manual).",
+              "typed on the panel. Without the app (SSH): "
+              "python3 ctl.py pair (see the manual).",
         "manual": "Full manual — point your phone camera here:",
         "url": "https://github.com/walcew/herdr-assist/blob/main/docs/pairing.md",
         "suffix": "",
@@ -79,12 +79,12 @@ T = {
         "waiting": "Aguardando um host... (172s)",
         "p1": "No host (a máquina com o Herdr, na mesma rede Wi-Fi "
               "do painel):\n\n"
-              "1. Instale o plugin da ponte — uma vez só:",
-        "p2": "2. Num pane do Herdr, abra a tela de administração:",
-        "p3": "3. Tecle p (Parear painel) e escolha na lista o código "
+              "1. Instale o mod herdr-assist no app Herdr — uma vez só:",
+        "p2": "2. Abra o dialog de controle (ou clique em herdr-assist no rodapé da janela):",
+        "p3": "3. Na aba Parear, escolha na lista o código "
               "mostrado acima.\n\n"
               "O host envia nome, endereço e token — nada é digitado "
-              "no painel. Windows ou SSH sem TUI: python3 pair.py "
+              "no painel. Sem o app (SSH): python3 ctl.py pair "
               "(veja o manual).",
         "manual": "Manual completo — aponte a câmera do celular:",
         "url": "https://github.com/walcew/herdr-assist/blob/main/docs/pairing.pt-BR.md",

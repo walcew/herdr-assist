@@ -614,9 +614,9 @@ static void show_pair(void)
 {
     /* Os comandos não são tradução — iguais nos dois idiomas. */
     static const char CMD_INSTALL[] =
-        "herdr plugin install walcew/herdr-assist/plugin";
+        "curl -L https://github.com/walcew/herdr-assist/releases/latest/download/herdr-assist-mod.tar.gz | tar -xz -C ~/.config/herdr-app/mods";
     static const char CMD_ADMIN[] =
-        "herdr plugin pane open --plugin herdr-assist --entrypoint admin";
+        "herdr-app do mod.open --name herdr-assist";
 
     s_view = VIEW_PAIR;
     lv_obj_add_flag(s_dock, LV_OBJ_FLAG_HIDDEN);

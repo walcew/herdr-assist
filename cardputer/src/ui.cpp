@@ -1087,7 +1087,7 @@ static void draw_pair(void)
     d.setTextColor(C_MUTED, C_BG);
     d.drawString(line, SCR_W / 2, BODY_Y + 72);
     d.setTextDatum(top_left);
-    draw_footer("no host: herdr plugin ... admin, tecla p");
+    draw_footer("no host: herdr-assist > aba Parear");
 }
 
 /* ------------------------------------------------------------- Wi-Fi ----- */

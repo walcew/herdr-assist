@@ -95,8 +95,8 @@ pio device monitor
    rede. Nada é digitado no device.
 2. **Pareamento.** Conectado e sem host, o pager abre sozinho a janela de
    pareamento (3 minutos) e mostra um código de 6 caracteres. No computador do
-   Herdr, abra a tela de administração do herdr-assist, aperte `p` e escolha o
-   código — exatamente como no painel (veja o [manual de pareamento](../docs/pairing.md)).
+   Herdr, abra o dialog do herdr-assist (clique no indicador do rodapé), vá à aba
+   **Parear** e escolha o código — exatamente como no painel (veja o [manual de pareamento](../docs/pairing.md)).
    O host entrega nome, endereço, porta e token; o pager grava e reinicia
    conectado.
 

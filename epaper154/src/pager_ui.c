@@ -421,7 +421,7 @@ static void draw_pairing(void)
     if (!s_pair_wifi) {
         draw_wrapped(6, 44, "Waiting for Wi-Fi... hold PWR+BOOT 3s to change the network.", 31, 4, 12);
     } else {
-        draw_wrapped(6, 38, "On the Herdr machine: open the herdr-assist admin screen, press p and pick:", 31, 4, 11);
+        draw_wrapped(6, 38, "On the Herdr machine: open the herdr-assist dialog, Pair tab, and pick:", 31, 4, 11);
         draw_text_center(82, s_pair_id, 15, 3);
         if (s_pair_secs > 0) {
             snprintf(line, sizeof(line), "window closes in %ds", s_pair_secs);
