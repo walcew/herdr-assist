@@ -114,8 +114,8 @@ hc read <endereço> --lines 200             # o log da Ponte: é a saída do ter
 ```
 
 Reiniciar sem o dialog: `python3 ctl.py restart`. Uma Ponte saudável loga, em ordem:
-`ponte versão …`, `descoberta udp em …`, `ponte ouvindo em 0.0.0.0:9375` e, a cada painel
-que entra, `painel conectado: ('<ip>', <porta>)`.
+`bridge version …`, `udp discovery on …`, `bridge listening on 0.0.0.0:9375` e, a cada painel
+que entra, `panel connected: ('<ip>', <porta>)`.
 
 ## Firewall
 
@@ -141,5 +141,5 @@ da Ponte. Sem a TCP ele encontra e não conecta.
 | Painel pareado em `OFFLINE`, log sem erro | falta a regra **UDP** (a descoberta não chega), ou o token foi rotacionado |
 | Mod sumiu de `mods/` depois de uma atualização, `.herdr-assist.old` no lugar | a máquina caiu no meio da troca: `python3 ~/.config/herdr-app/mods/.herdr-assist.old/ctl.py status` restaura a pasta |
 | `cmd-alt-a` não abre o dialog | o `keys.json` do mod não foi mesclado, ou a tecla já é de outro comando |
-| Ponte não sobe: `binário do hc não encontrado` | `hc` fora do PATH: aponte `HC_BIN` |
-| `limites claude: claude auth: … --json` | a CLI do Claude instalada não aceita a flag; afeta só a tela opcional de limites, não os agentes |
+| Ponte não sobe: `hc binary not found` | `hc` fora do PATH: aponte `HC_BIN` |
+| `limits claude [...]: claude auth: … --json` | a CLI do Claude instalada não aceita a flag; afeta só a tela opcional de limites, não os agentes |

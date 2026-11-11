@@ -288,7 +288,7 @@ def migrate_legacy() -> dict:
             found["port"] = int(env["BRIDGE_PORT"])
         if "AUTO_UPDATE" in env:
             found["auto_update"] = env["AUTO_UPDATE"].lower() not in ("0", "false", "no")
-        log.info("migrando a configuração de %s", d)
+        log.info("migrating the configuration from %s", d)
         return found
     return {}
 
@@ -308,7 +308,7 @@ async def load_config(conn) -> dict | None:
             return doc
         legacy = migrate_legacy()
         if not legacy:
-            log.info("token gerado — cadastre-o no painel")
+            log.info("token generated: register it on the panels")
         doc = {**DEFAULTS, **legacy, **doc, "token": legacy.get("token") or secrets.token_hex(16)}
         if await conn.request("doc.set", {"name": DOC_NAME, "value": doc,
                                           "version": res.get("version", 0)}) is not None:
@@ -329,7 +329,7 @@ async def apply_config(doc) -> int:
     token = ENV_TOKEN or (cfg["token"].strip() if isinstance(cfg["token"], str) else "")
     if token and token != TOKEN:
         if TOKEN:
-            log.info("token trocado: desconectando painéis com o antigo")
+            log.info("token changed: disconnecting panels using the old one")
             for w in list(clients):
                 w.close()
         TOKEN = token
@@ -356,15 +356,15 @@ async def listen(port: int) -> None:
     try:
         new_udp, _ = await asyncio.get_running_loop().create_datagram_endpoint(
             DiscoveryResponder, local_addr=(BIND, port))
-        log.info("descoberta udp em %s:%d", BIND, port)
+        log.info("udp discovery on %s:%d", BIND, port)
     except OSError as exc:
         new_udp = None
-        log.warning("descoberta indisponível (udp %s:%d: %s)", BIND, port, exc)
+        log.warning("discovery unavailable (udp %s:%d: %s)", BIND, port, exc)
     for old in (server, udp):
         if old:
             old.close()
     server, udp, PORT = new_server, new_udp, port
-    log.info("ponte ouvindo em %s:%d", BIND, port)
+    log.info("bridge listening on %s:%d", BIND, port)
 
 
 async def configure(doc) -> None:
@@ -375,7 +375,7 @@ async def configure(doc) -> None:
     try:
         await listen(port)
     except OSError as exc:
-        log.error("porta %d indisponível: %s", port, exc)
+        log.error("port %d unavailable: %s", port, exc)
         if server is None:
             sys.exit(1)     # sem listener a ponte não serve para nada
 
@@ -828,7 +828,7 @@ async def lock_release() -> None:
     except (OSError, asyncio.TimeoutError):
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
-    log.info("pane %s solto", pane)
+    log.info("pane %s released", pane)
 
 
 async def lock_acquire(pane_id: str, cols: int, rows: int) -> bool:
@@ -855,7 +855,7 @@ async def lock_acquire(pane_id: str, cols: int, rows: int) -> bool:
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
             creationflags=NO_WINDOW)
     except (OSError, ValueError) as exc:
-        log.warning("resolução não travada em %s: %s", pane_id, exc)
+        log.warning("resolution not locked on %s: %s", pane_id, exc)
         return False
     attached = asyncio.get_running_loop().create_future()
     modes = {"mouse": False}
@@ -873,12 +873,12 @@ async def lock_acquire(pane_id: str, cols: int, rows: int) -> bool:
     except (OSError, asyncio.TimeoutError):
         ch = None
     if not ch:
-        log.warning("resolução não travada em %s: attach falhou", pane_id)
+        log.warning("resolution not locked on %s: attach failed", pane_id)
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         return False
     lock.update(pane=pane_id, size=(cols, rows), proc=proc, ch=ch, modes=modes)
-    log.info("pane %s travado em %dx%d", pane_id, cols, rows)
+    log.info("pane %s locked at %dx%d", pane_id, cols, rows)
     return True
 
 
@@ -991,7 +991,7 @@ async def hc_loop() -> None:
                 await configure(doc)
                 terminals.clear()
                 terminals.update({t["address"]: t for t in snap.get("terminals", [])})
-                log.info("hc: assinado, %d terminal(is)", len(terminals))
+                log.info("hc: subscribed, %d terminal(s)", len(terminals))
                 await push_agents()
                 while True:
                     note = await sub.notes.get()
@@ -1000,7 +1000,7 @@ async def hc_loop() -> None:
                     method, params = note
                     addr = params.get("terminal") or ""
                     if method == "missed":
-                        log.warning("hc: eventos perdidos, ressincronizando")
+                        log.warning("hc: events missed, resyncing")
                         res = await rpc.request("terminal.list", {})
                         if res is None:
                             break
@@ -1029,7 +1029,7 @@ async def hc_loop() -> None:
         rpc_conn = None
         await rpc.close()
         await sub.close()
-        log.warning("hc connect caiu, reconectando em 2s")
+        log.warning("hc connect dropped, reconnecting in 2s")
         await asyncio.sleep(2)
 
 
@@ -1143,7 +1143,7 @@ def collect_limits(account_dirs) -> list:
             cur["_config_dir"] = cdir
             providers.append(cur)
             if limits_ok.get(key) is not True:
-                log.info("limites %s [%s]: ok (%d janelas)",
+                log.info("limits %s [%s]: ok (%d windows)",
                          agent, cur.get("account") or os.path.basename(cdir),
                          len(cur["limits"]))
             limits_ok[key] = True
@@ -1160,10 +1160,10 @@ def collect_limits(account_dirs) -> list:
                 stale.update(ok=False, stale_since=good["at"], _config_dir=cdir)
                 providers.append(stale)
             if limits_ok.get(key) is not False:
-                log.warning("limites %s [%s]: %s", agent, os.path.basename(cdir), reason)
+                log.warning("limits %s [%s]: %s", agent, os.path.basename(cdir), reason)
             limits_ok[key] = False
     if len(providers) > LIMITS_MAX_CARDS:
-        log.warning("cards de uso acima do teto (%d>%d): cortando",
+        log.warning("usage cards above the cap (%d>%d): trimming",
                     len(providers), LIMITS_MAX_CARDS)
         providers = providers[:LIMITS_MAX_CARDS]
     return providers
@@ -1315,10 +1315,10 @@ async def update_loop() -> None:
                 # Continuar tentando de minuto em minuto encheria o log sem
                 # mudar nada; parar calado esconderia que a ponte está rodando
                 # código velho. Um erro, uma vez.
-                log.error("a ponte não reiniciou em %d tentativas: rodando %s "
-                          "com %s em disco", UPDATE_TRIES, BOOT_VERSION, disco)
+                log.error("the bridge did not restart after %d tries: running %s "
+                          "with %s on disk", UPDATE_TRIES, BOOT_VERSION, disco)
             else:
-                log.info("versão em disco mudou (%s → %s): reiniciando",
+                log.info("version on disk changed (%s -> %s): restarting",
                          BOOT_VERSION, disco)
                 # Soltar antes de morrer: um pane travado na resolução do painel
                 # ficaria assim, com a ponte que o travou fora do ar.
@@ -1338,15 +1338,15 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
     if kind in ("read_pane", "send_keys", "send_text", "focus",
                 "release_pane", "scroll_pane"):
         if pane_id not in known_panes:
-            return await deny("pane desconhecido")
+            return await deny("unknown pane")
 
     if kind in ("send_keys", "send_text"):
         # validação antes de tudo: vale mesmo enquanto o envio não existe
         keys, text = msg.get("keys", []), msg.get("text", "")
         if kind == "send_keys" and not all(k in SAFE_KEYS for k in keys):
-            return await deny("tecla fora da allowlist")
+            return await deny("key not in the allowlist")
         if kind == "send_text" and (not text or len(text) > MAX_TEXT):
-            return await deny("texto vazio ou longo demais")
+            return await deny("text empty or too long")
 
     if kind == "read_pane":
         lines = max(1, min(int(msg.get("lines", PANE_LINES)), 60))
@@ -1406,7 +1406,7 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         await writer.drain()
 
     else:
-        await deny("comando desconhecido")
+        await deny("unknown command")
 
 
 def avatar_repos_line() -> str:
@@ -1429,16 +1429,16 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         hello = {}
     if not (isinstance(hello, dict) and hello.get("type") == "hello" and
             hmac.compare_digest(str(hello.get("token", "")), TOKEN)):
-        log.warning("hello inválido de %s — desconectando", peer)
+        log.warning("invalid hello from %s: disconnecting", peer)
         try:
-            writer.write(b'{"type":"error","message":"token invalido"}\n')
+            writer.write(b'{"type":"error","message":"invalid token"}\n')
             await writer.drain()
         except (ConnectionResetError, BrokenPipeError):
             pass
         writer.close()
         return
 
-    log.info("painel conectado: %s", peer)
+    log.info("panel connected: %s", peer)
     clients.add(writer)
     try:
         await push_agents()      # atualiza o cache (e broadcasta se mudou)
@@ -1478,7 +1478,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         writer.close()
         if not clients:   # ninguém mais olhando: devolve a sessão ao tamanho normal
             await lock_release()
-        log.info("painel desconectado: %s", peer)
+        log.info("panel disconnected: %s", peer)
 
 
 class DiscoveryResponder(asyncio.DatagramProtocol):
@@ -1536,7 +1536,7 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
         if self.count > self.RATE_MAX:
             if not self.limited:
                 self.limited = True
-                log.warning("descoberta: limite de respostas atingido, silenciando")
+                log.warning("discovery: reply rate limit reached, going quiet")
             return
         # IP desta máquina na rota até o painel; é o campo que o painel adota,
         # então precisa ser o da interface certa
@@ -1552,17 +1552,17 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
             self.transport.sendto(reply.encode(), addr)
         if (panel, addr[0]) not in self.replied:
             self.replied.add((panel, addr[0]))
-            log.info("descoberta: sonda do painel %s respondida para %s", panel, addr[0])
+            log.info("discovery: probe from panel %s answered to %s", panel, addr[0])
 
 
 async def main() -> None:
     global BOOT_VERSION
     if not shutil.which(HC_BIN):
-        log.error("binário do hc não encontrado (%s)", HC_BIN)
+        log.error("hc binary not found (%s)", HC_BIN)
         sys.exit(1)
     update.recover()   # queda entre os renames de uma atualização
     BOOT_VERSION = update.installed_version()
-    log.info("ponte versão %s", BOOT_VERSION or "?")
+    log.info("bridge version %s", BOOT_VERSION or "?")
     # o listener só sobe quando o hc_loop lê o doc (token e porta vêm de lá)
     asyncio.create_task(hc_loop())
     asyncio.create_task(limits_loop())

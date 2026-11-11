@@ -271,7 +271,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
         for token in (None, "errado"):
             _, rf = self.connect(token)
             self.assertEqual(json.loads(rf.readline()),
-                             {"type": "error", "message": "token invalido"})
+                             {"type": "error", "message": "invalid token"})
             self.assertEqual(rf.readline(), "")   # e a ponte desconecta
 
     def test_read_pane_devolve_o_texto_do_core(self):
@@ -509,7 +509,7 @@ class TestBridgeConfigDoc(BridgeHarness):
 
     def refused(self, token):
         _, rf = self.connect(token)
-        return json.loads(rf.readline()) == {"type": "error", "message": "token invalido"}
+        return json.loads(rf.readline()) == {"type": "error", "message": "invalid token"}
 
     def test_migra_o_token_do_tui_e_o_painel_antigo_conecta(self):
         self.write(self.tui, "token", "old-tui-token\n")

@@ -92,7 +92,7 @@ def installed_version() -> str:
         with open(VERSION_FILE, encoding="utf-8") as fh:
             return normalize(fh.read())
     except OSError as exc:
-        log.warning("não li %s: %s", VERSION_FILE, exc)
+        log.warning("could not read %s: %s", VERSION_FILE, exc)
         return ""
 
 
@@ -102,7 +102,7 @@ def published_version(url: str = "") -> str:
         with urllib.request.urlopen(url or MANIFEST_URL, timeout=HTTP_TIMEOUT) as r:
             data = json.loads(r.read(4096).decode("utf-8", "replace"))
     except (urllib.error.URLError, OSError, ValueError) as exc:
-        log.warning("manifesto inacessível: %s", exc)
+        log.warning("manifest unreachable: %s", exc)
         return ""
     ver = data.get("version") if isinstance(data, dict) else None
     return normalize(ver) if isinstance(ver, str) else ""
@@ -123,7 +123,7 @@ def save_state(st: dict) -> None:
         with open(STATE_FILE, "w", encoding="utf-8") as fh:
             json.dump(st, fh)
     except OSError as exc:
-        log.warning("não gravei %s: %s", STATE_FILE, exc)
+        log.warning("could not write %s: %s", STATE_FILE, exc)
 
 
 def should_update(installed: str, published: str) -> tuple:
@@ -173,7 +173,7 @@ def fetch(url: str, dest: str) -> None:
     with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as r:
         data = r.read(DOWNLOAD_MAX + 1)
     if len(data) > DOWNLOAD_MAX:
-        raise OSError("pacote maior que %d bytes" % DOWNLOAD_MAX)
+        raise OSError("package larger than %d bytes" % DOWNLOAD_MAX)
     with open(dest, "wb") as fh:
         fh.write(data)
 
@@ -206,7 +206,7 @@ def extract(archive: str, dest: str) -> None:
             parts = m.name.split("/")
             if not (m.isfile() or m.isdir()) or parts[0] != "herdr-assist" \
                     or m.name.startswith("/") or ".." in parts:
-                raise ValueError("membro inesperado no pacote: " + m.name)
+                raise ValueError("unexpected member in the package: " + m.name)
         tf.extractall(dest)
 
 
@@ -236,11 +236,11 @@ def install(target: str, mod_dir: str, fetch_fn=fetch) -> bool:
         new = os.path.join(work, "herdr-assist")
         with open(os.path.join(new, "VERSION"), encoding="utf-8") as fh:
             if normalize(fh.read()) != target:
-                raise ValueError("o pacote não é da versão %s" % target)
+                raise ValueError("the package is not version %s" % target)
         swap(new, mod_dir)
         return True
     except (OSError, ValueError, tarfile.TarError) as exc:
-        log.warning("update: %s; ficando na versão atual", exc)
+        log.warning("update: %s; keeping the current version", exc)
         return False
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -274,10 +274,10 @@ def check(mod_dir: str = DIR, fetch_fn=fetch) -> dict:
         go, why = False, "off"
 
     if go:
-        log.info("update: %s → %s, trocando a pasta do mod", cur, pub)
+        log.info("update: %s -> %s, swapping the mod folder", cur, pub)
         why = "installed" if install(pub, mod_dir, fetch_fn) else "failed"
     elif why not in ("same", "unknown"):
-        log.info("update: instalada %s, publicada %s — %s", cur, pub, why)
+        log.info("update: installed %s, published %s: %s", cur, pub, why)
     st["state"] = why
     save_state(st)
     return st
