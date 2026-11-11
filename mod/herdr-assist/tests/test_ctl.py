@@ -122,6 +122,11 @@ class TestRotateToken(FakeCore):
         # o outro escritor levou à 4; a segunda tentativa grava a 5
         self.assertEqual(self.doc(), {"value": {"token": got["token"]}, "version": 5})
 
+    def test_porta_do_doc_invalida_cai_no_padrao_como_na_ponte(self):
+        for port, want in ((9400, 9400), (True, 9375), (0, 9375), (70000, 9375), ("9400", 9375)):
+            self.set_doc({"port": port}, 1)
+            self.assertEqual(ctl.bridge_port(), want, port)
+
     def test_token_le_do_doc(self):
         self.set_doc({"token": "abc"}, 1)
         self.assertEqual(ctl.doc_get()["token"], "abc")

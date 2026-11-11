@@ -51,20 +51,17 @@ import cost
 import rollout
 import transcript
 import update
+from common import DEFAULT_PORT, DOC_NAME, HC_BIN, host_name, route_ip, valid_port
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
 from proc_env import read_process_env  # noqa: E402
 
-# Binários do Herdr desktop: a variável vence (é o que injeta o hc falso nos
-# testes), senão o PATH, senão onde o instalador os põe.
-HC_BIN = (os.environ.get("HC_BIN") or shutil.which("hc")
-          or os.path.expanduser("~/.local/bin/hc"))
+# Binário do app, como o HC_BIN (common.py): variável, PATH, onde o instalador põe.
 HERDR_APP_BIN = (os.environ.get("HERDR_APP_BIN") or shutil.which("herdr-app")
                  or os.path.expanduser("~/.local/bin/herdr-app"))
 BIND = os.environ.get("BRIDGE_BIND", "0.0.0.0")   # onde escutar não é escolha da pessoa
 
 # Configuração da ponte: vive no doc do core, não em arquivo. Campos e padrões:
-DOC_NAME = os.environ.get("HERDR_ASSIST_DOC", "herdr-assist")
-DEFAULTS = {"token": "", "port": 9375, "avatar_repos": [], "auto_update": True}
+DEFAULTS = {"token": "", "port": DEFAULT_PORT, "avatar_repos": [], "auto_update": True}
 ENV_TOKEN = os.environ.get("BRIDGE_TOKEN", "").strip()   # sobrescreve o doc (dev/teste)
 ENV_PORT = int(os.environ.get("BRIDGE_PORT") or 0)       # idem
 # Onde a migração procura `token` e `env`: config-dir do plugin do Herdr TUI e
@@ -244,10 +241,6 @@ async def refresh_accounts(panes) -> None:
     for k in list(pid_env_cache):
         if k not in live_pids:
             pid_env_cache.pop(k, None)
-
-
-def valid_port(p) -> bool:
-    return isinstance(p, int) and not isinstance(p, bool) and 0 < p < 65536
 
 
 def has_token(doc) -> bool:
@@ -1545,17 +1538,12 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
                 self.limited = True
                 log.warning("descoberta: limite de respostas atingido, silenciando")
             return
-        # IP desta máquina na rota até o painel (mesmo truque do ctl.py);
-        # é o campo que o painel adota, então precisa ser o da interface certa
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect((addr[0], 9))
-            my_ip = s.getsockname()[0]
-        except OSError:
+        # IP desta máquina na rota até o painel; é o campo que o painel adota,
+        # então precisa ser o da interface certa
+        my_ip = route_ip(addr[0])
+        if not my_ip:
             return
-        finally:
-            s.close()
-        name = socket.gethostname().split(".")[0][:15]
+        name = host_name()
         canon = "%s|%s|%d|%s" % (nonce, my_ip, PORT, name)
         h = hmac.new(TOKEN.encode(), canon.encode(), "sha256").hexdigest()
         reply = json.dumps({"t": "herdr-here", "name": name, "ip": my_ip,

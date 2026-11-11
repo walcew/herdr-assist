@@ -24,7 +24,6 @@ import json
 import os
 import re
 import secrets
-import shutil
 import signal
 import socket
 import subprocess
@@ -32,13 +31,10 @@ import sys
 import time
 
 import update
+from common import DEFAULT_PORT, DOC_NAME, HC_BIN, host_name, route_ip, valid_port
 
 DIR = os.path.dirname(os.path.abspath(__file__))
-HC_BIN = (os.environ.get("HC_BIN") or shutil.which("hc")
-          or os.path.expanduser("~/.local/bin/hc"))
 LABEL = "herdr-assist=bridge"
-DOC_NAME = os.environ.get("HERDR_ASSIST_DOC", "herdr-assist")   # como a Ponte
-DEFAULT_PORT = 9375
 PAIR_PORT = 9376   # UDP dos anúncios do painel em modo de pareamento
 
 
@@ -110,7 +106,7 @@ def bridge_port() -> int:
     if env.isdigit():
         return int(env)
     port = doc_get().get("port")
-    return port if isinstance(port, int) and 0 < port < 65536 else DEFAULT_PORT
+    return port if valid_port(port) else DEFAULT_PORT
 
 
 def bridge_terminals() -> list:
@@ -183,23 +179,6 @@ def panels(port: int) -> list:
         if m.group(1) not in found:
             found.append(m.group(1))
     return found
-
-
-def host_name() -> str:
-    """Nome curto desta máquina; vira o rótulo do host no painel (cabe em 15)."""
-    return socket.gethostname().split(".")[0][:15]
-
-
-def route_ip(peer: str) -> str:
-    """IP desta máquina na rota até `peer`; UDP connect não manda pacote."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect((peer, 9))
-        return s.getsockname()[0]
-    except OSError:
-        return ""
-    finally:
-        s.close()
 
 
 def lan_ip() -> str:
