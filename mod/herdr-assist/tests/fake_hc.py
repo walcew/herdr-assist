@@ -8,19 +8,21 @@ de um cenário que o teste controla em FAKE_HC_DIR:
 - notify.jsonl: notificações que o teste anexa; quem assinou events.subscribe
   as repassa em ordem (`{"method": "event"|"missed"|..., "params": ...}`);
 - calls.jsonl: cada request recebido, registrado para o teste conferir;
-- read.txt: o texto que terminal.read devolve (terminal.send/keys só confirmam);
-- docs.json: os docs do core ({nome: {"value": ..., "version": n}}); doc.get lê, doc.set
-  grava se a versão bater e emite o evento `doc` (`data: {name, version}`, como o core).
-  Com o arquivo conflict_once presente, o próximo doc.set o apaga, avança a versão do
-  doc (outro escritor) e falha com conflict;
-  Esses três métodos falham com not_found se o terminal não está em terminals.json.
+- read.txt: o texto que terminal.read devolve. terminal.send, terminal.keys e
+  terminal.label só confirmam; read, send, keys e attach falham com not_found
+  se o terminal não está em terminals.json;
+- docs.json: os docs do core ({nome: {"value": ..., "version": n}}). doc.get lê;
+  doc.set grava se a versão bater e emite o evento `doc` (`data: {name, version}`,
+  como o core). Com o arquivo conflict_once presente, o próximo doc.set o apaga,
+  avança a versão do doc (outro escritor) e falha com conflict.
 
-Modo framed (hello com framed:true, como o attach da ponte usa): depois da
+Modo framed (hello com framed:true, como a trava da ponte usa): depois da
 resposta do hello tudo vira frame `<IBI` (canal, kind, len) + payload, com o
 JSON-RPC no canal 0. terminal.attach devolve um canal novo e despeja uma
-repintura nele (com mouse tracking ligado, salvo "mouse": false no terminal); os frames recebidos nos canais de attach vão para calls.jsonl
-como frame.data (text), frame.credit (n), frame.resize (cols, rows),
-frame.close, e o EOF do stdin com attach aberto vira frame.eof (channels).
+repintura nele (com mouse tracking ligado, salvo "mouse": false no terminal).
+Os frames recebidos nos canais de attach vão para calls.jsonl como frame.data
+(text), frame.credit (n), frame.resize (cols, rows) e frame.close; o EOF do
+stdin com attach aberto vira frame.eof (channels).
 """
 import itertools
 import json
@@ -31,6 +33,7 @@ import threading
 import time
 
 DIR = os.environ["FAKE_HC_DIR"]
+DOCS = os.path.join(DIR, "docs.json")
 lock = threading.Lock()
 
 
@@ -65,18 +68,16 @@ def tail_notifications():
 
 
 def docs():
-    path = os.path.join(DIR, "docs.json")
-    if not os.path.exists(path):
+    if not os.path.exists(DOCS):
         return {}
-    with open(path) as fh:
+    with open(DOCS) as fh:
         return json.load(fh)
 
 
 def save_docs(d):
-    path = os.path.join(DIR, "docs.json")
-    with open(path + ".tmp", "w") as fh:
+    with open(DOCS + ".tmp", "w") as fh:
         json.dump(d, fh)
-    os.replace(path + ".tmp", path)   # nunca meio arquivo para quem lê
+    os.replace(DOCS + ".tmp", DOCS)   # nunca meio arquivo para quem lê
 
 
 def doc_set(params):
@@ -136,7 +137,10 @@ def handle(req):
             return {"channel": ch}
         if method == "terminal.read":
             path = os.path.join(DIR, "read.txt")
-            text = open(path).read() if os.path.exists(path) else ""
+            text = ""
+            if os.path.exists(path):
+                with open(path) as fh:
+                    text = fh.read()
             return {"text": text, "complete": True, "how": "screen"}
         return {"turn": 1, "status": None}
     if method == "terminal.label":
