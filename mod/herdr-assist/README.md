@@ -56,13 +56,12 @@ evita esperar a próxima. `herdr plugin list` mostra se está habilitado.
 ```sh
 BRIDGE_PORT=9375        # porta TCP (painéis) e UDP (descoberta)
 BRIDGE_BIND=0.0.0.0     # 0.0.0.0 é o que faz a descoberta por broadcast funcionar
-BRIDGE_MACHINES=all     # agentes das máquinas SSH salvas no Herdr; ou "rotulo,id"
 BRIDGE_TOKEN=...        # opcional; sem ela vale o arquivo `token`
 ```
 
-Sem `BRIDGE_MACHINES`, a ponte mostra só o servidor local — que é o que o socket do Herdr
-conhece. Com `all`, ela lê `herdr machine list --json` e `herdr --machine <id> api snapshot`
-e junta os agentes remotos no mesmo snapshot.
+> A ponte nova lê token, porta, repositórios de avatar e atualização automática do doc
+> `herdr-assist` do core (migrando o `token` e o `env` daqui na primeira subida), e
+> `BRIDGE_MACHINES` não existe mais. Esta seção descreve o plugin do Herdr TUI.
 
 ## Firewall
 

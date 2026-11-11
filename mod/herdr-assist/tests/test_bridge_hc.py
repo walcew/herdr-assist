@@ -4,6 +4,7 @@
 Sobe a ponte de verdade (subprocesso, porta efêmera, token conhecido) com
 HC_BIN apontando para tests/fake_hc.py e conversa com ela como o painel.
 """
+import asyncio
 import json
 import os
 import shutil
@@ -13,8 +14,10 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 import herdr_bridge as b
+import update
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BRIDGE = os.path.join(os.path.dirname(HERE), "herdr_bridge.py")
@@ -42,7 +45,9 @@ def free_port():
         return s.getsockname()[1]
 
 
-class TestBridgeOverFakeHc(unittest.TestCase):
+class BridgeHarness(unittest.TestCase):
+    """Prepara o cenário do hc falso; cada teste sobe a ponte com `launch`."""
+
     def setUp(self):
         self.dir = tempfile.mkdtemp()
         # os `hc connect` falsos saem no EOF, um instante depois da ponte
@@ -55,12 +60,13 @@ class TestBridgeOverFakeHc(unittest.TestCase):
             dict(terminal("t1e", "done"), state="finished"),        # já terminou
         ])
         self.port = free_port()
-        env = {"PATH": "/usr/bin:/bin", "HOME": self.dir,
-               "HC_BIN": FAKE_HC, "HERDR_APP_BIN": FAKE_APP, "FAKE_HC_DIR": self.dir,
-               "BRIDGE_PORT": str(self.port), "BRIDGE_BIND": "127.0.0.1",
-               "BRIDGE_TOKEN": TOKEN, "HERDR_PLUGIN_CONFIG_DIR": self.dir,
-               "PYTHONDONTWRITEBYTECODE": "1"}
-        self.proc = subprocess.Popen([sys.executable, BRIDGE], env=env,
+        self.env = {"PATH": "/usr/bin:/bin", "HOME": self.dir,
+                    "HC_BIN": FAKE_HC, "HERDR_APP_BIN": FAKE_APP, "FAKE_HC_DIR": self.dir,
+                    "BRIDGE_BIND": "127.0.0.1", "HERDR_PLUGIN_CONFIG_DIR": self.dir,
+                    "PYTHONDONTWRITEBYTECODE": "1"}
+
+    def launch(self, **env):
+        self.proc = subprocess.Popen([sys.executable, BRIDGE], env=dict(self.env, **env),
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL)
         self.addCleanup(self.stop)
@@ -102,6 +108,52 @@ class TestBridgeOverFakeHc(unittest.TestCase):
             return []
         with open(path) as fh:
             return [json.loads(line) for line in fh]
+
+    def doc(self, name="herdr-assist"):
+        path = os.path.join(self.dir, "docs.json")
+        if not os.path.exists(path):
+            return None
+        with open(path) as fh:
+            return json.load(fh).get(name)
+
+    def set_doc(self, value, version=None):
+        """O doc muda no core: outro processo (o Mod) escreveu e o core avisou."""
+        path = os.path.join(self.dir, "docs.json")
+        docs = {}
+        if os.path.exists(path):
+            with open(path) as fh:
+                docs = json.load(fh)
+        cur = docs.get("herdr-assist", {"version": 0})
+        docs["herdr-assist"] = {"value": value, "version": cur["version"] + 1}
+        with open(path + ".tmp", "w") as fh:
+            json.dump(docs, fh)
+        os.replace(path + ".tmp", path)
+        return docs["herdr-assist"]["version"]
+
+    def doc_event(self, version):
+        self.notify("event", {"type": "doc", "seq": 50,
+                              "data": {"name": "herdr-assist", "version": version}})
+
+    def doc_until(self, pred, timeout=5):
+        deadline = time.time() + timeout
+        while True:
+            d = self.doc()
+            if d and d["value"] and pred(d["value"]):
+                return d["value"]
+            if time.time() > deadline:
+                self.fail("doc sem o esperado em %ss: %r" % (timeout, d))
+            time.sleep(0.02)
+
+    def message_until(self, rf, kind, timeout=5):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = rf.readline()
+            if not line:
+                self.fail("ponte fechou a conexão")
+            msg = json.loads(line)
+            if msg.get("type") == kind:
+                return msg
+        self.fail("nenhum %s em %ss" % (kind, timeout))
 
     def set_screen(self, text):
         with open(os.path.join(self.dir, "read.txt"), "w") as fh:
@@ -169,6 +221,13 @@ class TestBridgeOverFakeHc(unittest.TestCase):
     def ready(self, rf):
         """Painel pode conectar antes do snapshot do hc: espera o 1º com agentes."""
         return self.agents_until(rf, lambda a: a)
+
+
+
+class TestBridgeOverFakeHc(BridgeHarness):
+    def setUp(self):
+        super().setUp()
+        self.launch(BRIDGE_PORT=str(self.port), BRIDGE_TOKEN=TOKEN)
 
     def test_snapshot_vira_agents_com_id_status_e_space_tab(self):
         _, rf = self.connect()
@@ -411,6 +470,168 @@ class TestBridgeOverFakeHc(unittest.TestCase):
         self.read_locked(s, rf)
         self.proc.kill()                     # SIGKILL: sem chance de soltar nada
         self.assertEqual(self.calls_until("frame.eof"), [{"channels": [1]}])
+
+
+class TestBridgeConfigDoc(BridgeHarness):
+    """A Configuração da ponte vive no doc `herdr-assist` do core."""
+
+    def setUp(self):
+        super().setUp()
+        self.tui = os.path.join(self.dir, "tui")      # config-dir do plugin do Herdr TUI
+        self.alone = os.path.join(self.dir, "alone")  # config-dir do modo avulso
+        for d in (self.tui, self.alone):
+            os.makedirs(d)
+        self.env["HERDR_ASSIST_LEGACY_DIRS"] = os.pathsep.join((self.tui, self.alone))
+
+    def write(self, d, name, text):
+        with open(os.path.join(d, name), "w") as fh:
+            fh.write(text)
+
+    def refused(self, token):
+        _, rf = self.connect(token)
+        return json.loads(rf.readline()) == {"type": "error", "message": "token invalido"}
+
+    def test_migra_o_token_do_tui_e_o_painel_antigo_conecta(self):
+        self.write(self.tui, "token", "old-tui-token\n")
+        self.write(self.tui, "env", "BRIDGE_PORT=%d\n" % self.port)   # nunca a 9375 real
+        self.launch()
+        _, rf = self.connect("old-tui-token")
+        self.assertTrue(self.ready(rf))
+        self.assertEqual(self.doc()["value"]["token"], "old-tui-token")
+
+    def test_migra_porta_auto_update_e_repos_do_env_do_tui(self):
+        self.write(self.tui, "token", "old-tui-token\n")
+        self.write(self.tui, "env", "# comentario\nBRIDGE_PORT=%d\nAUTO_UPDATE=0\n"
+                                    "BRIDGE_BIND=0.0.0.0\n" % self.port)
+        self.write(self.tui, "avatar_repos", "# meus\nhttps://a.example/x/\n")
+        self.launch()
+        s, rf = self.connect("old-tui-token")     # a porta veio da migração
+        self.assertEqual(self.message_until(rf, "avatar_repos")["repos"],
+                         ["https://a.example/x/"])
+        self.assertEqual(self.doc()["value"],
+                         {"token": "old-tui-token", "port": self.port, "auto_update": False,
+                          "avatar_repos": ["https://a.example/x/"]})
+
+    def test_modo_avulso_migra_mas_o_tui_tem_prioridade(self):
+        self.write(self.alone, "token", "alone-token\n")
+        self.write(self.alone, "env", "BRIDGE_PORT=%d\n" % self.port)
+        self.launch()
+        _, rf = self.connect("alone-token")
+        self.assertTrue(self.ready(rf))
+
+    def test_tui_vence_o_avulso_quando_os_dois_existem(self):
+        self.write(self.tui, "token", "old-tui-token\n")
+        self.write(self.tui, "env", "BRIDGE_PORT=%d\n" % self.port)
+        self.write(self.alone, "token", "alone-token\n")
+        self.launch()
+        self.assertTrue(self.ready(self.connect("old-tui-token")[1]))
+        self.assertEqual(self.doc()["value"]["token"], "old-tui-token")
+
+    def test_sem_nada_para_migrar_gera_o_token_e_grava_no_doc(self):
+        self.launch(BRIDGE_PORT=str(self.port))
+        token = self.doc_until(lambda v: v.get("token"))["token"]
+        self.assertRegex(token, r"^[0-9a-f]{32}$")
+        self.assertTrue(self.ready(self.connect(token)[1]))
+        self.assertTrue(self.refused("outro"))
+        v = self.doc()["value"]       # defaults completos, para o Mod mostrar
+        self.assertEqual((v["port"], v["auto_update"], v["avatar_repos"]), (9375, True, []))
+
+    def test_doc_com_token_nao_migra_nada(self):
+        self.write(self.tui, "token", "old-tui-token\n")
+        self.set_doc({"token": "do-doc", "port": self.port})
+        self.launch()
+        self.assertTrue(self.ready(self.connect("do-doc")[1]))
+        self.assertTrue(self.refused("old-tui-token"))
+        self.assertEqual(self.calls("doc.set"), [])
+
+    def test_conflito_no_doc_set_relê_e_tenta_de_novo_uma_vez(self):
+        self.set_doc({"port": self.port})       # doc existe, sem token
+        open(os.path.join(self.dir, "conflict_once"), "w").close()
+        self.launch()
+        token = self.doc_until(lambda v: v.get("token"))["token"]
+        self.assertEqual(self.doc()["value"]["port"], self.port)   # campos do doc ficam
+        self.assertTrue(self.ready(self.connect(token)[1]))
+        self.assertEqual(len(self.calls("doc.set")), 2)
+
+    def test_evento_doc_com_token_novo_recusa_o_antigo_sem_reiniciar(self):
+        self.set_doc({"token": "tok-1", "port": self.port})
+        self.launch()
+        s, rf = self.connect("tok-1")
+        self.ready(rf)
+        pid = self.proc.pid
+        self.doc_event(self.set_doc({"token": "tok-2", "port": self.port}))
+        while rf.readline():    # o painel já conectado com o token antigo cai
+            pass
+        self.assertTrue(self.refused("tok-1"))
+        self.assertTrue(self.ready(self.connect("tok-2")[1]))
+        self.assertIsNone(self.proc.poll())
+        self.assertEqual(self.proc.pid, pid)
+
+    def test_evento_doc_invalido_nao_derruba_token_nem_porta(self):
+        self.set_doc({"token": "tok-1", "port": self.port})
+        self.launch()
+        s, rf = self.connect("tok-1")
+        self.ready(rf)
+        self.message_until(rf, "avatar_repos")    # o da conexão
+        for bad in ({"token": "  ", "port": "abc"}, {"token": "tok-1", "port": 70000},
+                    {"token": "tok-1", "port": True}, None):
+            self.doc_event(self.set_doc(bad))
+        self.doc_event(self.set_doc({"token": "tok-1", "port": self.port,
+                                     "avatar_repos": ["https://r.example/"]}))
+        # o doc válido que veio depois dos inválidos foi aplicado; o painel segue de pé
+        self.assertEqual(self.message_until(rf, "avatar_repos")["repos"],
+                         ["https://r.example/"])
+        self.assertTrue(self.ready(self.connect("tok-1")[1]))
+
+    def test_evento_doc_com_porta_nova_move_listener_e_descoberta(self):
+        new, old = free_port(), self.port
+        self.set_doc({"token": "tok-1", "port": old})
+        self.launch()
+        self.ready(self.connect("tok-1")[1])
+        self.doc_event(self.set_doc({"token": "tok-1", "port": new}))
+        deadline = time.time() + 5
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", new), timeout=1).close()
+                break
+            except OSError:
+                self.assertLess(time.time(), deadline, "ponte não abriu a porta nova")
+                time.sleep(0.05)
+        self.port = new
+        self.assertTrue(self.ready(self.connect("tok-1")[1]))
+        with self.assertRaises(OSError):                # e a antiga fechou
+            socket.create_connection(("127.0.0.1", old), timeout=1)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as u:   # descoberta
+            u.settimeout(3)
+            u.sendto(b'{"t":"herdr-find","n":"n1","id":"p1"}', ("127.0.0.1", new))
+            self.assertEqual(json.loads(u.recvfrom(512)[0])["port"], new)
+
+    def test_evento_doc_com_repos_novos_reenvia_aos_paineis(self):
+        self.set_doc({"token": "tok-1", "port": self.port})
+        self.launch()
+        s, rf = self.connect("tok-1")
+        self.assertEqual(self.message_until(rf, "avatar_repos")["repos"], [])
+        self.doc_event(self.set_doc({"token": "tok-1", "port": self.port,
+                                     "avatar_repos": [" https://a.example/ ", "", "https://b.example/",
+                                                      "https://c.example/"]}))
+        self.assertEqual(self.message_until(rf, "avatar_repos")["repos"],
+                         ["https://a.example/", "https://b.example/"])   # teto do firmware
+
+    def test_auto_update_do_doc_decide_o_update(self):
+        self.addCleanup(os.environ.pop, "AUTO_UPDATE", None)
+        with mock.patch.object(b, "TOKEN", ""):
+            asyncio.run(b.apply_config({"token": "x", "auto_update": False}))
+            self.assertFalse(update.auto_enabled())
+            asyncio.run(b.apply_config({"token": "x", "auto_update": True}))
+            self.assertTrue(update.auto_enabled())
+
+    def test_bridge_machines_nao_faz_mais_nada(self):
+        # o espelhamento de máquinas remotas saiu: nenhuma chamada ao `herdr machine`
+        self.set_doc({"token": "tok-1", "port": self.port})
+        self.launch(BRIDGE_MACHINES="all", HERDR_BIN=FAKE_APP)
+        self.ready(self.connect("tok-1")[1])
+        time.sleep(0.3)
+        self.assertEqual(self.app_calls(), [])
 
 
 if __name__ == "__main__":

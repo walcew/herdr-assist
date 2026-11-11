@@ -8,7 +8,11 @@ de um cenário que o teste controla em FAKE_HC_DIR:
 - notify.jsonl: notificações que o teste anexa; quem assinou events.subscribe
   as repassa em ordem (`{"method": "event"|"missed"|..., "params": ...}`);
 - calls.jsonl: cada request recebido, registrado para o teste conferir;
-- read.txt: o texto que terminal.read devolve (terminal.send/keys só confirmam).
+- read.txt: o texto que terminal.read devolve (terminal.send/keys só confirmam);
+- docs.json: os docs do core ({nome: {"value": ..., "version": n}}); doc.get lê, doc.set
+  grava se a versão bater e emite o evento `doc` (`data: {name, version}`, como o core).
+  Com o arquivo conflict_once presente, o próximo doc.set o apaga, avança a versão do
+  doc (outro escritor) e falha com conflict;
   Esses três métodos falham com not_found se o terminal não está em terminals.json.
 
 Modo framed (hello com framed:true, como o attach da ponte usa): depois da
@@ -60,6 +64,40 @@ def tail_notifications():
                 out(dict(json.loads(line), jsonrpc="2.0"))
 
 
+def docs():
+    path = os.path.join(DIR, "docs.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as fh:
+        return json.load(fh)
+
+
+def save_docs(d):
+    path = os.path.join(DIR, "docs.json")
+    with open(path + ".tmp", "w") as fh:
+        json.dump(d, fh)
+    os.replace(path + ".tmp", path)   # nunca meio arquivo para quem lê
+
+
+def doc_set(params):
+    d, name = docs(), params["name"]
+    cur = d.get(name, {"value": None, "version": 0})
+    conflict = os.path.join(DIR, "conflict_once")
+    if os.path.exists(conflict):
+        os.remove(conflict)
+        d[name] = dict(cur, version=cur["version"] + 1)
+        save_docs(d)
+        raise LookupError("conflict")
+    if params["version"] != cur["version"]:
+        raise LookupError("conflict")
+    d[name] = {"value": params["value"], "version": cur["version"] + 1}
+    save_docs(d)
+    with open(os.path.join(DIR, "notify.jsonl"), "a") as fh:
+        fh.write(json.dumps({"method": "event", "params": {
+            "type": "doc", "seq": 99, "data": {"name": name, "version": d[name]["version"]}}}) + "\n")
+    return {"version": d[name]["version"]}
+
+
 def record(method, params):
     with open(os.path.join(DIR, "calls.jsonl"), "a") as fh:
         fh.write(json.dumps({"method": method, "params": params}) + "\n")
@@ -101,6 +139,10 @@ def handle(req):
             text = open(path).read() if os.path.exists(path) else ""
             return {"text": text, "complete": True, "how": "screen"}
         return {"turn": 1, "status": None}
+    if method == "doc.get":
+        return docs().get(params["name"], {"value": None, "version": 0})
+    if method == "doc.set":
+        return doc_set(params)
     if method == "events.subscribe":
         threading.Thread(target=tail_notifications, daemon=True).start()
         return {"channel": None, "seq": 1, "terminals": terminals()}

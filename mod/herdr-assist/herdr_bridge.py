@@ -15,11 +15,15 @@ macOS (3.9). Para rodar avulsa:
     BRIDGE_TOKEN=... python3 mod/herdr-assist/herdr_bridge.py
 
 Toda conexão exige um handshake `{"type":"hello","token":"..."}` na primeira
-linha — sem token não roda: se nenhum existir, um é gerado e salvo (0600).
+linha — sem token não roda: se o doc não tiver um, migra o do config-dir legado
+ou gera um novo.
 
-Variáveis: HC_BIN (hc), HERDR_APP_BIN (herdr-app), BRIDGE_PORT (9375),
-BRIDGE_BIND (0.0.0.0), BRIDGE_TOKEN, BRIDGE_MACHINES (máquinas SSH salvas do
-Herdr TUI a incluir: vazio, "all" ou lista).
+A configuração (token, port, avatar_repos, auto_update) vive no doc
+`herdr-assist` do core e recarrega ao vivo no evento `doc`.
+
+Variáveis: HC_BIN (hc), HERDR_APP_BIN (herdr-app), BRIDGE_BIND (0.0.0.0);
+BRIDGE_TOKEN e BRIDGE_PORT valem sobre o doc (dev/teste); HERDR_ASSIST_DOC
+(nome do doc, só teste) e HERDR_ASSIST_LEGACY_DIRS (origens da migração).
 """
 from __future__ import annotations
 
@@ -56,32 +60,27 @@ HC_BIN = (os.environ.get("HC_BIN") or shutil.which("hc")
           or os.path.expanduser("~/.local/bin/hc"))
 HERDR_APP_BIN = (os.environ.get("HERDR_APP_BIN") or shutil.which("herdr-app")
                  or os.path.expanduser("~/.local/bin/herdr-app"))
-PORT = int(os.environ.get("BRIDGE_PORT", "9375"))
-BIND = os.environ.get("BRIDGE_BIND", "0.0.0.0")
-CONFIG_DIR = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
-                            os.path.expanduser("~/.config/herdr-assist"))
-TOKEN_FILE = os.path.join(CONFIG_DIR, "token")
-TOKEN = ""  # carregado em main()
+BIND = os.environ.get("BRIDGE_BIND", "0.0.0.0")   # onde escutar não é escolha da pessoa
 
-# Máquinas SSH salvas no Herdr que a ponte também deve mostrar. O servidor
-# local só conhece os próprios panes; o cliente do Herdr junta várias máquinas
-# na tela, e é isso que o painel deve espelhar. Vazio = só o servidor local;
-# "all" = todas as habilitadas; ou rótulos/ids separados por vírgula.
-# Nada é instalado na máquina remota: o próprio Herdr usa o perfil salvo
-# (`herdr --machine <id> ...`) para falar com ela.
-MACHINES = os.environ.get("BRIDGE_MACHINES", "").strip()
-REMOTE_POLL_S = 5.0
-remote_agents: list[dict] = []          # última leitura das máquinas remotas
-remote_panes: dict = {}                 # "HVM/w7:p1" -> (profile_id, "w7:p1")
-
-# Repositórios de avatar que o painel deve varrer além do padrão de fábrica:
-# uma URL base por linha, "#" comenta. Fica no config-dir, ao lado do token —
-# o que sob o plugin do Herdr é ~/.config/herdr/plugins/config/herdr-assist/,
-# e não o default de baixo (esse só vale para a ponte rodando avulsa).
-# Lido a cada conexão, não no boot — editar o arquivo e reconectar o painel
-# basta, sem reiniciar a ponte.
-AVATAR_REPOS_FILE = os.path.join(CONFIG_DIR, "avatar_repos")
+# Configuração da ponte: vive no doc do core, não em arquivo. Campos e padrões:
+DOC_NAME = os.environ.get("HERDR_ASSIST_DOC", "herdr-assist")
+DEFAULTS = {"token": "", "port": 9375, "avatar_repos": [], "auto_update": True}
+ENV_TOKEN = os.environ.get("BRIDGE_TOKEN", "").strip()   # sobrescreve o doc (dev/teste)
+ENV_PORT = int(os.environ.get("BRIDGE_PORT") or 0)       # idem
+# Onde a migração procura `token` e `env`: config-dir do plugin do Herdr TUI e
+# o do modo avulso, nessa ordem.
+LEGACY_DIRS = (os.environ["HERDR_ASSIST_LEGACY_DIRS"].split(os.pathsep)
+               if "HERDR_ASSIST_LEGACY_DIRS" in os.environ else
+               [os.path.expanduser("~/.config/herdr/plugins/config/herdr-assist"),
+                os.path.expanduser("~/.config/herdr-assist")])
 AVATAR_REPOS_MAX = 2   # teto espelhado no firmware (STORE_BRIDGE_REPOS)
+
+# Estado vigente, trocado por apply_config/listen a cada leitura do doc.
+TOKEN = ""
+PORT = ENV_PORT or DEFAULTS["port"]
+REPOS: list = []      # repositórios de avatar que o painel varre além do padrão
+server = None         # listener TCP
+udp = None            # transporte da descoberta UDP
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                     datefmt="%H:%M:%S")
@@ -102,12 +101,12 @@ WIRE_MAX_B = 20000
 HC_KEYS = {"Escape": "esc", "C-c": "ctrl+c", "BSpace": "backspace"}
 CTL_SETTLE_S = 0.4       # tempo para a TUI reflowar antes da primeira leitura
 
-# CLI do Herdr TUI: só o que ainda não migrou (máquinas SSH, update.check).
+# CLI do Herdr TUI: só o update.check ainda a usa (sai junto com o update do mod).
 HERDR_BIN = (os.environ.get("HERDR_BIN") or shutil.which("herdr")
              or "/opt/homebrew/bin/herdr")
 
 # Eventos do core que podem mudar a lista de agentes; os demais (size, turn,
-# title, doc, keep) não mexem em nada que o painel recebe.
+# title, keep) não mexem em nada que o painel recebe. O `doc` é tratado à parte.
 REFRESH_EVENTS = {"created", "lost", "restarted", "finished", "removed",
                   "status", "labels", "foreground"}
 # Nome do app no status do core -> nome que o firmware conhece ("CC"/"CX").
@@ -251,30 +250,145 @@ async def refresh_accounts(panes) -> None:
             pid_env_cache.pop(k, None)
 
 
-def load_token() -> str:
-    """Token da ponte, nesta ordem: env, arquivo do plugin, ou gera um novo.
+def valid_port(p) -> bool:
+    return isinstance(p, int) and not isinstance(p, bool) and 0 < p < 65536
 
-    Fail-closed de propósito: não existe modo sem autenticação. O arquivo fica
-    no config-dir do plugin (editável pelo usuário; sobrescreva para igualar o
-    token entre máquinas).
-    """
-    tok = os.environ.get("BRIDGE_TOKEN", "").strip()
-    if tok:
-        return tok
+
+def has_token(doc) -> bool:
+    return isinstance(doc, dict) and isinstance(doc.get("token"), str) and bool(doc["token"].strip())
+
+
+def read_text(path: str) -> str:
     try:
-        with open(TOKEN_FILE) as f:
-            tok = f.read().strip()
-        if tok:
-            return tok
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
     except OSError:
-        pass
-    tok = secrets.token_hex(16)
-    os.makedirs(os.path.dirname(TOKEN_FILE), exist_ok=True)
-    with open(TOKEN_FILE, "w") as f:
-        f.write(tok + "\n")
-    os.chmod(TOKEN_FILE, 0o600)
-    log.info("token gerado em %s — cadastre-o no painel", TOKEN_FILE)
-    return tok
+        return ""
+
+
+def clean_repos(urls: list) -> list:
+    """URLs de repositório de avatar: sem vazias nem comentário, até o teto do firmware."""
+    urls = [u.strip() for u in urls if isinstance(u, str)]
+    return [u for u in urls if u and not u.startswith("#")][:AVATAR_REPOS_MAX]
+
+
+def read_avatar_repos_file(path: str) -> list:
+    """Arquivo `avatar_repos` legado (uma URL por linha, "#" comenta); [] se não existe."""
+    return clean_repos(read_text(path).splitlines())
+
+
+def migrate_legacy() -> dict:
+    """Configuração do config-dir legado (TUI, depois avulso); {} se não há token.
+
+    O primeiro diretório com token vence e só ele é lido. BRIDGE_TOKEN no `env`
+    vencia o arquivo `token` na ponte antiga, então vence aqui também: é o token
+    que os painéis pareados usam.
+    """
+    for d in LEGACY_DIRS:
+        env = {}
+        for line in read_text(os.path.join(d, "env")).splitlines():
+            key, sep, val = line.strip().partition("=")
+            if sep and not key.startswith("#"):
+                env[key.strip()] = val.strip().strip('"').strip("'")
+        token = env.get("BRIDGE_TOKEN") or read_text(os.path.join(d, "token")).strip()
+        if not token:
+            continue
+        found = {"token": token,
+                 "avatar_repos": read_avatar_repos_file(os.path.join(d, "avatar_repos"))}
+        if env.get("BRIDGE_PORT", "").isdigit() and valid_port(int(env["BRIDGE_PORT"])):
+            found["port"] = int(env["BRIDGE_PORT"])
+        if "AUTO_UPDATE" in env:
+            found["auto_update"] = env["AUTO_UPDATE"].lower() not in ("0", "false", "no")
+        log.info("migrando a configuração de %s", d)
+        return found
+    return {}
+
+
+async def load_config(conn) -> dict | None:
+    """Lê o doc; sem token nele, migra do legado (ou gera) e grava. None = core falhou.
+
+    Fail-closed: não existe modo sem autenticação. Em conflito de versão (outro
+    escritor entre o get e o set) relê e tenta mais uma vez.
+    """
+    for _ in range(2):
+        res = await conn.request("doc.get", {"name": DOC_NAME})
+        if res is None:
+            return None
+        doc = res.get("value") if isinstance(res.get("value"), dict) else {}
+        if ENV_TOKEN or has_token(doc):
+            return doc
+        legacy = migrate_legacy()
+        if not legacy:
+            log.info("token gerado — cadastre-o no painel")
+        doc = {**DEFAULTS, **legacy, **doc, "token": legacy.get("token") or secrets.token_hex(16)}
+        if await conn.request("doc.set", {"name": DOC_NAME, "value": doc,
+                                          "version": res.get("version", 0)}) is not None:
+            return doc
+    return None
+
+
+async def apply_config(doc) -> int:
+    """Aplica token, avatar_repos e auto_update do doc; devolve a porta a escutar.
+
+    Valor inválido não derruba nada: continua valendo o que já valia. Token novo
+    desconecta os painéis que entraram com o antigo.
+    """
+    global TOKEN, REPOS
+    if not isinstance(doc, dict):
+        return PORT
+    cfg = {**DEFAULTS, **doc}
+    token = ENV_TOKEN or (cfg["token"].strip() if isinstance(cfg["token"], str) else "")
+    if token and token != TOKEN:
+        if TOKEN:
+            log.info("token trocado: desconectando painéis com o antigo")
+            for w in list(clients):
+                w.close()
+        TOKEN = token
+    repos = clean_repos(cfg["avatar_repos"]) if isinstance(cfg["avatar_repos"], list) else REPOS
+    if repos != REPOS:
+        REPOS = repos
+        await broadcast_line(avatar_repos_line())
+    if isinstance(cfg["auto_update"], bool):
+        # é o que update.auto_enabled() lê
+        os.environ["AUTO_UPDATE"] = "1" if cfg["auto_update"] else "0"
+    port = ENV_PORT or cfg["port"]
+    return port if valid_port(port) else PORT
+
+
+async def listen(port: int) -> None:
+    """(Re)abre TCP e descoberta UDP em `port`; o par antigo só fecha com o novo de pé.
+
+    Painel já conectado segue na conexão que tem; só as novas vão para a porta nova.
+    """
+    global server, udp, PORT
+    new_server = await asyncio.start_server(handle_client, BIND, port)
+    # porta UDP ocupada não pode derrubar a ponte: sem descoberta ela ainda
+    # serve os painéis que já sabem o endereço
+    try:
+        new_udp, _ = await asyncio.get_running_loop().create_datagram_endpoint(
+            DiscoveryResponder, local_addr=(BIND, port))
+        log.info("descoberta udp em %s:%d", BIND, port)
+    except OSError as exc:
+        new_udp = None
+        log.warning("descoberta indisponível (udp %s:%d: %s)", BIND, port, exc)
+    for old in (server, udp):
+        if old:
+            old.close()
+    server, udp, PORT = new_server, new_udp, port
+    log.info("ponte ouvindo em %s:%d", BIND, port)
+
+
+async def configure(doc) -> None:
+    """Aplica o doc e move o listener se a porta mudou (ou se ainda não há um)."""
+    port = await apply_config(doc)
+    if port == PORT and server is not None:
+        return
+    try:
+        await listen(port)
+    except OSError as exc:
+        log.error("porta %d indisponível: %s", port, exc)
+        if server is None:
+            sys.exit(1)     # sem listener a ponte não serve para nada
 
 
 # Sem isto cada chamada pisca um console: a ponte roda destacada, sem console
@@ -282,8 +396,8 @@ def load_token() -> str:
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
-async def cli_run(args: list[str], timeout: float = 10, binary: str = "") -> str | None:
-    """Roda o herdr (ou `binary`) e devolve o stdout. None em qualquer falha.
+async def cli_run(binary: str, args: list[str], timeout: float = 10) -> str | None:
+    """Roda `binary` e devolve o stdout. None em qualquer falha.
 
     Decodifica aqui, em utf-8: deixar o Python decidir pelo locale (cp1252 no
     Windows) estoura na primeira caixa ou seta que a tela do terminal trouxer,
@@ -291,12 +405,12 @@ async def cli_run(args: list[str], timeout: float = 10, binary: str = "") -> str
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            binary or HERDR_BIN, *args,
+            binary, *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             creationflags=NO_WINDOW)
     except (OSError, ValueError) as exc:
-        log.warning("herdr %s: %s", args[0] if args else "?", exc)
+        log.warning("%s %s: %s", os.path.basename(binary), args[0] if args else "?", exc)
         return None
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout)
@@ -429,103 +543,12 @@ def friendly_name(label: str, cwd: str) -> str:
     return os.path.basename(cwd or "")
 
 
-def machine_code(label: str) -> str:
-    """Rótulo curto (3 letras) que caiba na linha do painel: "Hermes VM" -> HVM."""
-    words = [w for w in re.split(r"[^A-Za-z0-9]+", label or "") if w]
-    if not words:
-        return "REM"
-    if len(words) == 1:
-        return words[0][:3].upper()
-    return "".join(w[0] for w in words)[:3].upper()
-
-
-async def refresh_machines() -> None:
-    """Relê os agentes das máquinas salvas e troca o cache de uma vez.
-
-    O id do pane vai com o código da máquina na frente ("HVM/w7:p1") porque
-    w7:p1 existe nos dois servidores — e é por ele que a ponte sabe para onde
-    mandar focus/send_keys depois.
-    """
-    global remote_agents, remote_panes
-    if not MACHINES:
-        return
-    out = await cli_run(["machine", "list", "--json"], timeout=8)
-    if not out:
-        return
-    try:
-        profiles = json.loads(out)
-    except json.JSONDecodeError:
-        return
-    wanted = {w.strip().lower() for w in MACHINES.split(",") if w.strip()}
-    picked = []
-    for p in profiles:
-        if not p.get("enabled"):
-            continue
-        if "all" not in wanted:
-            names = {(p.get("label") or "").lower(), (p.get("id") or "").lower()}
-            if not (names & wanted):
-                continue
-        picked.append(p)
-
-    agents: list[dict] = []
-    pane_map: dict = {}
-    ok = 0
-    for p in picked:
-        code = machine_code(p.get("label") or p.get("id") or "")
-        # api snapshot traz agentes e abas numa chamada só (uma ida SSH por
-        # máquina por ciclo); o rótulo da aba é o nome amigável do agente
-        data = await cli_run(["--machine", p["id"], "api", "snapshot"], timeout=15)
-        if not data:
-            continue                      # máquina fora do ar: mantém o resto
-        try:
-            snap = json.loads(data).get("result", {}).get("snapshot", {}) or {}
-        except (json.JSONDecodeError, AttributeError):
-            continue
-        if not snap:
-            continue
-        ok += 1
-        labels = {t.get("tab_id"): (t.get("label") or "")
-                  for t in snap.get("tabs", [])}
-        for a in snap.get("agents", []):
-            raw = a.get("pane_id")
-            if not raw:
-                continue
-            name = friendly_name(labels.get(a.get("tab_id"), ""), a.get("cwd") or "")
-            ns = f"{code}/{raw}"
-            pane_map[ns] = (p["id"], raw)
-            agents.append({
-                "pane_id": ns,
-                "agent": a.get("agent", ""),
-                "status": a.get("agent_status", "unknown"),
-                "project": f"{code}/{name}",
-                "workspace_id": a.get("workspace_id", ""),
-                "machine": p.get("label", ""),
-            })
-    if picked and ok == 0:
-        # nenhuma máquina respondeu: é queda de SSH/rede, não "acabaram os
-        # agentes" — manter o último retrato evita a tela esvaziar sozinha
-        return
-    if agents != remote_agents:
-        log.info("máquinas: %d agente(s) de %d máquina(s)", len(agents), len(picked))
-    remote_agents = agents
-    remote_panes = pane_map
-
-
-async def machines_loop() -> None:
-    while True:
-        try:
-            await refresh_machines()
-        except Exception as exc:          # SSH/rede nunca derruba a ponte
-            log.warning("máquinas: %s", exc)
-        await asyncio.sleep(REMOTE_POLL_S)
-
-
 def agent_panes() -> list:
     """Os agentes do core no formato de pane que o resto da ponte já usa.
 
     Agente = terminal vivo que reporta status. Ficam de fora a própria ponte
     (rótulo herdr-assist=bridge) e os terminais de outras máquinas
-    (`machine/t7`), que a v1 não espelha. Space e tab vêm do rótulo `where`
+    (`machine/t7`), que o painel não espelha. Space e tab vêm do rótulo `where`
     ("space / tab"), e o pid é o do processo em primeiro plano.
     """
     panes = []
@@ -655,11 +678,6 @@ async def push_agents() -> None:
     pane_paths = pane_path  # publica o mapa desta rodada para _session_paths()
     codex_paths.clear()     # idem para os rollouts (mutação in-place: sem global)
     codex_paths.update(codex_path)
-
-    # Máquinas SSH salvas (BRIDGE_MACHINES): entram no mesmo snapshot, com o id
-    # prefixado pelo código da máquina. O cliente do Herdr mostra várias
-    # máquinas juntas; o servidor local não, então é a ponte que junta.
-    agents.extend(remote_agents)
 
     # reconstruir em vez de mutar poda de graça quem saiu de working ou sumiu
     working_since = new_since
@@ -949,7 +967,11 @@ async def hc_loop() -> None:
             global rpc_conn
             rpc_conn = rpc
             snap = await sub.request("events.subscribe", {})
-            if snap is not None:
+            # relê o doc a cada (re)assinatura: um evento `doc` pode ter passado
+            # enquanto a conexão estava fora
+            doc = None if snap is None else await load_config(rpc)
+            if doc is not None:
+                await configure(doc)
                 terminals.clear()
                 terminals.update({t["address"]: t for t in snap.get("terminals", [])})
                 log.info("hc: assinado, %d terminal(is)", len(terminals))
@@ -976,6 +998,14 @@ async def hc_loop() -> None:
                             terminals[addr] = t
                         else:
                             terminals.pop(addr, None)
+                    elif method == "event" and params.get("type") == "doc":
+                        if (params.get("data") or {}).get("name") == DOC_NAME:
+                            res = await rpc.request("doc.get", {"name": DOC_NAME})
+                            if res is not None:
+                                await configure(res.get("value"))
+                            elif not rpc.alive:
+                                break
+                        continue
                     else:
                         continue    # heartbeat e eventos que não mudam agents
                     await push_agents()
@@ -1294,13 +1324,6 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         if pane_id not in known_panes:
             return await deny("pane desconhecido")
 
-    # pane de outra máquina: o socket local não o alcança, só a CLI com
-    # --machine. Só focus e send_keys fazem sentido para o pager, e é o que a
-    # allowlist de teclas continua valendo.
-    remote = remote_panes.get(pane_id) if pane_id else None
-    if remote and kind not in ("focus", "send_keys"):
-        return await deny("pane de outra máquina: só focus e send_keys")
-
     if kind in ("send_keys", "send_text"):
         # validação antes de tudo: vale mesmo enquanto o envio não existe
         keys, text = msg.get("keys", []), msg.get("text", "")
@@ -1309,15 +1332,7 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         if kind == "send_text" and (not text or len(text) > MAX_TEXT):
             return await deny("texto vazio ou longo demais")
 
-    if remote and kind == "send_keys":
-        log.info("send_keys pane=%s keys=%s", pane_id, keys)
-        await cli_run(["--machine", remote[0], "pane", "send-keys", remote[1], *keys])
-
-    elif remote and kind == "focus":
-        log.info("focus pane=%s", pane_id)
-        await cli_run(["--machine", remote[0], "agent", "focus", remote[1]])
-
-    elif kind == "read_pane":
+    if kind == "read_pane":
         lines = max(1, min(int(msg.get("lines", PANE_LINES)), 60))
         # O painel manda a geometria da própria tela: enquanto ele estiver lendo
         # este pane, a sessão fica nesse tamanho e o conteúdo cabe sem arrastar.
@@ -1359,8 +1374,7 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
 
     elif kind == "focus":
         log.info("focus pane=%s", pane_id)
-        if await cli_run(["do", "agent.focus", "--terminal", pane_id],
-                         binary=HERDR_APP_BIN) is None:
+        if await cli_run(HERDR_APP_BIN, ["do", "agent.focus", "--terminal", pane_id]) is None:
             await deny("focus failed")
 
     elif kind == "scroll_pane":
@@ -1382,17 +1396,9 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         await deny("comando desconhecido")
 
 
-def avatar_repos() -> list:
-    """URLs de repositório de avatar do config-dir; [] se o arquivo não existe.
-
-    Ausência é o caminho normal: só quem publica avatares cria este arquivo.
-    """
-    try:
-        with open(AVATAR_REPOS_FILE, encoding="utf-8") as fh:
-            urls = [ln.strip() for ln in fh]
-    except OSError:
-        return []
-    return [u for u in urls if u and not u.startswith("#")][:AVATAR_REPOS_MAX]
+def avatar_repos_line() -> str:
+    """Mensagem `avatar_repos`; lista vazia é a ponte dizendo "não tenho nenhum"."""
+    return json.dumps({"type": "avatar_repos", "repos": REPOS}, separators=(",", ":"))
 
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -1435,8 +1441,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
         # Repositórios de avatar: sempre enviados, inclusive vazios — lista
         # vazia é a ponte dizendo "não tenho nenhum", e o painel precisa disso
         # para esquecer os da conexão anterior.
-        writer.write((json.dumps({"type": "avatar_repos", "repos": avatar_repos()},
-                                 separators=(",", ":")) + "\n").encode())
+        writer.write((avatar_repos_line() + "\n").encode())
         await writer.drain()
         # Versão da ponte: BOOT_VERSION, e não a do disco — o que interessa ao
         # painel é o que está no ar, que depois de um install pendente de
@@ -1543,32 +1548,17 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
 
 
 async def main() -> None:
-    global TOKEN, BOOT_VERSION
+    global BOOT_VERSION
     if not shutil.which(HC_BIN):
         log.error("binário do hc não encontrado (%s)", HC_BIN)
         sys.exit(1)
-    TOKEN = load_token()
     BOOT_VERSION = update.installed_version()
     log.info("ponte versão %s", BOOT_VERSION or "?")
+    # o listener só sobe quando o hc_loop lê o doc (token e porta vêm de lá)
     asyncio.create_task(hc_loop())
     asyncio.create_task(limits_loop())
     asyncio.create_task(update_loop())
-    if MACHINES:
-        # só aqui a ponte toca SSH: as máquinas são lidas pelo próprio Herdr
-        log.info("incluindo máquinas salvas: %s", MACHINES)
-        asyncio.create_task(machines_loop())
-    # porta UDP ocupada não pode derrubar a ponte: sem descoberta ela ainda
-    # serve os painéis que já sabem o endereço
-    try:
-        await asyncio.get_running_loop().create_datagram_endpoint(
-            DiscoveryResponder, local_addr=(BIND, PORT))
-        log.info("descoberta udp em %s:%d", BIND, PORT)
-    except OSError as exc:
-        log.warning("descoberta indisponível (udp %s:%d: %s)", BIND, PORT, exc)
-    server = await asyncio.start_server(handle_client, BIND, PORT)
-    log.info("ponte ouvindo em %s:%d", BIND, PORT)
-    async with server:
-        await server.serve_forever()
+    await asyncio.Event().wait()
 
 
 if __name__ == "__main__":
