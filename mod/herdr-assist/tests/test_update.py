@@ -1,4 +1,5 @@
 # cd mod/herdr-assist && python -m unittest tests.test_update -v
+import hashlib
 import io
 import json
 import os
@@ -124,20 +125,38 @@ class TestState(unittest.TestCase):
                 self.assertEqual(u.load_state(), {})
 
 
-def make_archive(dest, version, members=None):
-    """Grava no lugar de um download o pacote do mod, como o release.yml o monta."""
+def make_archive(version, members=None):
+    """Bytes do pacote do mod, como o release.yml o monta."""
     files = {"herdr-assist/VERSION": version + "\n", "herdr-assist/main.js": "// " + version}
     files.update(members or {})
-    with tarfile.open(dest, "w:gz") as tf:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
         for name, text in files.items():
             data = text.encode()
             info = tarfile.TarInfo(name)
             info.size = len(data)
             tf.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
 
 
-def fake_fetch(version, **kw):
-    return lambda url, dest: make_archive(dest, version, **kw)
+def sums_for(archive):
+    """SHA256SUMS como o `sha256sum *.bin *.tar.gz` do release.yml grava."""
+    return ("%s  herdr-assist-v0.10.0-install.bin\n%s  herdr-assist-mod.tar.gz\n"
+            % ("0" * 64, hashlib.sha256(archive).hexdigest()))
+
+
+def fake_fetch(version, sums=None, **kw):
+    """Download falso: o pacote, ou o SHA256SUMS dele (`sums` troca o conteúdo)."""
+    archive = make_archive(version, **kw)
+
+    def fetch(url, dest):
+        if url.endswith("/SHA256SUMS"):
+            data = (sums_for(archive) if sums is None else sums).encode()
+        else:
+            data = archive
+        with open(dest, "wb") as fh:
+            fh.write(data)
+    return fetch
 
 
 class ModDir(unittest.TestCase):
@@ -182,6 +201,19 @@ class TestInstall(ModDir):
         self.assertEqual(self.read("main.js"), "// 0.9.0")
         self.assertEqual(os.listdir(self.parent), ["herdr-assist"])
 
+    def test_backup_e_pasta_nova_sao_ocultos(self):
+        # o app não recarrega pastas ocultas: um backup visível viraria um 2º mod
+        real, names = os.rename, []
+
+        def rename(a, b):
+            names.extend([a, b])
+            real(a, b)
+
+        with mock.patch.object(u.os, "rename", side_effect=rename):
+            self.assertTrue(u.install("0.10.0", self.mod, fake_fetch("0.10.0")))
+        visible = {n for n in names if not os.path.relpath(n, self.parent).startswith(".")}
+        self.assertEqual(visible, {self.mod})
+
     def test_download_falho_mantem_a_antiga(self):
         def boom(url, dest):
             raise OSError("sem rota")
@@ -192,6 +224,31 @@ class TestInstall(ModDir):
         self.assertFalse(u.install("0.10.0", self.mod, fake_fetch("0.8.0")))
         self.assertEqual(self.read("VERSION").strip(), "0.9.0")
 
+    def test_baixa_o_sha256sums_da_mesma_tag(self):
+        urls = []
+        inner = fake_fetch("0.10.0")
+        self.assertTrue(u.install("0.10.0", self.mod,
+                                  lambda url, dest: (urls.append(url), inner(url, dest))))
+        self.assertEqual(sorted(urls), sorted([u.ASSET_URL.format("0.10.0"),
+                                               u.SUMS_URL.format("0.10.0")]))
+
+    def test_hash_divergente_nao_instala(self):
+        bad = "%s  herdr-assist-mod.tar.gz\n" % ("f" * 64)
+        self.assertFalse(u.install("0.10.0", self.mod, fake_fetch("0.10.0", sums=bad)))
+        self.assertEqual(self.read("VERSION").strip(), "0.9.0")
+        self.assertEqual(os.listdir(self.parent), ["herdr-assist"])
+
+    def test_sem_hash_do_pacote_nao_instala(self):
+        for sums in ("", "%s  outro.tar.gz\n" % ("0" * 64), "lixo\n"):
+            self.assertFalse(u.install("0.10.0", self.mod, fake_fetch("0.10.0", sums=sums)),
+                             sums)
+        self.assertEqual(self.read("VERSION").strip(), "0.9.0")
+
+    def test_sha256sums_em_modo_binario_tambem_vale(self):
+        archive = make_archive("0.10.0")
+        sums = "%s *herdr-assist-mod.tar.gz\n" % hashlib.sha256(archive).hexdigest()
+        self.assertEqual(u.expected_sha256(sums), hashlib.sha256(archive).hexdigest())
+
     def test_pacote_que_escapa_da_pasta_e_recusado(self):
         evil = fake_fetch("0.10.0", members={"herdr-assist/../../fora": "x"})
         self.assertFalse(u.install("0.10.0", self.mod, evil))
@@ -199,24 +256,70 @@ class TestInstall(ModDir):
         self.assertEqual(self.read("VERSION").strip(), "0.9.0")
 
 
+class TestRecover(ModDir):
+    def test_queda_entre_os_renames_restaura_o_backup(self):
+        old = os.path.join(self.parent, ".herdr-assist.old")
+        os.rename(self.mod, old)
+        u.recover(self.mod)
+        self.assertEqual(self.read("VERSION").strip(), "0.9.0")
+        self.assertEqual(os.listdir(self.parent), ["herdr-assist"])
+
+    def test_pasta_presente_nao_mexe_em_nada(self):
+        old = os.path.join(self.parent, ".herdr-assist.old")
+        os.mkdir(old)
+        u.recover(self.mod)
+        self.assertEqual(sorted(os.listdir(self.parent)), [".herdr-assist.old", "herdr-assist"])
+
+    def test_sem_backup_nao_faz_nada(self):
+        os.rename(self.mod, os.path.join(self.parent, "outra"))
+        u.recover(self.mod)
+        self.assertEqual(os.listdir(self.parent), ["outra"])
+
+
+class TestIsDev(ModDir):
+    def test_copia_instalada_com_tests_nao_e_dev(self):
+        # a instalação por cópia do checkout leva tests/ e ainda assim atualiza
+        os.mkdir(os.path.join(self.mod, "tests"))
+        with mock.patch.object(u, "APP_MOD_DIR", self.mod):
+            self.assertFalse(u.is_dev(self.mod))
+
+    def test_symlink_no_caminho_do_app_e_dev(self):
+        # o python resolve o symlink no __file__: o teste é no caminho do app
+        link = os.path.join(self.parent, "app-link")
+        os.symlink(self.mod, link)
+        with mock.patch.object(u, "APP_MOD_DIR", link):
+            self.assertTrue(u.is_dev(self.mod))
+
+    def test_pasta_com_git_e_dev(self):
+        os.mkdir(os.path.join(self.mod, ".git"))
+        with mock.patch.object(u, "APP_MOD_DIR", self.mod):
+            self.assertTrue(u.is_dev(self.mod))
+
+    def test_rodando_fora_da_pasta_do_app_e_dev(self):
+        # ponte avulsa do checkout: trocar essa pasta apagaria o trabalho
+        with mock.patch.object(u, "APP_MOD_DIR", os.path.join(self.parent, "outra")):
+            self.assertTrue(u.is_dev(self.mod))
+
+
 class TestCheck(ModDir):
     """A rodada inteira, com a rede trocada por dublês."""
 
-    def run_check(self, installed="0.9.0", published="0.10.0", mod=None, auto="1"):
+    def run_check(self, installed="0.9.0", published="0.10.0", app=None, auto="1"):
         fetch = mock.Mock(side_effect=fake_fetch(published))
         with tempfile.TemporaryDirectory() as sd, \
                 mock.patch.object(u, "STATE", sd), \
                 mock.patch.object(u, "STATE_FILE", os.path.join(sd, "update.json")), \
                 mock.patch.object(u, "installed_version", return_value=installed), \
                 mock.patch.object(u, "published_version", return_value=published), \
-                mock.patch.dict(os.environ, {"AUTO_UPDATE": auto}):
-            st = u.check(mod or self.mod, fetch)
+                mock.patch.dict(os.environ, {"AUTO_UPDATE": auto}), \
+                mock.patch.object(u, "APP_MOD_DIR", app or self.mod):
+            st = u.check(self.mod, fetch)
         return st, fetch
 
     def test_atualiza_quando_ha_versao_nova(self):
         st, fetch = self.run_check()
         self.assertEqual(st["state"], "installed")
-        fetch.assert_called_once()
+        self.assertEqual(fetch.call_count, 2)   # pacote e SHA256SUMS
         self.assertEqual(self.read("VERSION").strip(), "0.10.0")
 
     def test_versao_igual_nao_atua(self):
@@ -234,18 +337,10 @@ class TestCheck(ModDir):
     def test_pasta_symlink_nao_atua(self):
         link = os.path.join(self.parent, "dev-link")
         os.symlink(self.mod, link)
-        st, fetch = self.run_check(mod=link)
+        st, fetch = self.run_check(app=link)
         self.assertEqual(st["state"], "dev")
         fetch.assert_not_called()
         self.assertTrue(os.path.islink(link))
-
-    def test_checkout_com_tests_nao_atua(self):
-        # o python resolve o symlink ao importar, então o update vê o caminho
-        # real; o pacote do release não leva tests/, o checkout leva
-        os.mkdir(os.path.join(self.mod, "tests"))
-        st, fetch = self.run_check()
-        self.assertEqual(st["state"], "dev")
-        fetch.assert_not_called()
 
     def test_download_falho_registra_failed(self):
         with mock.patch.object(u, "install", return_value=False):

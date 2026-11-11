@@ -317,6 +317,7 @@ def status() -> dict:
 
 
 def main(argv: list) -> int:
+    update.recover()   # queda entre os renames de uma atualização
     cmd = argv[0] if argv else ""
     if cmd == "status":
         out = status()

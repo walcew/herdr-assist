@@ -1,4 +1,5 @@
 # cd mod/herdr-assist && python -m unittest tests.test_ctl -v
+import io
 import json
 import os
 import shutil
@@ -167,6 +168,14 @@ class TestPair(FakeCore):
         got = ctl.pair("127.0.0.1", 9)
         self.assertEqual(got["ok"], False)
         self.assertIn("no token", got["error"])
+
+
+class TestMain(unittest.TestCase):
+    def test_toda_subida_recupera_uma_troca_interrompida(self):
+        with mock.patch.object(ctl.update, "recover") as recover, \
+                mock.patch("sys.stdout", new_callable=io.StringIO):
+            ctl.main(["nada"])
+        recover.assert_called_once_with()
 
 
 class TestDiscover(unittest.TestCase):

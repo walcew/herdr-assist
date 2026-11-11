@@ -5,20 +5,29 @@ release.yml), e a versão dela é travada com a tag. O `manifest.json` do painel
 continua sendo o de sempre: como o release é um trem único, a versão anunciada
 ali É a versão do mod daquela tag, então um GET basta, sem a API do GitHub.
 
+O pacote só é extraído se o sha256 dele bater com o do `SHA256SUMS` da mesma
+tag (o release.yml gera os dois); sem a linha ou divergente, não instala.
+
 A troca extrai o pacote ao lado da pasta do mod (mesmo diretório pai, para o
-rename ficar no mesmo filesystem), renomeia a pasta antiga para backup, põe a
-nova no lugar e só então apaga o backup. Se algo falha no meio, a antiga volta.
+rename ficar no mesmo filesystem), renomeia a pasta antiga para o backup oculto
+`.herdr-assist.old`, põe a nova no lugar e só então apaga o backup. Se algo
+falha no meio, a antiga volta; se o processo morre entre os dois renames,
+recover() restaura o backup na próxima subida do ctl.py ou da Ponte. Tudo que
+fica ao lado é oculto (prefixo `.`), porque o app não recarrega pastas ocultas.
 Quem reinicia a Ponte é o laço do herdr_bridge.py, que percebe a versão em disco
 mudar e chama restart_bridge (= `ctl.py restart`).
 
-Não atua em checkout de desenvolvimento (symlink ou pasta com tests/) nem com
-auto_update desligado. A rede e o download entram por parâmetro, para o teste.
+Só atualiza a cópia instalada em `<home do app>/mods/herdr-assist`, e não atua
+em checkout de desenvolvimento (ver is_dev) nem com auto_update desligado. A
+rede e o download entram por parâmetro, para o teste.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -30,6 +39,11 @@ import urllib.request
 log = logging.getLogger("bridge.update")
 
 DIR = os.path.dirname(os.path.abspath(__file__))
+# Onde o app procura o mod. É esse caminho, e não o DIR, que diz se a pasta é
+# um symlink: o Python resolve symlinks ao importar, então o DIR já é o real.
+APP_MOD_DIR = os.path.join(os.environ.get("HERDR_APP_HOME")
+                           or os.path.expanduser("~/.config/herdr-app"),
+                           "mods", "herdr-assist")
 # Fora da pasta do mod, que é substituída inteira a cada atualização.
 STATE = os.environ.get("HERDR_ASSIST_STATE_DIR",
                        os.path.expanduser("~/.config/herdr-assist"))
@@ -44,8 +58,10 @@ STATE_FILE = os.path.join(STATE, "update.json")
 MANIFEST_URL = os.environ.get(
     "UPDATE_MANIFEST_URL",
     "https://github.com/walcew/herdr-assist/releases/latest/download/manifest.json")
+ASSET_NAME = "herdr-assist-mod.tar.gz"
 ASSET_URL = ("https://github.com/walcew/herdr-assist/releases/download/"
-             "v{}/herdr-assist-mod.tar.gz")
+             "v{}/" + ASSET_NAME)
+SUMS_URL = "https://github.com/walcew/herdr-assist/releases/download/v{}/SHA256SUMS"
 
 HTTP_TIMEOUT = 10
 DOWNLOAD_TIMEOUT = 60
@@ -125,12 +141,31 @@ def should_update(installed: str, published: str) -> tuple:
 
 
 def is_dev(mod_dir: str) -> bool:
-    """Checkout de trabalho: symlink, ou pasta com tests/ (o pacote não os leva).
+    """Checkout de trabalho: não é para trocar a pasta.
 
-    O segundo teste existe porque o Python resolve symlinks ao importar este
-    módulo: com a pasta linkada, o DIR já chega como o caminho real.
+    É dev se o caminho do app é um symlink, se a pasta tem `.git`, ou se este
+    código não roda da pasta do app (ponte avulsa do checkout: trocar a pasta
+    apagaria o trabalho).
     """
-    return os.path.islink(mod_dir) or os.path.isdir(os.path.join(mod_dir, "tests"))
+    return (os.path.islink(APP_MOD_DIR) or os.path.exists(os.path.join(mod_dir, ".git"))
+            or os.path.realpath(mod_dir) != os.path.realpath(APP_MOD_DIR))
+
+
+def backup_dir(mod_dir: str) -> str:
+    """Backup da troca: oculto, ao lado da pasta do mod."""
+    parent, name = os.path.split(mod_dir)
+    return os.path.join(parent, "." + name + ".old")
+
+
+def recover(mod_dir: str = APP_MOD_DIR) -> None:
+    """Pasta do mod ausente e backup presente: a troca caiu entre os renames."""
+    old = backup_dir(mod_dir)
+    if not os.path.lexists(mod_dir) and os.path.isdir(old):
+        try:
+            os.rename(old, mod_dir)
+            log.warning("update: restored %s from an interrupted swap", mod_dir)
+        except OSError as exc:
+            log.warning("update: could not restore %s: %s", mod_dir, exc)
 
 
 def fetch(url: str, dest: str) -> None:
@@ -141,6 +176,27 @@ def fetch(url: str, dest: str) -> None:
         raise OSError("pacote maior que %d bytes" % DOWNLOAD_MAX)
     with open(dest, "wb") as fh:
         fh.write(data)
+
+
+def expected_sha256(sums: str) -> str:
+    """sha256 do pacote no texto do SHA256SUMS; "" se não há a linha."""
+    for line in sums.splitlines():
+        digest, _, name = line.strip().partition(" ")
+        if name.strip().lstrip("*") == ASSET_NAME and re.fullmatch(r"[0-9a-f]{64}", digest):
+            return digest
+    return ""
+
+
+def verify(archive: str, sums_file: str) -> None:
+    """ValueError se o pacote não bate com o SHA256SUMS (ou se ele não o lista)."""
+    with open(sums_file, encoding="utf-8", errors="replace") as fh:
+        want = expected_sha256(fh.read())
+    if not want:
+        raise ValueError("SHA256SUMS has no entry for " + ASSET_NAME)
+    with open(archive, "rb") as fh:
+        got = hashlib.sha256(fh.read()).hexdigest()
+    if got != want:
+        raise ValueError("sha256 mismatch for %s: %s != %s" % (ASSET_NAME, got, want))
 
 
 def extract(archive: str, dest: str) -> None:
@@ -156,7 +212,7 @@ def extract(archive: str, dest: str) -> None:
 
 def swap(new: str, mod_dir: str) -> None:
     """Põe `new` no lugar de `mod_dir`; se não conseguir, a antiga fica intacta."""
-    old = mod_dir + ".old"
+    old = backup_dir(mod_dir)
     shutil.rmtree(old, ignore_errors=True)    # sobra de uma troca interrompida
     os.rename(mod_dir, old)
     try:
@@ -172,7 +228,10 @@ def install(target: str, mod_dir: str, fetch_fn=fetch) -> bool:
     work = tempfile.mkdtemp(prefix=".herdr-assist-update-", dir=os.path.dirname(mod_dir))
     try:
         archive = os.path.join(work, "mod.tar.gz")
+        sums = os.path.join(work, "SHA256SUMS")
         fetch_fn(ASSET_URL.format(target), archive)
+        fetch_fn(SUMS_URL.format(target), sums)
+        verify(archive, sums)
         extract(archive, work)
         new = os.path.join(work, "herdr-assist")
         with open(os.path.join(new, "VERSION"), encoding="utf-8") as fh:

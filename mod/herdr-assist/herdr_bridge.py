@@ -1572,6 +1572,7 @@ async def main() -> None:
     if not shutil.which(HC_BIN):
         log.error("binário do hc não encontrado (%s)", HC_BIN)
         sys.exit(1)
+    update.recover()   # queda entre os renames de uma atualização
     BOOT_VERSION = update.installed_version()
     log.info("ponte versão %s", BOOT_VERSION or "?")
     # o listener só sobe quando o hc_loop lê o doc (token e porta vêm de lá)

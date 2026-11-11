@@ -93,10 +93,16 @@ no PATH); `BRIDGE_TOKEN` e `BRIDGE_PORT` valem sobre o doc, para dev e teste.
 ## Atualização automática
 
 Uma vez por dia a Ponte compara o `VERSION` da pasta com a versão do release mais novo,
-baixa `herdr-assist-mod.tar.gz`, extrai ao lado (no mesmo diretório), troca a pasta por
-rename com backup e reinicia a Ponte (`ctl.py restart`). Se algo falha no meio, a pasta
-antiga fica. Não atua com `auto_update: false` nem quando a pasta é um symlink ou um
-checkout (tem `tests/`): ali quem atualiza é o `git pull`.
+baixa `herdr-assist-mod.tar.gz` e o `SHA256SUMS` da mesma tag, confere o sha256 do pacote
+(sem a linha dele ou divergente, não instala), extrai ao lado (no mesmo diretório), troca a
+pasta por rename com um backup oculto (`.herdr-assist.old`) e reinicia a Ponte
+(`ctl.py restart`). Se algo falha no meio, a pasta antiga fica; se a máquina cai entre os
+dois renames, a próxima subida do `ctl.py` ou da Ponte restaura o backup.
+
+Só a cópia em `~/.config/herdr-app/mods/herdr-assist` (ou `$HERDR_APP_HOME/mods/…`) se
+atualiza. Não atua com `auto_update: false`, quando esse caminho é um symlink, quando a
+pasta tem `.git` nem quando a Ponte roda de outra pasta: ali quem atualiza é o `git pull`.
+A cópia comum (`cp -R` do checkout, com `tests/` e tudo) se atualiza normalmente.
 
 ## Ver o que está acontecendo
 
@@ -133,6 +139,7 @@ da Ponte. Sem a TCP ele encontra e não conecta.
 | Aviso de porta ocupada no dialog | a ponte do Herdr TUI ainda está de pé: veja [Saindo do Herdr TUI](#saindo-do-herdr-tui) |
 | Painéis em `OFFLINE` ao abrir o app, sem indicador no layout | a Ponte só sobe quando há uma cópia do mod viva: abra o dialog com `cmd-alt-a` ou ponha o bloco do indicador no layout |
 | Painel pareado em `OFFLINE`, log sem erro | falta a regra **UDP** (a descoberta não chega), ou o token foi rotacionado |
+| Mod sumiu de `mods/` depois de uma atualização, `.herdr-assist.old` no lugar | a máquina caiu no meio da troca: `python3 ~/.config/herdr-app/mods/.herdr-assist.old/ctl.py status` restaura a pasta |
 | `cmd-alt-a` não abre o dialog | o `keys.json` do mod não foi mesclado, ou a tecla já é de outro comando |
 | Ponte não sobe: `binário do hc não encontrado` | `hc` fora do PATH: aponte `HC_BIN` |
 | `limites claude: claude auth: … --json` | a CLI do Claude instalada não aceita a flag; afeta só a tela opcional de limites, não os agentes |

@@ -51,9 +51,8 @@ jobs:
 
       # Fora do pacote: os testes, o que o `herdr-app check` gera
       # (gpui-kit.d.ts, jsconfig.json), o .gitignore e o RECIPE.md/preview.png
-      # (vitrine do herdr.dev, não fazem parte da instalação). O update trata a
-      # presença de tests/ como checkout de desenvolvimento e não troca a
-      # pasta, então ele NÃO pode entrar aqui.
+      # (vitrine do herdr.dev, não fazem parte da instalação). O update confere
+      # o sha256 do pacote pelo SHA256SUMS do job publish antes de extrair.
       - name: Package mod
         run: |
           mkdir -p dist
