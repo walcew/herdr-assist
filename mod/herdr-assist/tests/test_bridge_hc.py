@@ -98,6 +98,19 @@ class BridgeHarness(unittest.TestCase):
             time.sleep(0.02)
         return self.calls(method)
 
+    def lock_attaches(self):
+        """Attaches da trava; os de observe são só leituras da tela."""
+        return [c for c in self.calls("terminal.attach") if not c.get("observe")]
+
+    def lock_closes(self, n=1):
+        """CLOSE do canal da trava (1); os canais de observe também fecham."""
+        deadline = time.time() + 5
+        while len([c for c in self.calls("frame.close") if c["channel"] == 1]) < n:
+            if time.time() > deadline:
+                self.fail("trava não fechou")
+            time.sleep(0.02)
+        return True
+
     def read_locked(self, s, rf, pane="t1a", cols=50, rows=20):
         return self.command(s, rf, {"type": "read_pane", "pane_id": pane, "lines": 5,
                                     "cols": cols, "rows": rows})
@@ -312,7 +325,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
                                               "text": "oi agente"}), [])
         self.assertEqual(self.calls_until("frame.data"), [{"channel": 1, "text": "oi agente"}])
         self.assertEqual(self.calls("terminal.send"), [])
-        self.assertEqual(len(self.calls("terminal.attach")), 1)
+        self.assertEqual(len(self.lock_attaches()), 1)
 
     def test_send_text_sem_trava_trava_no_tamanho_atual_do_terminal(self):
         self.set_terminals([terminal("t1a", cols=120, rows=40)])
@@ -393,20 +406,42 @@ class TestBridgeOverFakeHc(BridgeHarness):
         s, rf = self.connect_ready()
         out = self.read_locked(s, rf)
         self.assertEqual(out[0]["content"], b.NEUTRAL_SGR + "tela")
-        self.assertEqual(self.calls("terminal.attach"),
-                         [{"terminal": "t1a", "cols": 50, "rows": 20}])
+        self.assertEqual(self.lock_attaches(), [{"terminal": "t1a", "cols": 50, "rows": 20}])
         # a ponte descarta o stream, mas devolve o crédito da repintura
         self.assertEqual(self.calls_until("frame.credit")[0],
                          {"channel": 1, "n": len(b"\x1b[?1000l\x1b[?1006l\x1b[2J"
                                                  b"\x1b[?1000h\x1b[?1006hrepaint")})
         # mesma trava: nada de novo attach, só retoma o tamanho (o app pode ter tomado)
         self.read_locked(s, rf)
-        self.assertEqual(len(self.calls("terminal.attach")), 1)
+        self.assertEqual(len(self.lock_attaches()), 1)
         self.assertEqual(self.calls_until("frame.resize"),
                          [{"channel": 1, "cols": 50, "rows": 20}])
         self.read_locked(s, rf, cols=60, rows=30)
         self.assertEqual(self.calls_until("frame.resize", 2)[-1],
                          {"channel": 1, "cols": 60, "rows": 30})
+
+    def test_read_pane_travado_devolve_a_tela_com_cores_do_repaint(self):
+        shutil.copy(os.path.join(HERE, "fixtures", "repaint-claude.bin"),
+                    os.path.join(self.dir, "repaint.bin"))
+        self.set_screen("texto puro")
+        s, rf = self.connect_ready()
+        out = self.read_locked(s, rf, cols=42, rows=18)
+        content = out[0]["content"]
+        self.assertIn("bypass permissions on", content)
+        self.assertIn("\x1b[38;2;139;233;253m", content)
+        self.assertFalse(content.startswith(b.NEUTRAL_SGR))
+        for junk in ("\x1b[?", "\x1b]", "\x1b[>", "\x18", "\r"):
+            self.assertNotIn(junk, content)
+        self.assertEqual(len(content.split("\n")), 5)
+        self.assertEqual(self.calls("terminal.read"), [])
+        # o observe vai no tamanho da trava, num canal próprio que é fechado
+        self.assertEqual([c for c in self.calls("terminal.attach") if c.get("observe")],
+                         [{"terminal": "t1a", "cols": 42, "rows": 18, "observe": True}])
+        self.assertIn({"channel": 2}, self.calls_until("frame.close"))
+        # a trava segue viva: a leitura não fechou o canal dela
+        self.assertEqual(self.command(s, rf, {"type": "send_text", "pane_id": "t1a",
+                                              "text": "oi"}), [])
+        self.assertEqual(self.calls_until("frame.data"), [{"channel": 1, "text": "oi"}])
 
     def test_read_pane_sem_geometria_valida_nao_trava(self):
         s, rf = self.connect_ready()
@@ -419,9 +454,8 @@ class TestBridgeOverFakeHc(BridgeHarness):
         s, rf = self.connect_ready()
         self.read_locked(s, rf, "t1a")
         self.read_locked(s, rf, "t1b")
-        self.assertEqual([c["terminal"] for c in self.calls("terminal.attach")],
-                         ["t1a", "t1b"])
-        self.assertEqual(self.calls_until("frame.close"), [{"channel": 1}])
+        self.assertEqual([c["terminal"] for c in self.lock_attaches()], ["t1a", "t1b"])
+        self.lock_closes()
 
     def test_scroll_pane_manda_a_roda_na_celula_sob_o_dedo(self):
         s, rf = self.connect_ready()
@@ -473,7 +507,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
         self.read_locked(s, rf)
         self.assertEqual(self.command(s, rf, {"type": "release_pane", "pane_id": "t1b"}), [])
         self.assertEqual(self.command(s, rf, {"type": "release_pane", "pane_id": "t1a"}), [])
-        self.assertEqual(self.calls_until("frame.close"), [{"channel": 1}])
+        self.lock_closes()
         self.command(s, rf, {"type": "scroll_pane", "pane_id": "t1a", "dir": "up",
                              "lines": 1})
         time.sleep(0.2)
@@ -484,7 +518,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
         self.read_locked(s, rf)
         rf.close()      # o makefile segura o socket aberto
         s.close()
-        self.assertEqual(self.calls_until("frame.close"), [{"channel": 1}])
+        self.lock_closes()
 
     def test_ponte_poe_a_versao_no_proprio_terminal(self):
         # é como o ctl.py status sabe a versão no ar sem ser um painel

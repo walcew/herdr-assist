@@ -20,6 +20,8 @@ Modo framed (hello com framed:true, como a trava da ponte usa): depois da
 resposta do hello tudo vira frame `<IBI` (canal, kind, len) + payload, com o
 JSON-RPC no canal 0. terminal.attach devolve um canal novo e despeja uma
 repintura nele (com mouse tracking ligado, salvo "mouse": false no terminal).
+Com "observe": true a repintura é o repaint.bin do cenário, em dois DATA (nada
+se ele não existir).
 Os frames recebidos nos canais de attach vão para calls.jsonl como frame.data
 (text), frame.credit (n), frame.resize (cols, rows) e frame.close; o EOF do
 stdin com attach aberto vira frame.eof (channels).
@@ -183,7 +185,14 @@ def framed():
             resp = reply(json.loads(payload))
             frame(0, 0, json.dumps(resp).encode())
             if "channel" in resp.get("result", {}):
-                frame(resp["result"]["channel"], 0, repaint(json.loads(payload)))
+                req, ch = json.loads(payload), resp["result"]["channel"]
+                if not req["params"].get("observe"):
+                    frame(ch, 0, repaint(req))
+                elif os.path.exists(os.path.join(DIR, "repaint.bin")):
+                    with open(os.path.join(DIR, "repaint.bin"), "rb") as fh:
+                        data = fh.read()
+                    frame(ch, 0, data[:len(data) // 2])
+                    frame(ch, 0, data[len(data) // 2:])
         elif kind == 0:
             record("frame.data", {"channel": ch, "text": payload.decode()})
         elif kind == 1:

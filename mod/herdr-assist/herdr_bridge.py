@@ -32,6 +32,7 @@ import contextlib
 import datetime
 import glob
 import hmac
+import itertools
 import json
 import logging
 import os
@@ -97,6 +98,8 @@ CONTENT_MAX_B = 12000
 WIRE_MAX_B = 20000
 # Nome da tecla do painel -> nome do `hc keys`; as demais só mudam a caixa.
 HC_KEYS = {"Escape": "esc", "C-c": "ctrl+c", "BSpace": "backspace"}
+REPAINT_QUIET_S = 0.08    # silêncio que encerra a repintura do attach observe
+REPAINT_MAX_S = 1.0       # teto da espera pela repintura
 LOCK_SETTLE_S = 0.4       # tempo para a TUI reflowar antes da primeira leitura
 
 # Eventos do core que podem mudar a lista de agentes; os demais (size, turn,
@@ -768,7 +771,7 @@ rpc_conn = None   # conexão de requests do hc_loop; None enquanto desconectado
 
 # Trava de resolução: um `hc connect` framed só dela, com um terminal.attach no
 # tamanho do painel. Um pane travado por vez; o processo morre com a trava.
-lock = {"pane": None, "size": None, "proc": None, "ch": None, "modes": {}}
+lock = {"pane": None, "size": None, "proc": None, "ch": None, "conn": {}}
 # Liga/desliga do mouse tracking no stream; a repintura do attach zera os modos
 # e religa os ativos, então o último visto é o estado atual.
 MOUSE_RE = re.compile(rb"\x1b\[\?100[0-3]([hl])")
@@ -778,34 +781,50 @@ def _frame(proc, ch: int, kind: int, payload: bytes = b"") -> None:
     proc.stdin.write(struct.pack("<IBI", ch, kind, len(payload)) + payload)
 
 
-async def _lock_pump(proc, attached: asyncio.Future, modes: dict) -> None:
-    """Lê os frames da conexão da trava até ela cair.
+async def _lock_pump(proc, conn: dict) -> None:
+    """Lê os frames da conexão da trava até ela cair, roteando por canal.
 
-    A resposta do attach (canal 0) resolve `attached`. O stream do terminal é
-    descartado, mas cada DATA devolve CREDIT: sem isso o core para de mandar
-    depois da janela de 256 KiB; dele só se guarda se o mouse tracking está
-    ligado (modes["mouse"]). Se o core fechar o stream (terminal perdido),
-    fecha o stdin para o processo sair e a próxima leitura travar de novo.
+    Canal 0: cada resposta resolve o future do seu id em conn["replies"]
+    ({id: (future, observe)}); o canal de um attach observe ganha um buffer em
+    conn["streams"] já aqui, antes do DATA dele, e o de um attach normal vira
+    conn["ch"]. DATA de canal com buffer é juntado nele (leitura da tela); o
+    da trava é descartado, só se guarda se o mouse tracking está ligado
+    (conn["mouse"]). Todo DATA devolve CREDIT: sem isso o core para de mandar
+    depois da janela de 256 KiB. Se o core fechar o canal da trava (terminal
+    perdido), fecha o stdin para o processo sair e a próxima leitura travar de novo.
     """
     try:
         while True:
             ch, kind, n = struct.unpack("<IBI", await proc.stdout.readexactly(9))
             payload = await proc.stdout.readexactly(n)
-            if ch == 0 and kind == 0 and not attached.done():
-                attached.set_result(json.loads(payload))
+            if ch == 0 and kind == 0:
+                resp = json.loads(payload)
+                fut, observe = conn["replies"].pop(resp.get("id"), (None, False))
+                new = (resp.get("result") or {}).get("channel")
+                if new:
+                    if observe:
+                        conn["streams"][new] = bytearray()
+                    else:
+                        conn["ch"] = new
+                if fut and not fut.done():
+                    fut.set_result(resp)
             elif ch and kind == 0:
                 _frame(proc, ch, 1, struct.pack("<I", n))
+                if ch in conn["streams"]:
+                    conn["streams"][ch] += payload
+                    continue
                 # shortcut: sequência partida entre dois frames passa batida; vale
                 # se a roda falhar em app que liga o mouse em rajadas grandes
                 hits = MOUSE_RE.findall(payload)
                 if hits:
-                    modes["mouse"] = hits[-1] == b"h"
-            elif ch and kind == 2:
+                    conn["mouse"] = hits[-1] == b"h"
+            elif kind == 2 and ch and ch == conn.get("ch"):
                 proc.stdin.close()
     except (asyncio.IncompleteReadError, OSError, ValueError):
         pass
-    if not attached.done():
-        attached.set_result({})
+    for fut, _ in conn["replies"].values():
+        if not fut.done():
+            fut.set_result({})
 
 
 def lock_alive(pane_id: str) -> bool:
@@ -817,7 +836,7 @@ def lock_alive(pane_id: str) -> bool:
 async def lock_release() -> None:
     """Solta a trava: o terminal volta ao tamanho dos outros viewers (ou ao padrão)."""
     proc, pane, ch = lock["proc"], lock["pane"], lock["ch"]
-    lock.update(pane=None, size=None, proc=None, ch=None, modes={})
+    lock.update(pane=None, size=None, proc=None, ch=None, conn={})
     if not proc or proc.returncode is not None:
         return
     try:
@@ -859,13 +878,14 @@ async def lock_acquire(pane_id: str, cols: int, rows: int) -> bool:
         log.warning("resolution not locked on %s: %s", pane_id, exc)
         return False
     attached = asyncio.get_running_loop().create_future()
-    modes = {"mouse": False}
+    conn = {"mouse": False, "replies": {2: (attached, False)}, "streams": {}, "ch": None,
+            "ids": itertools.count(3)}
     try:
         # o hello é a última linha JSON; depois dele os dois sentidos são frames
         proc.stdin.write(b'{"jsonrpc":"2.0","id":1,"method":"hello",'
                          b'"params":{"framed":true,"generation":1}}\n')
         await asyncio.wait_for(proc.stdout.readline(), 5)
-        asyncio.create_task(_lock_pump(proc, attached, modes))
+        asyncio.create_task(_lock_pump(proc, conn))
         _frame(proc, 0, 0, json.dumps({
             "jsonrpc": "2.0", "id": 2, "method": "terminal.attach",
             "params": {"terminal": pane_id, "cols": cols, "rows": rows}}).encode())
@@ -878,9 +898,87 @@ async def lock_acquire(pane_id: str, cols: int, rows: int) -> bool:
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         return False
-    lock.update(pane=pane_id, size=(cols, rows), proc=proc, ch=ch, modes=modes)
+    lock.update(pane=pane_id, size=(cols, rows), proc=proc, ch=ch, conn=conn)
     log.info("pane %s locked at %dx%d", pane_id, cols, rows)
     return True
+
+
+async def lock_screen(pane_id: str) -> bytes:
+    """Repintura da tela emulada do pane travado, com o SGR de cada célula.
+
+    Um terminal.attach com observe no tamanho atual (o da trava; com observe o
+    core não redimensiona, e cols/rows são obrigatórios) recebe na hora a tela
+    inteira repintada. Vai na conexão da trava, num canal próprio: junta o DATA
+    até REPAINT_QUIET_S sem nada novo (teto REPAINT_MAX_S) e fecha o canal.
+    b"" sem trava neste pane ou se o core não repintar.
+    """
+    if not lock_alive(pane_id):
+        return b""
+    proc, conn, (cols, rows) = lock["proc"], lock["conn"], lock["size"]
+    rid, loop = next(conn["ids"]), asyncio.get_running_loop()
+    fut = loop.create_future()
+    conn["replies"][rid] = (fut, True)
+    try:
+        _frame(proc, 0, 0, json.dumps({
+            "jsonrpc": "2.0", "id": rid, "method": "terminal.attach",
+            "params": {"terminal": pane_id, "cols": cols, "rows": rows,
+                       "observe": True}}).encode())
+        await proc.stdin.drain()
+        ch = (await asyncio.wait_for(fut, 2)).get("result", {}).get("channel")
+    except (OSError, asyncio.TimeoutError):
+        conn["replies"].pop(rid, None)
+        return b""
+    if not ch:
+        return b""
+    buf, seen, deadline = conn["streams"][ch], -1, loop.time() + REPAINT_MAX_S
+    while len(buf) != seen and loop.time() < deadline:
+        seen = len(buf)
+        await asyncio.sleep(REPAINT_QUIET_S)
+    del conn["streams"][ch]
+    with contextlib.suppress(OSError):
+        _frame(proc, ch, 2)
+        await proc.stdin.drain()
+    return bytes(buf)
+
+
+# Na repintura, só texto e SGR seguem para o painel; o resto (modos, cursor,
+# OSC, charset, controles C0) é descartado. CHA/CUF viram espaços.
+REPAINT_TOKEN_RE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b\[([0-?]*)[ -/]*([@-~])"
+                              r"|\x1b[ -/]*[0-~]?|\n|[\x00-\x09\x0b-\x1f\x7f]")
+
+
+def repaint_to_ansi(data: bytes) -> str:
+    """Tela da repintura do core como linhas com SGR, separadas por \n.
+
+    O conteúdo começa depois do último CUP-home (ESC[H) antes da 1ª quebra de
+    linha: antes dele vêm resets/sets de modo, ESC[2J e tab stops (ESC[9G
+    ESC H...), que como CHA virariam espaços. Sem ESC[H nessa faixa, usa tudo.
+    """
+    text = data.decode("utf-8", "replace")
+    head = text.split("\r\n", 1)[0]
+    if "\x1b[H" in head:
+        text = text[head.rfind("\x1b[H") + 3:]
+    out, col, pos = [], 0, 0
+    for m in REPAINT_TOKEN_RE.finditer(text):
+        plain = text[pos:m.start()]
+        out.append(plain)
+        # shortcut: largura = nº de code points (wide char conta 1); vale trocar
+        # por unicodedata.east_asian_width se CHA depois de CJK desalinhar
+        col += len(plain)
+        pos = m.end()
+        tok, params, final = m.group(0), m.group(1) or "", m.group(2)
+        if tok == "\n":
+            out.append("\n")
+            col = 0
+        elif final == "m" and SGR_RE.fullmatch(tok):
+            out.append(tok)
+        elif final in ("G", "C") and (params.isdigit() or not params):
+            n = int(params or 1)
+            pad = n - 1 - col if final == "G" else n
+            out.append(" " * max(0, pad))
+            col += max(0, pad)
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def wheel_events(lines: int) -> int:
@@ -904,7 +1002,7 @@ async def lock_scroll(pane_id: str, up: bool, lines: int, col: int, row: int) ->
     """
     if not lock_alive(pane_id):
         return False
-    if not lock["modes"].get("mouse"):
+    if not lock["conn"].get("mouse"):
         return await hc_call("terminal.keys", {"terminal": pane_id,
                                                "keys": ["pageup" if up else "pagedown"]}) is not None
     cols, rows = lock["size"]
@@ -954,22 +1052,23 @@ async def hc_call(method: str, params: dict):
     return await rpc_conn.request(method, params) if rpc_conn else None
 
 
-# O core só entrega texto puro, e o firmware pinta texto sem SGR com a cor
-# padrão dele (verde). Branco (37) deixa a tela neutra; o estado SGR persiste
-# entre linhas no term_parse, então um prefixo basta.
-# shortcut: monocromático até o herdr-core oferecer terminal.read com estilo;
-# aí a Ponte repassa o SGR do core e este prefixo sai.
+# Fallback (sem trava ou sem repintura): o terminal.read só entrega texto
+# puro, e o firmware pinta texto sem SGR com a cor padrão dele (verde). Branco
+# (37) deixa a tela neutra; o estado SGR persiste entre linhas no term_parse,
+# então um prefixo basta.
 NEUTRAL_SGR = "\x1b[37m"
+SGR_RE = re.compile(r"\x1b\[[0-9;:]*m")
 
 
-def trim_text(raw: str, keep: int) -> str:
-    """Últimas `keep` linhas do texto, dentro de CONTENT_MAX_B.
+def trim_ansi(raw: str, keep: int) -> str:
+    """Últimas `keep` linhas da tela, dentro de CONTENT_MAX_B.
 
-    Só as linhas em branco do fim caem; estourando o cap, caem linhas inteiras
-    mais antigas (nunca um corte no meio de um caractere UTF-8).
+    Só as linhas em branco do fim caem (SGR não conta como conteúdo);
+    estourando o cap, caem linhas inteiras mais antigas (nunca um corte no meio
+    de escape/UTF-8).
     """
     lines = raw.splitlines()
-    while lines and not lines[-1].strip():
+    while lines and not SGR_RE.sub("", lines[-1]).strip():
         lines.pop()
     lines = lines[-keep:]
     while len(lines) > 1 and len("\n".join(lines).encode()) > CONTENT_MAX_B:
@@ -1377,16 +1476,20 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         cols, rows = int(msg.get("cols", 0)), int(msg.get("rows", 0))
         if 4 <= cols <= 400 and 2 <= rows <= 200 and await lock_acquire(pane_id, cols, rows):
             await asyncio.sleep(LOCK_SETTLE_S)
-        res = await hc_call("terminal.read", {"terminal": pane_id, "lines": lines})
-        if res is None:
-            return await deny("read failed")
-        content = trim_text(res.get("text", ""), lines)
+        # Com trava, a tela com cores vem da repintura de um attach observe;
+        # sem trava (painel sem geometria) ou sem repintura, texto puro em branco.
+        content, prefix = trim_ansi(repaint_to_ansi(await lock_screen(pane_id)), lines), ""
+        if not content:
+            res = await hc_call("terminal.read", {"terminal": pane_id, "lines": lines})
+            if res is None:
+                return await deny("read failed")
+            content, prefix = trim_ansi(res.get("text", ""), lines), NEUTRAL_SGR
 
         def encode_payload(c: str) -> bytes:
             # ensure_ascii=False: box-drawing cru pesa ~1.2x no JSON (a forma
             # \uXXXX passa de 1.4x e estouraria o RX do firmware à toa)
             return json.dumps({"type": "pane_content", "pane_id": pane_id,
-                               "content": NEUTRAL_SGR + c}, separators=(",", ":"),
+                               "content": prefix + c}, separators=(",", ":"),
                               ensure_ascii=False).encode()
 
         payload = encode_payload(content)
