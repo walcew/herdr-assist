@@ -133,4 +133,4 @@ jobs:
           /tmp/put
 
       - name: bridge unit tests
-        run: cd plugin && python3 -m unittest discover -s tests -v
+        run: cd mod/herdr-assist && python3 -m unittest discover -s tests -v

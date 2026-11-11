@@ -6,7 +6,7 @@ e-paper) consomem. Python puro, só stdlib (3.9+), sem toolchain.
 ## Subir agora, sem instalar nada
 
 ```sh
-cd plugin
+cd mod/herdr-assist
 python3 start.py
 ```
 

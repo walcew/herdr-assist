@@ -1,4 +1,4 @@
-# cd plugin && python -m unittest tests.test_update -v
+# cd mod/herdr-assist && python -m unittest tests.test_update -v
 import json
 import os
 import tempfile
@@ -8,29 +8,18 @@ from unittest import mock
 import update as u
 
 
-def with_manifest(content):
-    """Aponta o herdr-plugin.toml para um arquivo temporário com `content`."""
+def with_version(content):
+    """Aponta o arquivo VERSION para um arquivo temporário com `content`."""
     d = tempfile.TemporaryDirectory()
-    path = os.path.join(d.name, "herdr-plugin.toml")
+    path = os.path.join(d.name, "VERSION")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(content)
-    return d, mock.patch.object(u, "MANIFEST", path)
-
-
-TOML = '''# comentário antes
-id = "herdr-assist"
-name = "herdr-assist bridge"
-version = "0.9.0"
-min_herdr_version = "0.8.0"
-
-[[panes]]
-id = "admin"
-'''
+    return d, mock.patch.object(u, "VERSION_FILE", path)
 
 
 class TestNormalize(unittest.TestCase):
     def test_tira_o_v_da_tag(self):
-        # o release carrega "v0.10.0", o manifesto do plugin declara "0.10.0";
+        # o release carrega "v0.10.0", o arquivo VERSION traz "0.10.0";
         # sem normalizar, toda comparação acusaria diferença
         self.assertEqual(u.normalize("v0.10.0"), "0.10.0")
         self.assertEqual(u.normalize("0.10.0"), "0.10.0")
@@ -42,17 +31,17 @@ class TestNormalize(unittest.TestCase):
 
 
 class TestInstalledVersion(unittest.TestCase):
-    def test_le_a_primeira_chave_version(self):
-        d, p = with_manifest(TOML)
+    def test_le_o_arquivo_version(self):
+        d, p = with_version("0.9.0\n")
         with d, p:
             self.assertEqual(u.installed_version(), "0.9.0")
 
     def test_sem_arquivo_devolve_vazio(self):
-        with mock.patch.object(u, "MANIFEST", "/naoexiste/herdr-plugin.toml"):
+        with mock.patch.object(u, "VERSION_FILE", "/naoexiste/VERSION"):
             self.assertEqual(u.installed_version(), "")
 
-    def test_sem_chave_version_devolve_vazio(self):
-        d, p = with_manifest('id = "herdr-assist"\n')
+    def test_arquivo_vazio_devolve_vazio(self):
+        d, p = with_version("")
         with d, p:
             self.assertEqual(u.installed_version(), "")
 

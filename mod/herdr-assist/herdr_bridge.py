@@ -17,7 +17,7 @@ Sem dependências externas: só a stdlib, compatível com o python3 de fábrica 
 macOS (3.9). Roda como plugin do Herdr (ver start.py), que fornece as variáveis
 HERDR_SOCKET_PATH e HERDR_PLUGIN_CONFIG_DIR; para rodar avulsa:
 
-    BRIDGE_TOKEN=... python3 plugin/herdr_bridge.py
+    BRIDGE_TOKEN=... python3 mod/herdr-assist/herdr_bridge.py
 
 Toda conexão exige um handshake `{"type":"hello","token":"..."}` na primeira
 linha — sem token não roda: se nenhum existir, um é gerado e salvo (0600).

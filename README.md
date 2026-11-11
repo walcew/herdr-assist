@@ -16,7 +16,7 @@ terminal.
 
 > **Requires Herdr.** This panel is a client, not a standalone device — it needs a running
 > [Herdr](https://herdr.dev) instance on every machine you want to monitor. The bridge in
-> `plugin/` ships as a Herdr plugin and speaks its native socket, so everything the panel
+> `mod/herdr-assist/` ships as a Herdr plugin and speaks its native socket, so everything the panel
 > shows comes from Herdr's own event stream.
 
 ## Quick start
@@ -91,7 +91,7 @@ covers a `herdr plugin install` done by hand, whose companion step (`restart-bri
 the one everybody forgets — within a minute the bridge notices and comes back on its own.
 
 Running, restarting and troubleshooting the bridge by hand — where the token, `env` and
-logs live, and the firewall rules — is in [`plugin/README.md`](plugin/README.md).
+logs live, and the firewall rules — is in [`mod/herdr-assist/README.md`](mod/herdr-assist/README.md).
 
 To turn it off, put `AUTO_UPDATE=0` on a line of the `env` file in the config directory. A
 **linked** checkout is never reinstalled over: there, `git pull` is what updates it. To
@@ -268,7 +268,7 @@ shares the protocol, Wi-Fi, pairing and update modules with it. See
 ## Architecture
 
 Herdr exposes its API on a local unix socket, which a device on the network cannot reach.
-The bridge (`plugin/herdr_bridge.py`, pure stdlib) translates that to TCP and nothing
+The bridge (`mod/herdr-assist/herdr_bridge.py`, pure stdlib) translates that to TCP and nothing
 else: it subscribes to Herdr's events, so the panel receives changes by **push**, with no
 polling. It is packaged as a **Herdr plugin** (`plugin/herdr-plugin.toml`), which Herdr
 starts along with the session — one plugin per machine you want to drive from the panel.
@@ -298,7 +298,7 @@ percentages), `pong`.
 the Herdr socket is a named pipe whose *name* is the whole path
 (`\\.\pipe\C:\Users\...\herdr.sock`), which Python cannot open — so the bridge talks to
 Herdr through the CLI instead, and reconciles by polling rather than by
-`events.subscribe`. Pairing is done with `plugin/pair.py`; the curses admin
+`events.subscribe`. Pairing is done with `mod/herdr-assist/pair.py`; the curses admin
 screen stays macOS/Linux only.
 
 The bridge is where the security decisions happen, because anyone on the LAN can reach
@@ -417,12 +417,11 @@ for testing the flow.
 
 | File | Role |
 |---|---|
-| `plugin/herdr-plugin.toml` | Herdr plugin manifest (startup, admin pane, actions) |
-| `plugin/start.py` | Plugin startup: starts the bridge detached, idempotent, cross-platform |
-| `plugin/pair.py` | Pairing from the command line, no curses — the Windows path |
-| `plugin/herdr_bridge.py` | Bridge: Herdr socket ↔ TCP, token handshake, allowlist, sanitizing, usage-limit collection (Claude/Codex) |
-| `plugin/admin.py` | Admin screen in Herdr: status, token, pairing, keybinding install |
-| `plugin/i18n.py` | Admin screen strings (en/pt), language taken from the host locale |
+| `mod/herdr-assist/start.py` | Plugin startup: starts the bridge detached, idempotent, cross-platform |
+| `mod/herdr-assist/pair.py` | Pairing from the command line, no curses — the Windows path |
+| `mod/herdr-assist/herdr_bridge.py` | Bridge: Herdr socket ↔ TCP, token handshake, allowlist, sanitizing, usage-limit collection (Claude/Codex) |
+| `mod/herdr-assist/admin.py` | Admin screen in Herdr: status, token, pairing, keybinding install |
+| `mod/herdr-assist/i18n.py` | Admin screen strings (en/pt), language taken from the host locale |
 | `src/pairing.c` | Panel pairing mode: broadcast announcement + config reception |
 | `src/DEMO_LVGL.c` | Entry point: brings up panel, config, Wi-Fi, connections and UI |
 | `src/panel_cfg.c` | Persistent config (NVS): Wi-Fi network + up to 4 Herdr hosts + language |

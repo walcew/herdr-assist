@@ -1,6 +1,6 @@
 """Parsing do /usage do CLI do Claude Code (funções puras de claude_cli).
 
-Rodar de dentro de plugin/: python -m unittest discover -s tests
+Rodar de dentro de mod/herdr-assist/: python -m unittest discover -s tests
 """
 import datetime
 import os

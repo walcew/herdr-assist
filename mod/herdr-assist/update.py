@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import subprocess
 import time
 import urllib.error
@@ -40,7 +39,8 @@ CONF = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
 STATE = os.environ.get("HERDR_PLUGIN_STATE_DIR", CONF)
 
 PLUGIN_ID = "herdr-assist"
-MANIFEST = os.path.join(DIR, "herdr-plugin.toml")
+# Versão deste mod, sem o `v`: o release.yml trava a publicação se ela divergir da tag.
+VERSION_FILE = os.path.join(DIR, "VERSION")
 STATE_FILE = os.path.join(STATE, "update.json")
 
 # O mesmo manifesto que o painel consulta. Vem do ambiente para dar como
@@ -52,19 +52,17 @@ MANIFEST_URL = os.environ.get(
 
 # Alvo do reinstall quando o Herdr não disser de onde o plugin veio; é o
 # comando que o README manda rodar na instalação.
-DEFAULT_REPO = "walcew/herdr-assist/plugin"
+DEFAULT_REPO = "walcew/herdr-assist/mod/herdr-assist"
 
 HTTP_TIMEOUT = 10
 CLI_TIMEOUT = 180        # clonar o repo num host lento passa fácil de 30s
-
-_VERSION_RE = re.compile(r'^\s*version\s*=\s*"([^"]+)"', re.MULTILINE)
 
 
 def normalize(v: str) -> str:
     """"v0.10.0" e "0.10.0" viram a mesma coisa.
 
-    O manifesto do release carrega a tag com o `v`; o herdr-plugin.toml declara
-    a versão sem ele. Comparar sem normalizar acusaria diferença sempre.
+    O manifesto do release carrega a tag com o `v`; o arquivo VERSION traz a
+    versão sem ele. Comparar sem normalizar acusaria diferença sempre.
     """
     return (v or "").strip().lstrip("vV")
 
@@ -79,19 +77,13 @@ def auto_enabled() -> bool:
 
 
 def installed_version() -> str:
-    """Versão declarada no herdr-plugin.toml ao lado deste arquivo.
-
-    Regex e não `tomllib`: aquele é 3.11+ e a ponte roda no python3 de fábrica
-    do macOS (3.9). A primeira chave `version` do arquivo é a do plugin — as
-    outras seções (`[[startup]]`, `[[panes]]`) não têm uma.
-    """
+    """Versão lida do arquivo VERSION ao lado deste arquivo; "" se faltar."""
     try:
-        with open(MANIFEST, encoding="utf-8") as fh:
-            m = _VERSION_RE.search(fh.read())
+        with open(VERSION_FILE, encoding="utf-8") as fh:
+            return normalize(fh.read())
     except OSError as exc:
-        log.warning("não li %s: %s", MANIFEST, exc)
+        log.warning("não li %s: %s", VERSION_FILE, exc)
         return ""
-    return normalize(m.group(1)) if m else ""
 
 
 def published_version(url: str = "") -> str:
