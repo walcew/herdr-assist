@@ -139,6 +139,8 @@ def handle(req):
             text = open(path).read() if os.path.exists(path) else ""
             return {"text": text, "complete": True, "how": "screen"}
         return {"turn": 1, "status": None}
+    if method == "terminal.label":
+        return next(t for t in terminals() if t["address"] == params.get("terminal"))
     if method == "doc.get":
         return docs().get(params["name"], {"value": None, "version": 0})
     if method == "doc.set":

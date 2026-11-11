@@ -37,6 +37,34 @@ class TestPortHolder(unittest.TestCase):
         self.assertFalse(got["is_bridge"])
 
 
+class TestRunningVersion(unittest.TestCase):
+    def get(self, labels):
+        return mock.patch.object(ctl, "hc_json", return_value={"labels": labels})
+
+    def test_versao_no_ar_vem_do_rotulo_do_terminal(self):
+        with self.get({"herdr-assist": "bridge", "herdr-assist.version": "0.15.0"}):
+            self.assertEqual(ctl.running_version(["t1d"]), "0.15.0")
+
+    def test_sem_ponte_ou_sem_rotulo_e_none(self):
+        self.assertIsNone(ctl.running_version([]))
+        with self.get({"herdr-assist": "bridge"}):
+            self.assertIsNone(ctl.running_version(["t1d"]))
+
+    def test_status_marca_reinicio_pendente_quando_difere_do_disco(self):
+        for running, pending in (("0.14.0", True), ("0.15.0", False), (None, False)):
+            with mock.patch.object(ctl, "bridge_terminals", return_value=["t1d"]), \
+                    mock.patch.object(ctl, "bridge_pids", return_value=set()), \
+                    mock.patch.object(ctl, "bridge_port", return_value=9375), \
+                    mock.patch.object(ctl, "panels", return_value=[]), \
+                    mock.patch.object(ctl, "lan_ip", return_value=""), \
+                    mock.patch.object(ctl, "port_holder", return_value=None), \
+                    mock.patch.object(ctl.update, "installed_version", return_value="0.15.0"), \
+                    mock.patch.object(ctl, "running_version", return_value=running):
+                st = ctl.status()
+            self.assertEqual((st["version"], st["running"], st["restart_pending"]),
+                             ("0.15.0", running, pending))
+
+
 class TestListeners(unittest.TestCase):
     def test_parse_do_lsof(self):
         out = "p37040\ncPython\nf5\nn*:9375\np99\ncnode\n"

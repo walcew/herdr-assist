@@ -51,7 +51,8 @@ import cost
 import rollout
 import transcript
 import update
-from common import DEFAULT_PORT, DOC_NAME, HC_BIN, host_name, route_ip, valid_port
+from common import (DEFAULT_PORT, DOC_NAME, HC_BIN, VERSION_LABEL, host_name, route_ip,
+                    valid_port)
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
 from proc_env import read_process_env  # noqa: E402
 
@@ -968,6 +969,18 @@ def trim_text(raw: str, keep: int) -> str:
     return "\n".join(lines)
 
 
+async def label_version(conn) -> None:
+    """Põe a versão no ar num rótulo do próprio terminal, para o ctl.py status.
+
+    Só se o HC_TERMINAL_ID é mesmo a Ponte (rótulo herdr-assist=bridge): rodando
+    avulsa num shell, o id é o do shell da pessoa.
+    """
+    me = os.environ.get("HC_TERMINAL_ID", "")
+    if BOOT_VERSION and ((terminals.get(me) or {}).get("labels") or {}).get("herdr-assist") == "bridge":
+        await conn.request("terminal.label", {"terminal": me,
+                                              "labels": {VERSION_LABEL: BOOT_VERSION}})
+
+
 async def hc_loop() -> None:
     """Mantém `terminals` em dia com o core e os painéis com ele.
 
@@ -992,6 +1005,7 @@ async def hc_loop() -> None:
                 terminals.clear()
                 terminals.update({t["address"]: t for t in snap.get("terminals", [])})
                 log.info("hc: subscribed, %d terminal(s)", len(terminals))
+                await label_version(rpc)
                 await push_agents()
                 while True:
                     note = await sub.notes.get()

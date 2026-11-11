@@ -4,7 +4,8 @@
 O main.js só desenha e chama este script por `exec`, então a lógica (quem
 escuta a porta, se é a Ponte do mod, subir e reiniciar) fica testável aqui.
 
-    ctl.py status            Ponte, versão, porta, painéis, IP, quem escuta, idioma
+    ctl.py status            Ponte, versão (em disco e no ar), porta, painéis, IP,
+                             quem escuta, idioma
     ctl.py port-holder       quem escuta a porta da ponte
     ctl.py kill-holder <pid> encerra esse pid se ele ainda for o dono da porta
                              e não for a Ponte do mod
@@ -31,7 +32,8 @@ import sys
 import time
 
 import update
-from common import DEFAULT_PORT, DOC_NAME, HC_BIN, host_name, route_ip, valid_port
+from common import (DEFAULT_PORT, DOC_NAME, HC_BIN, VERSION_LABEL, host_name, route_ip,
+                    valid_port)
 
 DIR = os.path.dirname(os.path.abspath(__file__))
 LABEL = "herdr-assist=bridge"
@@ -124,6 +126,13 @@ def bridge_pids(addresses: list) -> set:
         pids.add((info.get("foreground") or {}).get("pid"))
     pids.discard(None)
     return pids
+
+
+def running_version(addresses: list) -> str | None:
+    """Versão que a Ponte viva pôs no rótulo do terminal; None se não há."""
+    if not addresses:
+        return None
+    return ((hc_json(["get", addresses[0]]) or {}).get("labels") or {}).get(VERSION_LABEL)
 
 
 def listeners(port: int) -> list:
@@ -287,10 +296,16 @@ def restart(port: int) -> dict:
 
 
 def status() -> dict:
+    """`version` é a do disco; `running`, a que a Ponte viva rotulou (None sem ela).
+
+    Diferentes = a pasta foi trocada e a Ponte ainda não reiniciou.
+    """
     alive = bridge_terminals()
     port = bridge_port()
+    disk, running = update.installed_version(), running_version(alive)
     return {"alive": bool(alive), "terminal": alive[0] if alive else None,
-            "pids": sorted(bridge_pids(alive)), "version": update.installed_version(),
+            "pids": sorted(bridge_pids(alive)), "version": disk, "running": running,
+            "restart_pending": bool(running and disk and running != disk),
             "port": port, "panels": panels(port), "ip": lan_ip(),
             "holder": port_holder(port), "lang": lang()}
 

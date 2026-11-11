@@ -15,6 +15,8 @@ HC_BIN = (os.environ.get("HC_BIN") or shutil.which("hc")
 # Doc do core com a configuração da Ponte; outro nome só nos testes.
 DOC_NAME = os.environ.get("HERDR_ASSIST_DOC", "herdr-assist")
 DEFAULT_PORT = 9375
+# Rótulo do terminal da Ponte com a versão que está no ar (o ctl.py status lê).
+VERSION_LABEL = "herdr-assist.version"
 
 
 def valid_port(p) -> bool:

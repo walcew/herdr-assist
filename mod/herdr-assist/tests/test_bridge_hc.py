@@ -227,7 +227,8 @@ class BridgeHarness(unittest.TestCase):
 class TestBridgeOverFakeHc(BridgeHarness):
     def setUp(self):
         super().setUp()
-        self.launch(BRIDGE_PORT=str(self.port), BRIDGE_TOKEN=TOKEN)
+        # t1d é o terminal com o rótulo da Ponte no cenário
+        self.launch(BRIDGE_PORT=str(self.port), BRIDGE_TOKEN=TOKEN, HC_TERMINAL_ID="t1d")
 
     def test_snapshot_vira_agents_com_id_status_e_space_tab(self):
         _, rf = self.connect()
@@ -485,6 +486,14 @@ class TestBridgeOverFakeHc(BridgeHarness):
         s.close()
         self.assertEqual(self.calls_until("frame.close"), [{"channel": 1}])
 
+    def test_ponte_poe_a_versao_no_proprio_terminal(self):
+        # é como o ctl.py status sabe a versão no ar sem ser um painel
+        self.connect_ready()
+        self.calls_until("terminal.label")
+        self.assertEqual(self.calls("terminal.label"),
+                         [{"terminal": "t1d", "labels": {"herdr-assist.version":
+                                                         update.installed_version()}}])
+
     def test_ponte_morrendo_nao_deixa_o_terminal_travado(self):
         s, rf = self.connect_ready()
         self.read_locked(s, rf)
@@ -644,6 +653,12 @@ class TestBridgeConfigDoc(BridgeHarness):
             self.assertFalse(update.auto_enabled())
             asyncio.run(b.apply_config({"token": "x", "auto_update": True}))
             self.assertTrue(update.auto_enabled())
+
+    def test_fora_do_proprio_terminal_nao_rotula_nada(self):
+        # avulsa num shell da pessoa: o HC_TERMINAL_ID é o shell, não a Ponte
+        self.launch(BRIDGE_PORT=str(self.port), BRIDGE_TOKEN=TOKEN, HC_TERMINAL_ID="t1a")
+        s, rf = self.connect_ready()
+        self.assertEqual(self.calls("terminal.label"), [])
 
     def test_bridge_machines_nao_faz_mais_nada(self):
         # o espelhamento de máquinas remotas saiu: nenhuma chamada ao `herdr machine`
