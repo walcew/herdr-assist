@@ -14,23 +14,24 @@ configuração pronta** — nome, endereço, porta e token. Nada é digitado no 
 - O painel **gravado e ligado** — se ainda não gravou, veja
   [Gravando o painel](../README.pt-BR.md#1-gravando-o-painel).
 - O painel **conectado ao Wi-Fi** (Configurações → Rede Wi-Fi).
-- Uma máquina com o **Herdr instalado e aberto** (macOS, Linux ou Windows).
+- Uma máquina com o **app Herdr desktop instalado e aberto**.
 - Painel e host **na mesma rede local**: o pareamento usa broadcast UDP, que
   não atravessa VLANs nem redes de convidado.
 
 ## 1. Instale a ponte no host
 
-A ponte é um plugin do Herdr — é ela que o painel acessa pela rede. Uma vez só,
-em cada máquina que você quiser monitorar:
+A ponte vem como um mod do app Herdr desktop — é ela que o painel acessa pela
+rede. Uma vez só, em cada máquina que você quiser monitorar, copie a pasta do
+mod para o home do app e abra o dialog de controle (`cmd-alt-a`):
 
 ```sh
-herdr plugin install walcew/herdr-assist/plugin            # registra e habilita
-herdr plugin action invoke herdr-assist.restart-bridge     # sobe agora mesmo
+cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
 ```
 
-O segundo comando só evita esperar a próxima sessão — dali em diante a ponte
-sobe junto com o Herdr. Ela é Python puro de stdlib: o `python3` de fábrica do
-macOS (3.9+) basta, sem toolchain.
+Abrir o app (ou o dialog) sobe a ponte. É Python puro, só stdlib: o `python3`
+que o macOS traz (3.9+) basta, sem toolchain. A instalação completa (teclas,
+indicador no rodapé, como deixar o plugin antigo do Herdr TUI) está no
+[README do mod](../mod/herdr-assist/README.md).
 
 ## 2. Coloque o painel em modo de pareamento
 
@@ -50,40 +51,19 @@ mesma tela resume estes passos e traz o QR code que aponta para este manual:
 
 ## 3. No host, envie a configuração
 
-De dentro de qualquer pane do Herdr, abra a tela de administração do plugin:
+No app Herdr desktop, tecle `cmd-alt-a` (ou rode `herdr-app do mod.open --name
+herdr-assist`) para abrir o dialog de controle e vá na aba **Parear**. O host
+passa a escutar os anúncios e lista cada painel que encontrar, com o código e o
+IP.
 
-```sh
-herdr plugin pane open --plugin herdr-assist --entrypoint admin
-```
-
-(Com o atalho instalado — tecla `k` na própria tela — basta `ctrl+b`, depois
-`a`.)
-
-Tecle **`p` (Parear painel)**. O host passa a escutar os anúncios e lista cada
-painel que encontrar:
-
-```text
-  Parear painel
-
-  No painel: Configurações → Parear com um host
-
-  escutando... 1 encontrado(s) — esc cancela
-
-   1) 4B5E94   192.168.1.87
-
-  confira o código mostrado na tela do painel
-```
-
-Confira que o código listado é o mesmo da tela do painel e selecione (clique,
-`enter` ou o número). O host envia a configuração; o painel confirma
+Confira que o código listado é o mesmo da tela do painel e clique em
+**Parear** nessa linha. O host envia a configuração; o painel confirma
 **"Pareado com …"**, grava e **reinicia já conectado** — as sessões aparecem
 na aba Sessões.
 
-### Pela linha de comando (`pair.py`)
+### Pela linha de comando (`ctl.py pair`)
 
-O `pair.py` saiu: no Herdr desktop, o pareamento fica na aba **Parear** do mod
-de controle (`cmd-alt-a`). Sem o dialog (sessão SSH, script), o mesmo protocolo
-está no `ctl.py` do mod:
+Sem o dialog (sessão SSH, script), o mesmo protocolo está no `ctl.py` do mod:
 
 ```sh
 python3 ctl.py discover                 # painéis anunciando agora: [{id, ip, port}]
@@ -112,8 +92,8 @@ manualmente**, preenchendo:
 O token sai do host, por qualquer um dos caminhos:
 
 ```sh
-cat "$(herdr plugin config-dir herdr-assist)/token"        # pela CLI
-herdr plugin action invoke herdr-assist.show-token          # pela ação do plugin
+python3 ~/.config/herdr-app/mods/herdr-assist/ctl.py token   # pela CLI: {"token": "..."}
+# ou o dialog de controle (cmd-alt-a) → aba Token → Mostrar
 ```
 
 Digitar 32 hex no touch é chato — é exatamente o que o pareamento automático
@@ -139,7 +119,7 @@ evita. Use o cadastro manual só quando o broadcast não alcança o host.
 |---|---|---|
 | O painel não aparece na lista do host | Redes diferentes, VLAN/isolamento de AP, broadcast filtrado | Coloque os dois na mesma rede; persistindo, use o [cadastro manual](#cadastro-manual-redes-que-filtram-broadcast) |
 | "Sem Wi-Fi: conecte a uma rede antes" na tela do painel | Painel sem rede | Configurações → Rede Wi-Fi; depois volte ao pareamento |
-| "sem token — suba a ponte antes de parear" no host | A ponte nunca subiu (o token é gerado na primeira subida) | `herdr plugin action invoke herdr-assist.restart-bridge`, ou tecle `x` na tela de administração |
+| "sem token — suba a ponte antes de parear" no host | A ponte nunca subiu (o token é gerado na primeira subida) | Abra o dialog de controle (`cmd-alt-a`) e use **Reiniciar ponte** na aba Status |
 | Firewall do macOS pergunta se o `python3` pode receber conexões | Escuta do pareamento bloqueada | Permita — sem isso os anúncios não chegam |
 | "Janela encerrada" no painel | Passaram-se os 3 minutos | Volte e toque em Parear de novo |
 | "Sem espaço: remova um host antes de parear" | Os 4 slots estão ocupados | Configurações → toque no host → Remover |
@@ -148,8 +128,8 @@ evita. Use o cadastro manual só quando o broadcast não alcança o host.
 
 ## Girar o token
 
-**Girar token** (tecla `r` na tela de administração) gera um token novo e
-reinicia a ponte — **todos os painéis pareados com esse host param de conectar
+**Girar token** (aba Token do dialog de controle) gera um token novo que a
+ponte aplica na hora — **todos os painéis pareados com esse host param de conectar
 até serem pareados de novo**. Use quando suspeitar que o token vazou.
 
 ---

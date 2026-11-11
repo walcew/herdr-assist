@@ -1,101 +1,138 @@
-# Ponte do herdr-assist
+# Mod herdr-assist (Herdr desktop)
 
-Processo que traduz o socket do Herdr para o TCP autenticado que o painel (e o pager
-e-paper) consomem. Python puro, só stdlib (3.9+), sem toolchain.
+Mod do app Herdr desktop (`herdr-app` + herdr-core) que cuida da **Ponte**: o processo
+Python que traduz a API do core (`hc connect`) para o TCP autenticado que o painel e o
+pager e-paper consomem. O mod mostra o estado num indicador no rodapé, abre um dialog de
+controle (Status, Token, Parear) e mantém a Ponte viva como terminal do core. Python puro,
+só stdlib (3.9+), sem toolchain.
 
-## Subir agora, sem instalar nada
+> O plugin do **Herdr TUI** ficou congelado na tag `v0.14.1`. Ele não enxerga os agentes
+> do app desktop; a seção [Saindo do Herdr TUI](#saindo-do-herdr-tui) cobre a troca.
 
-```sh
-cd mod/herdr-assist
-python3 start.py
+## Instalação
+
+1. Copie a pasta para o home do app (do checkout, ou do asset `herdr-assist-mod.tar.gz` do
+   [release mais novo](https://github.com/walcew/herdr-assist/releases/latest), que já traz
+   a pasta `herdr-assist/`):
+
+   ```sh
+   cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
+   # para desenvolver, com hot reload (o app recarrega ao salvar):
+   ln -s "$PWD/mod/herdr-assist" ~/.config/herdr-app/mods/herdr-assist
+   ```
+
+2. Mescle o `keys.json` do mod no da pessoa (`~/.config/herdr-app/keys.json`): acrescente
+   `"cmd-alt-a": "mod.open:herdr-assist"` em `"global"`, sem trocar uma tecla que você já usa.
+   Sem tecla, `herdr-app do mod.open --name herdr-assist` abre o mesmo dialog (chamar de novo
+   fecha).
+
+3. Na primeira vez que o app vê a pasta, o `mod.json` (`place: "bottom"`, 28 px) encaixa o
+   **indicador** no rodapé do layout ativo: um chip com o estado da Ponte e o número de
+   painéis; o clique abre o dialog. Essa cópia é quem sobe a Ponte quando o app abre (um
+   mod `place: "none"` só roda com o dialog aberto, e o app não tem autostart de mod).
+
+### Se o indicador conflitar com o layout
+
+Se o encaixe automático (`place` + `overlay`) atrapalhar o seu layout, ponha o indicador à
+mão: troque `"place": "bottom"` por `"none"` no `mod.json` e acrescente este bloco ao
+layout, no ponto que quiser:
+
+```json
+{ "id": "herdr-assist", "type": "block", "size": { "px": 28 }, "content": { "mod": "herdr-assist" } }
 ```
 
-`start.py` destaca o processo e sai — pode fechar o terminal. Ele é **idempotente**: se a
-porta já responde, imprime `bridge already running on port 9375` e termina com sucesso, que
-é o que permite chamá-lo de um hook de startup sem risco de subir duas pontes.
+O `overlay` do `mod.json` continua valendo: o dialog abre igual. A atualização automática
+troca a pasta inteira, `mod.json` incluso; se o encaixe voltar depois de uma atualização,
+repita a edição.
+
+## Saindo do Herdr TUI
+
+Uma vez só, em quem ainda tem o plugin do Herdr TUI:
 
 ```sh
-python3 start.py --restart    # derruba quem estiver na porta e sobe de novo
+herdr plugin disable herdr-assist     # no Herdr TUI: ele deixa de subir a ponte antiga
 ```
 
-Para depurar em primeiro plano (log na tela, Ctrl+C encerra):
+Depois pare a ponte antiga, que segue de pé com a porta 9375. O dialog de controle avisa
+(`Porta 9375 ocupada por outra ponte (provavelmente a do Herdr TUI): pid …`) e oferece
+**Encerrar**, com confirmação; nada é morto sozinho. Na mão:
 
 ```sh
-python3 herdr_bridge.py
+lsof -nP -iTCP:9375 -sTCP:LISTEN      # quem escuta
+kill <pid>
 ```
 
-## Permanente (plugin do Herdr)
+Na primeira subida (doc sem token) a Ponte nova importa `token`, `env` (porta, `AUTO_UPDATE`)
+e `avatar_repos` do config-dir do plugin (`~/.config/herdr/plugins/config/herdr-assist/`)
+ou do modo avulso (`~/.config/herdr-assist/`) para o doc do core, então os painéis já pareados conectam sem parear de novo.
 
-```sh
-herdr plugin install walcew/herdr-assist/plugin     # do repositório publicado
-```
+## Configuração
 
-ou, com um checkout local:
+Fica no doc `herdr-assist` do core, que a Ponte relê ao receber o evento `doc` (a troca de
+porta reinicia o listener, o resto vale na hora):
 
-```sh
-herdr plugin link /caminho/para/herdr-assist/plugin
-herdr plugin action invoke herdr-assist.restart-bridge
-```
-
-O `[[startup]]` do manifesto roda `start.py` a cada sessão do Herdr; o `restart-bridge` só
-evita esperar a próxima. `herdr plugin list` mostra se está habilitado.
-
-## Onde ficam as coisas
-
-| | Instalado como plugin | Rodando avulso |
+| Campo | Padrão | O que faz |
 |---|---|---|
-| Config (`token`, `env`) | `herdr plugin config-dir herdr-assist` → `~/.config/herdr/plugins/config/herdr-assist/` | `~/.config/herdr-assist/` |
-| Estado (`bridge.pid`, `bridge.log`) | `~/.local/state/herdr/plugins/herdr-assist/` | mesmo diretório da config |
+| `token` | gerado | segredo do handshake dos painéis (aba Token do dialog mostra e rotaciona) |
+| `port` | `9375` | porta TCP (painéis) e UDP (descoberta) |
+| `avatar_repos` | `[]` | URLs de repositórios de avatar empurradas aos painéis |
+| `auto_update` | `true` | atualização automática do mod (veja abaixo) |
 
-> **Trocando de avulso para plugin, copie o `token` e o `env`.** O plugin recebe um
-> diretório de config próprio: sem o token lá, a ponte gera um novo e todo painel já
-> pareado deixa de conectar (o sintoma é o painel em `OFFLINE` e nada no log da ponte).
-
-## Configuração — `env`, uma variável por linha
+Ler e gravar pela API do core (`doc.set` troca o valor inteiro: leia, altere e devolva com
+a `version` lida):
 
 ```sh
-BRIDGE_PORT=9375        # porta TCP (painéis) e UDP (descoberta)
-BRIDGE_BIND=0.0.0.0     # 0.0.0.0 é o que faz a descoberta por broadcast funcionar
-BRIDGE_TOKEN=...        # opcional; sem ela vale o arquivo `token`
+echo '{"jsonrpc":"2.0","id":1,"method":"doc.get","params":{"name":"herdr-assist"}}' | hc connect
+echo '{"jsonrpc":"2.0","id":1,"method":"doc.set","params":{"name":"herdr-assist","version":3,"value":{"token":"…","port":9375,"avatar_repos":[],"auto_update":false}}}' | hc connect
 ```
 
-> A ponte nova lê token, porta, repositórios de avatar e atualização automática do doc
-> `herdr-assist` do core (migrando o `token` e o `env` daqui na primeira subida), e
-> `BRIDGE_MACHINES` não existe mais. Esta seção descreve o plugin do Herdr TUI.
+Variáveis de ambiente que a Ponte lê: `BRIDGE_BIND` (padrão `0.0.0.0`; é o que faz a
+descoberta por broadcast funcionar), `HC_BIN` e `HERDR_APP_BIN` (binários, com fallback
+no PATH); `BRIDGE_TOKEN` e `BRIDGE_PORT` valem sobre o doc, para dev e teste.
+
+## Atualização automática
+
+Uma vez por dia a Ponte compara o `VERSION` da pasta com a versão do release mais novo,
+baixa `herdr-assist-mod.tar.gz`, extrai ao lado (no mesmo diretório), troca a pasta por
+rename com backup e reinicia a Ponte (`ctl.py restart`). Se algo falha no meio, a pasta
+antiga fica. Não atua com `auto_update: false` nem quando a pasta é um symlink ou um
+checkout (tem `tests/`): ali quem atualiza é o `git pull`.
+
+## Ver o que está acontecendo
+
+```sh
+python3 ctl.py status                      # Ponte, porta, painéis e quem escuta a porta (JSON)
+python3 ctl.py discover                    # painéis em modo de pareamento na LAN (JSON)
+hc ls --label herdr-assist=bridge          # o terminal da Ponte (endereço, estado)
+hc read <endereço> --lines 200             # o log da Ponte: é a saída do terminal
+```
+
+Reiniciar sem o dialog: `python3 ctl.py restart`. Uma Ponte saudável loga, em ordem:
+`ponte versão …`, `descoberta udp em …`, `ponte ouvindo em 0.0.0.0:9375` e, a cada painel
+que entra, `painel conectado: ('<ip>', <porta>)`.
 
 ## Firewall
 
-A máquina da ponte precisa aceitar **TCP e UDP** na porta (9375 por padrão), na entrada:
-TCP é a conexão dos painéis, UDP é a descoberta por broadcast. No Windows com WSL o
-firewall comum não governa isso — o Hyper-V firewall bloqueia entrada por padrão:
+A máquina da Ponte precisa aceitar **TCP e UDP** na porta (9375 por padrão), na entrada:
+TCP é a conexão dos painéis, UDP é a descoberta por broadcast. No macOS, o firewall pergunta
+uma vez se o `python3` pode receber conexões: permita. No Windows com WSL o firewall comum
+não governa isso — o Hyper-V firewall bloqueia entrada por padrão:
 
 ```powershell
 New-NetFirewallHyperVRule -Name "herdr-assist"     -Direction Inbound -Protocol TCP -LocalPorts 9375 -Action Allow
 New-NetFirewallHyperVRule -Name "herdr-assist-udp" -Direction Inbound -Protocol UDP -LocalPorts 9375 -Action Allow
 ```
 
-Sem a regra UDP a ponte sobe, escuta, e o painel fica em `OFFLINE` sem erro nenhum do lado
-da ponte. Sem a TCP ele encontra e não conecta.
-
-## Ver o que está acontecendo
-
-```sh
-ss -ltnp | grep 9375                       # está ouvindo?
-tail -f <estado>/bridge.log                # o que ela está fazendo
-python3 ctl.py status                      # Ponte, porta, painéis e quem escuta a porta (JSON)
-python3 ctl.py discover                    # painéis em modo de pareamento na LAN (JSON)
-herdr plugin log list                      # logs das ações do plugin, do lado do Herdr
-```
-
-Uma ponte saudável loga, em ordem: `ponte versão …`, `descoberta udp em …`, `ponte ouvindo
-em 0.0.0.0:9375`, `assinado: N genéricos + M panes` e, a cada painel que entra,
-`painel conectado: ('<ip>', <porta>)`.
+Sem a regra UDP a Ponte sobe, escuta, e o painel fica em `OFFLINE` sem erro nenhum do lado
+da Ponte. Sem a TCP ele encontra e não conecta.
 
 ## Problemas comuns
 
 | Sintoma | Causa provável |
 |---|---|
-| `bridge already running` mas o painel não conecta | token trocado (ver a nota do diretório de config) ou porta bloqueada no firewall |
-| Painel em `OFFLINE` e log sem erro | falta a regra **UDP**; a descoberta não chega |
-| `socket do Herdr não encontrado` | rodando fora do plugin sem `HERDR_SOCK`/`HERDR_SOCKET_PATH` |
+| Aviso de porta ocupada no dialog | a ponte do Herdr TUI ainda está de pé: veja [Saindo do Herdr TUI](#saindo-do-herdr-tui) |
+| Painéis em `OFFLINE` ao abrir o app, sem indicador no layout | a Ponte só sobe quando há uma cópia do mod viva: abra o dialog com `cmd-alt-a` ou ponha o bloco do indicador no layout |
+| Painel pareado em `OFFLINE`, log sem erro | falta a regra **UDP** (a descoberta não chega), ou o token foi rotacionado |
+| `cmd-alt-a` não abre o dialog | o `keys.json` do mod não foi mesclado, ou a tecla já é de outro comando |
+| Ponte não sobe: `binário do hc não encontrado` | `hc` fora do PATH: aponte `HC_BIN` |
 | `limites claude: claude auth: … --json` | a CLI do Claude instalada não aceita a flag; afeta só a tela opcional de limites, não os agentes |

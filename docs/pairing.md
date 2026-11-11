@@ -15,23 +15,24 @@ port and token. Nothing is typed on the panel.
 - The panel **flashed and powered** — if you haven't flashed it yet, see
   [Flash the panel](../README.md#1-flash-the-panel).
 - The panel **connected to Wi-Fi** (Settings → Wi-Fi network).
-- A machine with **Herdr installed and running** (macOS, Linux or Windows).
+- A machine with the **Herdr desktop app installed and running**.
 - Panel and host **on the same local network**: pairing relies on UDP
   broadcast, which does not cross VLANs or guest networks.
 
 ## 1. Install the bridge on the host
 
-The bridge is a Herdr plugin — it is what the panel talks to over the network.
-Once per machine you want to monitor:
+The bridge ships as a mod of the Herdr desktop app — it is what the panel talks
+to over the network. Once per machine you want to monitor, copy the mod folder
+into the app's home and open the control dialog (`cmd-alt-a`):
 
 ```sh
-herdr plugin install walcew/herdr-assist/plugin            # registers and enables
-herdr plugin action invoke herdr-assist.restart-bridge     # starts it right away
+cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
 ```
 
-The second command just saves you from waiting for the next session — from
-then on the bridge starts together with Herdr. It is pure-stdlib Python: the
-stock macOS `python3` (3.9+) is enough, no toolchain.
+Opening the app (or the dialog) starts the bridge. It is pure-stdlib Python:
+the stock macOS `python3` (3.9+) is enough, no toolchain. Full install notes
+(keys, the footer indicator, leaving the old Herdr TUI plugin) are in the
+[mod README](../mod/herdr-assist/README.md).
 
 ## 2. Put the panel in pairing mode
 
@@ -52,40 +53,19 @@ this manual:
 
 ## 3. On the host, send the configuration
 
-From inside any Herdr pane, open the plugin's admin screen:
+In the Herdr desktop app, press `cmd-alt-a` (or run `herdr-app do mod.open --name herdr-assist`) to
+open the control dialog, and go to the **Pair** tab. The host starts listening for announcements and lists every
+panel it finds, each with its code and IP.
 
-```sh
-herdr plugin pane open --plugin herdr-assist --entrypoint admin
-```
+Check that the listed code matches the one on the panel screen and click
+**Pair** on that row. The host sends the configuration; the panel confirms
+**"Paired with …"**, saves it and **restarts already connected** — your
+sessions show up in the Sessions tab.
 
-(With the shortcut installed — press `k` on that screen — it is just `ctrl+b`,
-then `a`.)
+### From the command line (`ctl.py pair`)
 
-Press **`p` (Pair panel)**. The host starts listening for announcements and
-lists every panel it finds:
-
-```text
-  Pair panel
-
-  On the panel: Settings → Pair with a host
-
-  listening... 1 found — esc cancels
-
-   1) 4B5E94   192.168.1.87
-
-  check the code shown on the panel screen
-```
-
-Check that the listed code matches the one on the panel screen and select it
-(click, `enter` or the number). The host sends the configuration; the panel
-confirms **"Paired with …"**, saves it and **restarts already connected** —
-your sessions show up in the Sessions tab.
-
-### From the command line (`pair.py`)
-
-`pair.py` is gone: in the Herdr desktop app, pairing lives in the control mod's
-**Pair** tab (`cmd-alt-a`). Without the dialog (an SSH session, a script), the
-same protocol is in the mod's `ctl.py`:
+Without the dialog (an SSH session, a script), the same protocol is in the
+mod's `ctl.py`:
 
 ```sh
 python3 ctl.py discover                 # panels announcing now: [{id, ip, port}]
@@ -114,8 +94,8 @@ host, AP isolation, a corporate network — register without discovery:
 The token comes from the host, either way:
 
 ```sh
-cat "$(herdr plugin config-dir herdr-assist)/token"        # via CLI
-herdr plugin action invoke herdr-assist.show-token          # via the plugin action
+python3 ~/.config/herdr-app/mods/herdr-assist/ctl.py token   # via CLI: {"token": "..."}
+# or the control dialog (cmd-alt-a) → Token tab → Show
 ```
 
 Typing 32 hex on a touchscreen is tedious — that is exactly what automatic
@@ -142,7 +122,7 @@ pairing avoids. Use manual setup only when broadcast cannot reach the host.
 |---|---|---|
 | The panel never shows up on the host's list | Different networks, VLAN/AP isolation, filtered broadcast | Put both on the same network; if it persists, use [manual setup](#manual-setup-networks-that-filter-broadcast) |
 | "No Wi-Fi: connect to a network first" on the panel | Panel has no network | Settings → Wi-Fi network; then go back to pairing |
-| "no token — start the bridge before pairing" on the host | The bridge never started (the token is created on first start) | `herdr plugin action invoke herdr-assist.restart-bridge`, or press `x` on the admin screen |
+| "no token — start the bridge before pairing" on the host | The bridge never started (the token is created on first start) | Open the control dialog (`cmd-alt-a`) and use **Restart bridge** on the Status tab |
 | macOS firewall asks whether `python3` may accept connections | Pairing listener blocked | Allow it — otherwise announcements never arrive |
 | "Window closed" on the panel | The 3 minutes ran out | Go back and tap Pair again |
 | "No room: remove a host before pairing" | All 4 slots are taken | Settings → tap a host → Remove |
@@ -151,9 +131,9 @@ pairing avoids. Use manual setup only when broadcast cannot reach the host.
 
 ## Rotating the token
 
-**Rotate token** (`r` on the admin screen) generates a new token and restarts
-the bridge — **every panel paired with that host stops connecting until it is
-paired again**. Use it when you suspect the token leaked.
+**Rotate token** (Token tab of the control dialog) generates a new token that
+the bridge applies on the spot — **every panel paired with that host stops
+connecting until it is paired again**. Use it when you suspect the token leaked.
 
 ---
 

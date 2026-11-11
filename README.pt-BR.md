@@ -16,10 +16,12 @@ sessão certa com um toque, sem precisar procurar a janela no terminal.
 | ![Tela inicial: relógio, mascote e mapa de calor por host](docs/images/panel-home.jpg) | ![Lista de sessões agrupada por host](docs/images/panel-sessions.jpg) | ![Limites de uso dos provedores](docs/images/panel-dash.jpg) |
 | Relógio, mascote e um mapa de calor por host | Sessões com estado, agrupadas por host | Limites de uso do Claude e do Codex |
 
-> **Requer o Herdr.** Este painel é um cliente, não um dispositivo independente — ele
-> precisa de uma instância do [Herdr](https://herdr.dev) rodando em cada máquina que você
-> quiser monitorar. A ponte em `mod/herdr-assist/` é um plugin do Herdr e fala o socket nativo dele,
-> então tudo que o painel mostra vem do próprio fluxo de eventos do Herdr.
+> **Requer o Herdr desktop.** Este painel é um cliente, não um dispositivo independente —
+> ele precisa do app [Herdr](https://herdr.dev) desktop (`herdr-app` + herdr-core) rodando
+> em cada máquina que você quiser monitorar. A ponte em `mod/herdr-assist/` é um mod do
+> Herdr desktop e fala com o herdr-core (`hc`), então tudo que o painel mostra vem do fluxo
+> de eventos dele. O plugin antigo do Herdr TUI ficou congelado na **v0.14.1**
+> (`git checkout v0.14.1`); ele não enxerga os agentes que rodam no app desktop.
 
 ## Começando
 
@@ -72,40 +74,36 @@ senha. Deixe os hosts em branco por enquanto — o passo 3 preenche para você.
 
 ### 2. Instalando a ponte no host
 
-A ponte é um plugin do Herdr. Rode em cada máquina que você quiser alcançar pelo painel:
+A ponte é um mod do app Herdr desktop. Em cada máquina que você quiser alcançar pelo
+painel, copie a pasta do mod (do repositório, ou do asset `herdr-assist-mod.tar.gz` do
+[release mais novo](https://github.com/walcew/herdr-assist/releases/latest)) para o home
+do app e mescle o atalho dele no seu:
 
 ```sh
-herdr plugin install walcew/herdr-assist/plugin            # registra e habilita
-herdr plugin action invoke herdr-assist.restart-bridge     # sobe agora mesmo
+cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
+# keys.json: acrescente  "cmd-alt-a": "mod.open:herdr-assist"  em "global" no ~/.config/herdr-app/keys.json
 ```
 
-O Herdr clona o repositório, mostra o que o plugin declara e passa a subir a ponte junto
-com cada sessão — o segundo comando só evita esperar a próxima. A ponte é stdlib pura do
-Python: funciona com o `python3` de fábrica do macOS (3.9+), sem toolchain.
+Na primeira vez que o app vê a pasta, ele encaixa um indicador pequeno no rodapé do
+layout ativo; essa cópia é quem sobe a ponte quando o app abre, e clicar nela abre o
+dialog de controle (também `cmd-alt-a`, ou `herdr-app do mod.open --name herdr-assist`).
+A ponte é stdlib pura do Python: funciona com o `python3` de fábrica do macOS (3.9+), sem
+toolchain. O resto — o bloco do rodapé como entrada manual no layout, como deixar o plugin
+antigo do Herdr TUI, o doc de configuração, o log e as regras de firewall — está em
+[`mod/herdr-assist/README.md`](mod/herdr-assist/README.md).
 
-**Depois disso a ponte se atualiza sozinha.** Uma vez por dia ela compara a versão que
-declara com a do release mais novo — o mesmo `manifest.json` que o painel consulta, já que
-a tag é a mesma para os dois — e, havendo versão nova, reinstala e reinicia. Não há
-`herdr plugin update` no Herdr, e trocar os arquivos nunca trocou o processo: a ponte sobe
-destacada e sobrevive a sessões novas, então reiniciar é parte do trabalho.
+**Depois disso o mod se atualiza sozinho.** Uma vez por dia a ponte compara o `VERSION`
+do mod com o do release mais novo (o mesmo `manifest.json` que o painel consulta, já que a
+tag é a mesma para os dois), baixa o `herdr-assist-mod.tar.gz`, troca a pasta do mod de
+forma atômica e reinicia a si mesma. Ela também percebe em até um minuto se o código em
+disco mudou por baixo dela.
 
-Ela também confere de minuto em minuto se o código em disco ainda é o que está rodando.
-Isso cobre o `herdr plugin install` feito na mão, cujo par (`restart-bridge`) é o passo
-que todo mundo esquece — em até um minuto a ponte percebe e sobe de novo sozinha.
+Para desligar, ponha `"auto_update": false` no doc `herdr-assist` do core (veja o README
+do mod). Uma pasta **symlink** (ou um checkout com `tests/`) nunca é trocada: ali quem
+atualiza é o `git pull`. Para mexer no mod, `git clone` do repositório +
+`ln -s <checkout>/mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist`.
 
-Para subir, reiniciar e diagnosticar a ponte na mão — token, `env`, logs e as regras de
-firewall — veja [`mod/herdr-assist/README.md`](mod/herdr-assist/README.md).
-
-Para desligar, `AUTO_UPDATE=0` numa linha do arquivo `env` do config-dir. Um checkout
-**linkado** nunca é reinstalado por cima: ali quem atualiza é o `git pull`. Para mexer no
-plugin, o caminho é `git clone` do repositório + `herdr plugin link herdr-assist/plugin`.
-
-> Uma ponte instalada antes desta versão não se atualiza sozinha para ela — não tem o
-> código que faz isso. Esse primeiro salto é manual, uma vez por host:
-> `herdr plugin install walcew/herdr-assist/plugin` seguido de
-> `herdr plugin action invoke herdr-assist.restart-bridge`.
-
-A versão de cada ponte aparece na tela de administração e, no painel, em
+A versão de cada ponte aparece no dialog de controle e, no painel, em
 **Settings → Update firmware**, junto da versão instalada — é onde se vê que um host ficou
 para trás.
 
@@ -116,13 +114,9 @@ configuração se inverte: **o host manda a configuração pronta para o painel*
 
 1. No painel: **Settings → Pair with a host**. A tela mostra um código de 6 caracteres e
    passa a se anunciar por broadcast UDP por 3 minutos.
-2. No host, de dentro de qualquer pane do Herdr, abra a tela de administração e tecle `p`:
-   ```sh
-   herdr plugin pane open --plugin herdr-assist --entrypoint admin
-   ```
-3. Escolha na lista o código que aparece na tela do painel.
-4. Ainda na tela de administração, tecle `k` para instalar o atalho `prefix+a` — daí em
-   diante a tela abre sem linha de comando (`ctrl+b`, depois `a`).
+2. No host, no app Herdr desktop, tecle `cmd-alt-a` para abrir o dialog de controle e vá
+   na aba **Parear**.
+3. Clique em **Parear** na linha com o código que aparece na tela do painel.
 
 O host envia nome, endereço, porta e token; o painel grava na NVS e reinicia já
 conectado. Nada é digitado no touch.
@@ -138,9 +132,9 @@ Pronto — o painel já lista suas sessões. O resto deste documento é referên
 
 A interface fala **inglês e português**, e o firmware é o mesmo nos dois casos: o idioma
 sai da NVS (**Settings → Device → Language**, que alterna no toque) e vale a partir do
-reinício, junto com o resto da config. De fábrica o painel liga em inglês. A tela de
-administração no host segue o locale da máquina (`LANG` e afins, ou `HERDR_ASSIST_LANG`
-para forçar).
+reinício, junto com o resto da config. De fábrica o painel liga em inglês. O dialog de
+controle no host segue o idioma do sistema (pt → português, o resto → inglês;
+`HERDR_ASSIST_LANG` força).
 
 ## Orientação
 
@@ -177,9 +171,8 @@ GET <base>/sonic.hav     →  /sd/avatars/sonic.hav
 
 Além do padrão embutido, os repositórios vêm de dois campos naquela tela (salvos na hora,
 sem reiniciar), de `/sd/avatars/repos.txt` (uma URL por linha, `#` comenta) e da ponte —
-ponha suas URLs em `avatar_repos` dentro do config-dir do plugin
-(`$HERDR_PLUGIN_CONFIG_DIR`, que sob o Herdr é
-`~/.config/herdr/plugins/config/herdr-assist/`) e o plugin as empurra a cada conexão. Id repetido fica com o primeiro que apareceu, e o repositório padrão é lido
+ponha suas URLs em `avatar_repos` no doc `herdr-assist` do core
+(veja o [README do mod](mod/herdr-assist/README.md#configuração)) e a ponte as empurra a cada conexão. Id repetido fica com o primeiro que apareceu, e o repositório padrão é lido
 primeiro: um repositório de terceiro não sequestra o nome de um avatar oficial.
 
 Todo pacote é validado antes de merecer confiança — magic, tabela de animações, offsets de
@@ -269,18 +262,19 @@ Wi-Fi, pareamento e atualização. Veja [`epaper154/README.md`](epaper154/README
 
 ## Arquitetura
 
-O Herdr expõe sua API num unix socket local, que um dispositivo na rede não alcança.
-A ponte (`mod/herdr-assist/herdr_bridge.py`, stdlib pura) traduz isso para TCP e nada mais: ela
-assina os eventos do Herdr, então o painel recebe as mudanças por **push**, sem polling.
-Ela é empacotada como **plugin do Herdr** (`plugin/herdr-plugin.toml`), que o Herdr
-sobe junto com a sessão — um plugin por máquina que você queira controlar pelo painel.
+O herdr-core expõe sua API só na máquina local (`hc connect`, JSONL em stdin/stdout), que um
+dispositivo na rede não alcança. A ponte (`mod/herdr-assist/herdr_bridge.py`, stdlib pura)
+traduz isso para TCP e nada mais: ela assina os eventos do core (`events.subscribe`), então
+o painel recebe as mudanças por **push**, sem polling. Ela é empacotada como **mod do Herdr
+desktop** (`mod/herdr-assist/`), que mantém a ponte rodando como terminal do core — um mod
+por máquina que você queira controlar pelo painel.
 
 ```
 ┌─ JC3248W535EN ─────────────┐     Wi-Fi / LAN      ┌─ Mac ───────────────────────┐
-│ herdr-assist               │ ◄── TCP + JSON ───►  │ plugin herdr-assist (:9375) │
-│ ESP-IDF 5.2 + LVGL 8.4     │    uma msg por       │          │ unix socket      │
+│ herdr-assist               │ ◄── TCP + JSON ───►  │ ponte herdr-assist (:9375)  │
+│ ESP-IDF 5.2 + LVGL 8.4     │    uma msg por       │          │ hc connect       │
 │ UI: lista, terminal, ações │    linha             │          ▼                  │
-└────────────────────────────┘ ◄─ descoberta UDP ─► │   herdr (events.subscribe)  │
+└────────────────────────────┘ ◄─ descoberta UDP ─► │  herdr-core (events)        │
                                   (:9375, auto)     └─────────────────────────────┘
 ```
 
@@ -296,23 +290,19 @@ do Claude Code e do Codex com as credenciais que os próprios CLIs mantêm renov
 `~/.claude/.credentials.json` e `~/.codex/auth.json`; nenhum token sai do Mac, só
 percentuais), `pong`.
 
-**Windows.** Da versão 0.5.0 do plugin em diante a ponte também roda num host
-Windows. Lá o socket do Herdr é um named pipe cujo *nome* é o caminho inteiro
-(`\\.\pipe\C:\Users\...\herdr.sock`), que o Python não consegue abrir — então a ponte fala
-com o Herdr pela CLI e reconcilia por polling em vez de `events.subscribe`. O
-pareamento por linha de comando é o `mod/herdr-assist/ctl.py discover` e o
+O pareamento por linha de comando (sem o dialog) é o `mod/herdr-assist/ctl.py discover` e o
 `ctl.py pair <ip> <porta>`.
 
 A ponte é o ponto onde as decisões de segurança acontecem, porque qualquer um na LAN
 alcança essa porta. **Toda conexão exige um token** (handshake `hello` na primeira linha;
 sem ele, a ponte desconecta em 5 s). Além disso: só teclas de uma allowlist passam, texto
 tem limite de tamanho, e comandos só valem para panes que existem. O token é gerado na
-primeira subida do plugin (0600 no config-dir); a ação `Show panel token`, no Herdr,
-exibe o valor.
+primeira subida da ponte e fica no doc `herdr-assist` do core; a aba Token do dialog de
+controle exibe o valor.
 
 ### Descoberta de host (modo auto)
 
-DHCP muda os hosts de endereço, então um slot pareado a partir do plugin 0.4 **não
+DHCP muda os hosts de endereço, então um slot pareado a partir da ponte 0.4 **não
 guarda IP nenhum**: o painel encontra a ponte por broadcast UDP (`herdr-find` →
 `herdr-here`, mesma porta 9375) no boot e sempre que a conexão cai, mantendo o endereço
 descoberto só em RAM. O handshake prova posse do token sem nunca colocá-lo no ar — a
@@ -320,58 +310,22 @@ resposta carrega `h = HMAC-SHA256(token, "nonce|ip|port|name")`, e o painel adot
 ip/port **assinados**, nunca o remetente do datagrama, para um vizinho não conseguir
 redirecionar o painel reaproveitando probes. Digitar um endereço no editor de host
 desliga a descoberta daquele slot (modo estático) — use em redes que filtram broadcast.
-O modo auto exige plugin ≥ 0.4 no host; a descoberta compartilha os requisitos do
+O modo auto exige ponte ≥ 0.4 no host; a descoberta compartilha os requisitos do
 pareamento (mesmo segmento L2, broadcast liberado) e requer o `BRIDGE_BIND` padrão
 `0.0.0.0` (bind num endereço específico fica surdo a broadcast).
 
-## Usando a tela de administração
+## Usando o dialog de controle
 
-Com o atalho instalado (tecle `k` na própria tela, ou veja abaixo): `ctrl+b`, depois
-`a`. Pela linha de comando, de dentro de qualquer pane do Herdr:
+No app Herdr desktop, `cmd-alt-a` (ou o indicador do rodapé, ou
+`herdr-app do mod.open --name herdr-assist`) abre um dialog com três abas: **Status**
+(ponte ativa, versão, porta, IP na LAN, painéis conectados, **Reiniciar ponte**), **Token**
+(mostrar e rotacionar) e **Parear** (descoberta, envio da configuração, QR do manual de
+pareamento). Se a porta 9375 estiver com outra ponte — tipicamente a do Herdr TUI antigo —
+a aba Status avisa e oferece **Encerrar** (com confirmação; nada é morto sozinho).
 
-```sh
-herdr plugin pane open --plugin herdr-assist --entrypoint admin
-```
-
-A tela abre como popup de 76×22 sobre a sessão — uma pequena TUI que você usa com o
-mouse (clique em qualquer linha ou botão) ou só pelo teclado: `p` pareia um painel, `r`
-gira o token, `x` reinicia a ponte, `k` instala o atalho de teclado, setas + enter
-navegam, `q`/esc fecha. O bloco de status atualiza sozinho.
-
-> Por SSH o `herdr` pode não estar no PATH (uma sessão não-interativa não carrega o
-> ambiente do Homebrew): use o caminho completo, normalmente `/opt/homebrew/bin/herdr`.
-
-O atalho é a porta de entrada, porque o Herdr 0.8.0 **não tem superfície de UI para
-plugins** — nenhum menu, palette ou picker lista panes ou ações de plugin, e plugin não
-pode embarcar keybind padrão (as teclas são do config do usuário, por decisão de design).
-Teclar `k` na tela de administração resolve isso por você: acrescenta o bloco abaixo em
-`~/.config/herdr/config.toml` (com backup antes), valida com `herdr config check` —
-desfazendo se falhar — e aplica com `herdr server reload-config`. `prefix+a` está livre
-nos defaults de fábrica do 0.8.0; se a sua config já a usa, o `k` recusa e você escolhe
-uma tecla manualmente:
-
-```toml
-[[keys.command]]
-key = "prefix+a"          # ctrl+b seguido de "a"
-type = "plugin_action"
-command = "herdr-assist.admin"
-description = "herdr-assist admin"
-```
-
-`herdr config check` valida e `herdr server reload-config` aplica sem reiniciar.
-
-A mesma tela de administração mostra o estado da ponte, o token e os painéis conectados.
-Pela CLI, o token também sai em:
-
-```sh
-cat "$(herdr plugin config-dir herdr-assist)/token"
-```
-
-O log da ponte fica em `<state-dir>/bridge.log` — o Herdr usa
-`~/.local/state/herdr/plugins/<id>/`, que é diferente do config-dir.
-
-> O plugin também aceita config opcional em `<config-dir>/env` (`BRIDGE_PORT`,
-> `BRIDGE_BIND`) — o config-dir sai em `herdr plugin config-dir herdr-assist`.
+A configuração da ponte (token, porta, repositórios de avatar, atualização automática)
+fica no doc `herdr-assist` do core e vale sem reiniciar; o log da ponte é a saída do
+próprio terminal — os dois estão no [README do mod](mod/herdr-assist/README.md).
 
 ## Compilando do código-fonte
 
@@ -420,9 +374,10 @@ testar o fluxo.
 
 | Arquivo | Papel |
 |---|---|
-| `mod/herdr-assist/start.py` | Startup do plugin: sobe a ponte destacada, idempotente, multiplataforma |
+| `mod/herdr-assist/main.js` | Mod de controle (indicador + dialog): desenha a UI e chama o `ctl.py` |
+| `mod/herdr-assist/update.py` | Autoatualização: baixa o pacote do mod do release e troca a pasta de forma atômica |
 | `mod/herdr-assist/ctl.py` | Operações do Mod de controle (JSON): status, reinício, rotação do token, descoberta e pareamento de painéis |
-| `mod/herdr-assist/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização, coleta de uso de limites (Claude/Codex) |
+| `mod/herdr-assist/herdr_bridge.py` | Ponte: herdr-core (`hc`) ↔ TCP, handshake com token, allowlist, sanitização, coleta de uso de limites (Claude/Codex) |
 | `src/pairing.c` | Modo de pareamento do painel: anúncio por broadcast + recepção da config |
 | `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |
 | `src/panel_cfg.c` | Configuração persistente (NVS): rede Wi-Fi + até 4 hosts Herdr + idioma |
@@ -494,10 +449,8 @@ testar o fluxo.
   vivem em flash (3,2 KB de rodata para os dois idiomas juntos, medido no `.o`), e o
   único custo em RAM é o `uint8_t` do idioma em vigor. pt_BR e en_US
   cabem no Latin-1 que as fontes de UI já cobrem, então nada precisou ser regerado.
-  Ficam fora do bilíngue, em inglês fixo, o `herdr-plugin.toml` (o manifest é lido pelo
-  Herdr sem campo por idioma) e as duas mensagens do `start.py` que a tela de
-  administração ecoa ao reiniciar a ponte — um shell script não acompanha o locale sem
-  carregar uma tabela só para isso, e inglês é o mesmo critério do manifest.
+  O dialog de controle do host (`main.js`) tem a própria tabela
+  en/pt e segue o idioma do sistema, não o do painel.
 - **A interface segue o projeto "herdr-assist" no Claude Design** — paleta neutra (cor só
   em status), topbar sem barra sólida e dock flutuante de quatro abas. Ao mexer no visual,
   atualize lá também: `src/ui_theme.h` é a tradução direta daquelas telas.

@@ -74,18 +74,18 @@ esptool.py --chip esp32s3 --port COM5 write_flash 0x0 firmware.factory.bin
    Quando não há sessão para listar, a tela diz o motivo (`rede nao
    encontrada`, `senha recusada`, `conectando...`) — senha errada e roteador
    fora do ar não deviam parecer a mesma coisa.
-2. **Ponte** — instale o plugin na máquina que você quer acompanhar
-   (`herdr plugin install walcew/herdr-assist/plugin`), como descrito no
-   [README principal](../README.md).
+2. **Ponte** — instale o mod do Herdr desktop na máquina que você quer
+   acompanhar, como descrito no [README principal](../README.md).
 3. **Pareamento** — no aparelho: `SETTINGS` → `Parear com um host`. Ele mostra
    um código de 6 caracteres e se anuncia por broadcast UDP.
 
-   No host, **macOS/Linux**: abra a tela de administração
-   (`herdr plugin pane open --plugin herdr-assist --entrypoint admin`) e tecle
-   `p`. No **Windows** (onde não há curses), pela linha de comando:
+   No host, abra o dialog de controle (`cmd-alt-a`), aba **Parear**, e clique
+   em **Parear** na linha do aparelho. Sem o dialog (SSH, script), pela linha de
+   comando, na pasta do mod:
 
    ```sh
-   python plugin/pair.py
+   python3 ctl.py discover                 # aparelhos anunciando agora
+   python3 ctl.py pair <ip> <porta>        # manda a configuração a um deles
    ```
 
    Nome, endereço, porta e token chegam prontos; o aparelho grava na NVS e
@@ -183,11 +183,6 @@ Um `pio run -t upload` cru escreveria a tabela de partições deste projeto em
 Comparado ao painel de 3,5": sem mascote/avatar, sem tela home com relógio
 grande e mapa de calor, sem atualização OTA pelo GitHub e sem tradução (a
 interface é curta e está em português).
-
-No host **Windows** não há tela de administração: o `admin.py` é curses, que não
-existe na stdlib do Windows. O pareamento está coberto por `plugin/pair.py`, mas
-rotação de token, status da ponte e instalação do atalho de teclado seguem só no
-macOS e no Linux.
 
 ## Notas de implementação
 
