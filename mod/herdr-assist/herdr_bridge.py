@@ -890,11 +890,15 @@ async def ctl_scroll(pane_id: str, up: bool, lines: int, col: int, row: int) -> 
 
     O app com mouse tracking rola o próprio conteúdo; a posição importa porque
     TUIs costumam rolar só a região sob o ponteiro. col/row do painel são
-    0-based; o SGR é 1-based. Sem trava neste pane não há canal, e sem mouse
-    tracking o core entregaria a roda como texto digitado: nos dois casos, nada.
+    0-based; o SGR é 1-based. Sem trava neste pane não faz nada. Sem mouse
+    tracking o core entregaria a roda como texto digitado: vai um PageUp/PageDown
+    (um por pedido; no Claude Code rola ~11 linhas, medido no #6).
     """
-    if not ctl_alive(pane_id) or not ctl["modes"].get("mouse"):
+    if not ctl_alive(pane_id):
         return False
+    if not ctl["modes"].get("mouse"):
+        return await hc_call("terminal.keys", {"terminal": pane_id,
+                                               "keys": ["pageup" if up else "pagedown"]}) is not None
     cols, rows = ctl["size"]
     seq = "\x1b[<%d;%d;%dM" % (64 if up else 65, max(0, min(col, cols - 1)) + 1,
                                 max(0, min(row, rows - 1)) + 1)

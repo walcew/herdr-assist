@@ -357,6 +357,7 @@ class TestBridgeOverFakeHc(unittest.TestCase):
         self.assertEqual(self.calls_until("frame.data", 2)[1]["text"],
                          "\x1b[<65;50;1M" * b.wheel_events(20))
         self.assertEqual(len(self.calls("frame.resize")), 2)   # cada roda retoma o tamanho
+        self.assertEqual(self.calls("terminal.keys"), [])     # com mouse, nada de PageUp
 
     def test_wheel_events_cresce_devagar_por_causa_da_aceleracao(self):
         self.assertEqual([b.wheel_events(n) for n in (1, 2, 3, 4, 5, 11, 20)],
@@ -370,15 +371,20 @@ class TestBridgeOverFakeHc(unittest.TestCase):
         self.assertEqual(self.command(s, rf, msg), [])     # trava é de outro pane
         time.sleep(0.2)
         self.assertEqual(self.calls("frame.data"), [])
+        self.assertEqual(self.calls("terminal.keys"), [])
 
-    def test_scroll_pane_sem_mouse_tracking_nao_digita_a_roda_no_app(self):
+    def test_scroll_pane_sem_mouse_tracking_usa_pageup_pagedown(self):
         # sem mouse tracking o core repassa a roda como texto (medido num bash)
         self.set_terminals([terminal("t1a", mouse=False)])
         s, rf = self.connect_ready()
         self.read_locked(s, rf)
         self.calls_until("frame.credit")             # a repintura já passou pela ponte
-        self.command(s, rf, {"type": "scroll_pane", "pane_id": "t1a", "dir": "up",
-                             "lines": 3})
+        for d in ("up", "down"):
+            self.command(s, rf, {"type": "scroll_pane", "pane_id": "t1a", "dir": d,
+                                 "lines": 20})
+        self.assertEqual(self.calls("terminal.keys"),
+                         [{"terminal": "t1a", "keys": ["pageup"]},
+                          {"terminal": "t1a", "keys": ["pagedown"]}])
         time.sleep(0.2)
         self.assertEqual(self.calls("frame.data"), [])
 
