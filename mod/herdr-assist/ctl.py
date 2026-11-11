@@ -295,30 +295,29 @@ def status() -> dict:
             "holder": port_holder(port), "lang": lang()}
 
 
+# nome -> (argumentos no uso, função dos argumentos; None = argumentos inválidos)
+COMMANDS = {
+    "status": ("", lambda a: status()),
+    "port-holder": ("", lambda a: {"holder": port_holder(bridge_port())}),
+    "kill-holder": ("<pid>", lambda a: kill_holder(int(a[0]), bridge_port())
+                    if len(a) == 1 and a[0].isdigit() else None),
+    "ensure": ("", lambda a: ensure(bridge_port())),
+    "restart": ("", lambda a: restart(bridge_port())),
+    "token": ("", lambda a: {"token": doc_get().get("token", "")}),
+    "rotate-token": ("", lambda a: rotate_token()),
+    "discover": ("", lambda a: discover()),
+    "pair": ("<ip> <port>", lambda a: pair(a[0], int(a[1]))
+             if len(a) == 2 and a[1].isdigit() else None),
+}
+
+
 def main(argv: list) -> int:
     update.recover()   # queda entre os renames de uma atualização
-    cmd = argv[0] if argv else ""
-    if cmd == "status":
-        out = status()
-    elif cmd == "port-holder":
-        out = {"holder": port_holder(bridge_port())}
-    elif cmd == "kill-holder" and len(argv) == 2 and argv[1].isdigit():
-        out = kill_holder(int(argv[1]), bridge_port())
-    elif cmd == "ensure":
-        out = ensure(bridge_port())
-    elif cmd == "restart":
-        out = restart(bridge_port())
-    elif cmd == "token":
-        out = {"token": doc_get().get("token", "")}
-    elif cmd == "rotate-token":
-        out = rotate_token()
-    elif cmd == "discover":
-        out = discover()
-    elif cmd == "pair" and len(argv) == 3 and argv[2].isdigit():
-        out = pair(argv[1], int(argv[2]))
-    else:
-        print(json.dumps({"error": "usage: ctl.py status|port-holder|kill-holder <pid>|ensure"
-                                   "|restart|token|rotate-token|discover|pair <ip> <port>"}))
+    cmd = COMMANDS.get(argv[0] if argv else "")
+    out = cmd[1](argv[1:]) if cmd else None
+    if out is None:
+        usage = "|".join((name + " " + args).strip() for name, (args, _) in COMMANDS.items())
+        print(json.dumps({"error": "usage: ctl.py " + usage}))
         return 2
     print(json.dumps(out))
     return 0

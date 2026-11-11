@@ -182,6 +182,29 @@ class TestMain(unittest.TestCase):
             ctl.main(["nada"])
         recover.assert_called_once_with()
 
+    def run_main(self, argv):
+        with mock.patch.object(ctl.update, "recover"), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            code = ctl.main(argv)
+        return code, json.loads(out.getvalue())
+
+    def test_subcomando_com_argumentos(self):
+        with mock.patch.object(ctl, "bridge_port", return_value=9375), \
+                mock.patch.object(ctl, "kill_holder", return_value={"ok": True}) as kill, \
+                mock.patch.object(ctl, "pair", return_value={"ok": True}) as pair:
+            self.assertEqual(self.run_main(["kill-holder", "42"]), (0, {"ok": True}))
+            self.assertEqual(self.run_main(["pair", "10.0.0.5", "9376"]), (0, {"ok": True}))
+        kill.assert_called_once_with(42, 9375)
+        pair.assert_called_once_with("10.0.0.5", 9376)
+
+    def test_comando_ou_argumento_invalido_mostra_o_uso_completo(self):
+        for argv in ([], ["nada"], ["kill-holder"], ["kill-holder", "x"], ["pair", "1.2.3.4"]):
+            code, out = self.run_main(argv)
+            self.assertEqual(code, 2, argv)
+        for name in ("status", "port-holder", "kill-holder <pid>", "ensure", "restart", "token",
+                     "rotate-token", "discover", "pair <ip> <port>"):
+            self.assertIn(name, out["error"])
+
 
 class TestDiscover(unittest.TestCase):
     def test_lista_os_anuncios_e_ignora_o_resto(self):
