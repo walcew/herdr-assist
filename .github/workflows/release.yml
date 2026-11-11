@@ -11,8 +11,8 @@
 # fw_update.c).
 #
 # Trem único de versão: a mesma tag vX.Y.Z builda e publica o painel de 3,5", o
-# Cardputer e o e-paper (V2 e V1), em jobs paralelos. O manifest.json de nome fixo é PARA SEMPRE o
-# do painel — os painéis em campo fazem GET em releases/latest/download/
+# Cardputer, o e-paper (V2 e V1) e o mod do Herdr desktop, em jobs paralelos.
+# O manifest.json de nome fixo é PARA SEMPRE o do painel — os painéis em campo fazem GET em releases/latest/download/
 # manifest.json e flashariam sem reclamar qualquer imagem S3 apontada ali
 # (o rollback salvaria, mas é incidente). O Cardputer tem o seu
 # manifest-cardputer.json; o job publish trava a publicação se a URL do
@@ -30,22 +30,50 @@ permissions:
   contents: write         # required to create the release
 
 jobs:
-  build-panel:
+  # O mod do Herdr desktop vai como asset (herdr-assist-mod.tar.gz) e se
+  # atualiza por ele (ver mod/herdr-assist/update.py). Sem toolchain: roda em
+  # segundos e, se a versão do mod divergir da tag, derruba o release antes dos
+  # builds pesados terminarem de ser úteis (o publish depende deste job).
+  build-mod:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # The bridge auto-updates by comparing the version it declares with the
-      # one in manifest.json, which IS the tag (see mod/herdr-assist/update.py). If the
-      # manifest version drifts from the tag, every host either never updates
-      # or updates on every check. Fail here rather than ship that.
-      - name: Plugin version must match the tag
+      # O mod compara o VERSION local com a versão do release (a tag). Se
+      # divergirem, todo host nunca atualiza ou atualiza a cada checagem.
+      - name: Mod version must match the tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
           DECLARED=$(tr -d '[:space:]' < mod/herdr-assist/VERSION)
           EXPECTED=${GITHUB_REF_NAME#v}
           echo "mod/herdr-assist/VERSION declares $DECLARED, tag is $EXPECTED"
           test "$DECLARED" = "$EXPECTED"
+
+      # Fora do pacote: os testes, o que o `herdr-app check` gera
+      # (gpui-kit.d.ts, jsconfig.json) e o .gitignore. O update trata a
+      # presença de tests/ como checkout de desenvolvimento e não troca a
+      # pasta, então ele NÃO pode entrar aqui.
+      - name: Package mod
+        run: |
+          mkdir -p dist
+          tar -czf dist/herdr-assist-mod.tar.gz -C mod \
+            --owner=0 --group=0 --numeric-owner \
+            --exclude='herdr-assist/tests' --exclude='herdr-assist/.gitignore' \
+            --exclude='herdr-assist/gpui-kit.d.ts' --exclude='herdr-assist/jsconfig.json' \
+            --exclude='__pycache__' --exclude='*.pyc' --exclude='.DS_Store' \
+            herdr-assist
+          tar -tzf dist/herdr-assist-mod.tar.gz
+          tar -xzOf dist/herdr-assist-mod.tar.gz herdr-assist/VERSION
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-mod
+          path: dist/
+
+  build-panel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
@@ -244,7 +272,7 @@ jobs:
           path: dist/
 
   publish:
-    needs: [build-panel, build-cardputer, build-epaper154]
+    needs: [build-mod, build-panel, build-cardputer, build-epaper154]
     if: startsWith(github.ref, 'refs/tags/')   # dispatch é dry-run de verdade
     runs-on: ubuntu-latest
     steps:
@@ -278,7 +306,7 @@ jobs:
           done
 
       - name: Checksums
-        run: cd dist && sha256sum *.bin > SHA256SUMS && cat SHA256SUMS
+        run: cd dist && sha256sum *.bin *.tar.gz > SHA256SUMS && cat SHA256SUMS
 
       # gh is preinstalled on the runner — no third-party action needed to publish.
       # Idempotente: se o release já existe (criado à mão antes do CI terminar,
@@ -335,15 +363,21 @@ jobs:
           esptool.py --chip esp32s3 write_flash 0x0 herdr-assist-epaper154-VERSION-install.bin
           ```
 
-          Full step-by-step, including the Herdr plugin, in the [README](https://github.com/walcew/herdr-assist#readme).
+          ## Herdr desktop mod
+
+          `herdr-assist-mod.tar.gz` is the control mod for Herdr desktop. Unpack
+          it into `~/.config/herdr-app/mods/` (it creates `herdr-assist/`); after
+          that it updates itself from the next release.
+
+          Full step-by-step in the [README](https://github.com/walcew/herdr-assist#readme).
           EOF
           sed -i "s/VERSION/${GITHUB_REF_NAME}/g" notes.md
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/*.bin dist/SHA256SUMS dist/manifest.json dist/manifest-cardputer.json dist/manifest-epaper154.json dist/manifest-epaper154-v1.json --clobber
+            gh release upload "$GITHUB_REF_NAME" dist/*.bin dist/herdr-assist-mod.tar.gz dist/SHA256SUMS dist/manifest.json dist/manifest-cardputer.json dist/manifest-epaper154.json dist/manifest-epaper154-v1.json --clobber
           else
             gh release create "$GITHUB_REF_NAME" \
               --title "$GITHUB_REF_NAME" \
               --notes-file notes.md \
               --generate-notes \
-              dist/*.bin dist/SHA256SUMS dist/manifest.json dist/manifest-cardputer.json dist/manifest-epaper154.json dist/manifest-epaper154-v1.json
+              dist/*.bin dist/herdr-assist-mod.tar.gz dist/SHA256SUMS dist/manifest.json dist/manifest-cardputer.json dist/manifest-epaper154.json dist/manifest-epaper154-v1.json
           fi

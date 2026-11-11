@@ -628,7 +628,7 @@ class TestBridgeConfigDoc(BridgeHarness):
     def test_bridge_machines_nao_faz_mais_nada(self):
         # o espelhamento de máquinas remotas saiu: nenhuma chamada ao `herdr machine`
         self.set_doc({"token": "tok-1", "port": self.port})
-        self.launch(BRIDGE_MACHINES="all", HERDR_BIN=FAKE_APP)
+        self.launch(BRIDGE_MACHINES="all")
         self.ready(self.connect("tok-1")[1])
         time.sleep(0.3)
         self.assertEqual(self.app_calls(), [])

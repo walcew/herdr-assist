@@ -1,44 +1,39 @@
-#!/usr/bin/env python3
-# /// script
-# requires-python = ">=3.9"
-# ///
-"""Atualização da ponte: descobre a versão publicada, decide e reinstala.
+"""Atualização do mod: descobre a versão publicada, baixa o pacote e troca a pasta.
 
-O painel se atualiza sozinho desde sempre (src/fw_update.c); a ponte, que roda
-no host e muda muito mais, não tinha nada. Isto fecha a lacuna com as mesmas
-peças: um GET no `manifest.json` que o release já publica, comparação por
-diferença, e um switch para desligar.
+O release publica a pasta do mod como asset (`herdr-assist-mod.tar.gz`, ver
+release.yml), e a versão dela é travada com a tag. O `manifest.json` do painel
+continua sendo o de sempre: como o release é um trem único, a versão anunciada
+ali É a versão do mod daquela tag, então um GET basta, sem a API do GitHub.
 
-Por que o `manifest.json` do painel serve para o plugin: o release é um trem
-único — a mesma tag `vX.Y.Z` builda painel e Cardputer —, então a versão
-anunciada ali É a versão do plugin daquela tag. Não há asset novo a publicar,
-nem chamada à API do GitHub (rate limit), nem release notes a parsear.
+A troca extrai o pacote ao lado da pasta do mod (mesmo diretório pai, para o
+rename ficar no mesmo filesystem), renomeia a pasta antiga para backup, põe a
+nova no lugar e só então apaga o backup. Se algo falha no meio, a antiga volta.
+Quem reinicia a Ponte é o laço do herdr_bridge.py, que percebe a versão em disco
+mudar e chama restart_bridge (= `ctl.py restart`).
 
-O `herdr` não tem `plugin update`: atualizar é repetir o `plugin install`, e
-trocar os arquivos não troca a ponte em execução (o start.py sai cedo se a
-porta responde, e o processo é destacado). Daí o par install + restart.
-
-As funções de decisão não fazem I/O de rede nem subprocess — é o que deixa a
-lógica testável sem cortar release de teste (ver tests/test_update.py).
+Não atua em checkout de desenvolvimento (symlink ou pasta com tests/) nem com
+auto_update desligado. A rede e o download entram por parâmetro, para o teste.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
+import shutil
 import subprocess
+import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
 
 log = logging.getLogger("bridge.update")
 
-DIR = os.environ.get("HERDR_PLUGIN_ROOT", os.path.dirname(os.path.abspath(__file__)))
-CONF = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
-                      os.path.expanduser("~/.config/herdr-assist"))
-STATE = os.environ.get("HERDR_PLUGIN_STATE_DIR", CONF)
+DIR = os.path.dirname(os.path.abspath(__file__))
+# Fora da pasta do mod, que é substituída inteira a cada atualização.
+STATE = os.environ.get("HERDR_ASSIST_STATE_DIR",
+                       os.path.expanduser("~/.config/herdr-assist"))
 
-PLUGIN_ID = "herdr-assist"
 # Versão deste mod, sem o `v`: o release.yml trava a publicação se ela divergir da tag.
 VERSION_FILE = os.path.join(DIR, "VERSION")
 STATE_FILE = os.path.join(STATE, "update.json")
@@ -49,13 +44,12 @@ STATE_FILE = os.path.join(STATE, "update.json")
 MANIFEST_URL = os.environ.get(
     "UPDATE_MANIFEST_URL",
     "https://github.com/walcew/herdr-assist/releases/latest/download/manifest.json")
-
-# Alvo do reinstall quando o Herdr não disser de onde o plugin veio; é o
-# comando que o README manda rodar na instalação.
-DEFAULT_REPO = "walcew/herdr-assist/mod/herdr-assist"
+ASSET_URL = ("https://github.com/walcew/herdr-assist/releases/download/"
+             "v{}/herdr-assist-mod.tar.gz")
 
 HTTP_TIMEOUT = 10
-CLI_TIMEOUT = 180        # clonar o repo num host lento passa fácil de 30s
+DOWNLOAD_TIMEOUT = 60
+DOWNLOAD_MAX = 8 * 1024 * 1024   # o pacote tem poucas centenas de KB
 
 
 def normalize(v: str) -> str:
@@ -68,10 +62,10 @@ def normalize(v: str) -> str:
 
 
 def auto_enabled() -> bool:
-    """Switch de atualização automática (AUTO_UPDATE=0 no `env` do config-dir).
+    """Switch de atualização automática (AUTO_UPDATE=0 no ambiente).
 
     Espelha o `no_auto_update` do painel, inclusive no default: quem não disse
-    nada quer atualizar. O start.py carrega o arquivo `env` e a ponte herda.
+    nada quer atualizar. A Ponte aplica o `auto_update` do doc em os.environ.
     """
     return os.environ.get("AUTO_UPDATE", "1").strip().lower() not in ("0", "false", "no")
 
@@ -98,38 +92,6 @@ def published_version(url: str = "") -> str:
     return normalize(ver) if isinstance(ver, str) else ""
 
 
-def plugin_source(herdr_bin: str) -> dict:
-    """Como o Herdr registrou este plugin: {"kind": ..., "repo": ...}.
-
-    O `kind` é o que impede o estrago: com "local" o plugin está LINKADO a um
-    checkout de trabalho, e reinstalar por cima o trocaria por um checkout
-    gerenciado — apagando o ambiente de quem desenvolve.
-
-    O formato do `source` para plugin vindo do GitHub não pôde ser conferido
-    aqui (esta máquina é `local`), então o repo é lido com tolerância e o que
-    vier fica no log; sem um palpite bom, vale o DEFAULT_REPO.
-    """
-    out = _run([herdr_bin, "plugin", "list", "--json", "--plugin", PLUGIN_ID], 15)
-    if out is None:
-        return {}
-    try:
-        plugins = json.loads(out).get("result", {}).get("plugins", [])
-    except ValueError:
-        return {}
-    if not plugins:
-        return {}
-    src = plugins[0].get("source") or {}
-    kind = str(src.get("kind", ""))
-    repo = ""
-    for key in ("repo", "slug", "spec", "path"):     # o nome real sai no log
-        if isinstance(src.get(key), str) and "/" in src[key]:
-            repo = src[key]
-            break
-    if kind and kind != "local" and not repo:
-        log.info("source do plugin sem repo reconhecível: %s", src)
-    return {"kind": kind, "repo": repo}
-
-
 def load_state() -> dict:
     try:
         with open(STATE_FILE, encoding="utf-8") as fh:
@@ -148,7 +110,7 @@ def save_state(st: dict) -> None:
         log.warning("não gravei %s: %s", STATE_FILE, exc)
 
 
-def should_update(installed: str, published: str, kind: str, tried: str) -> tuple:
+def should_update(installed: str, published: str) -> tuple:
     """Decide, e diz por quê. Devolve (bool, motivo).
 
     A comparação é por DIFERENÇA, não por ordem — mesma regra do
@@ -159,47 +121,85 @@ def should_update(installed: str, published: str, kind: str, tried: str) -> tupl
         return False, "unknown"
     if installed == published:
         return False, "same"
-    if kind == "local":
-        return False, "local"
-    if tried and normalize(tried) == published:
-        # A rodada anterior já tentou esta versão e o plugin continua na antiga:
-        # o install não pegou. Repetir seria ciclar install→restart→install até
-        # sair um release novo.
-        return False, "tried"
     return True, "available"
 
 
-def install(target: str, repo: str, herdr_bin: str) -> bool:
-    """Reinstala o plugin na tag `target`. Não reinicia a ponte."""
-    out = _run([herdr_bin, "plugin", "install", repo or DEFAULT_REPO,
-                "--ref", "v" + target, "--yes"], CLI_TIMEOUT)
-    return out is not None
+def is_dev(mod_dir: str) -> bool:
+    """Checkout de trabalho: symlink, ou pasta com tests/ (o pacote não os leva).
+
+    O segundo teste existe porque o Python resolve symlinks ao importar este
+    módulo: com a pasta linkada, o DIR já chega como o caminho real.
+    """
+    return os.path.islink(mod_dir) or os.path.isdir(os.path.join(mod_dir, "tests"))
+
+
+def fetch(url: str, dest: str) -> None:
+    """Baixa `url` para o arquivo `dest`; levanta OSError se falhar ou passar do teto."""
+    with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as r:
+        data = r.read(DOWNLOAD_MAX + 1)
+    if len(data) > DOWNLOAD_MAX:
+        raise OSError("pacote maior que %d bytes" % DOWNLOAD_MAX)
+    with open(dest, "wb") as fh:
+        fh.write(data)
+
+
+def extract(archive: str, dest: str) -> None:
+    """Extrai só `herdr-assist/...` com arquivos e pastas comuns; senão, ValueError."""
+    with tarfile.open(archive, "r:gz") as tf:
+        for m in tf.getmembers():
+            parts = m.name.split("/")
+            if not (m.isfile() or m.isdir()) or parts[0] != "herdr-assist" \
+                    or m.name.startswith("/") or ".." in parts:
+                raise ValueError("membro inesperado no pacote: " + m.name)
+        tf.extractall(dest)
+
+
+def swap(new: str, mod_dir: str) -> None:
+    """Põe `new` no lugar de `mod_dir`; se não conseguir, a antiga fica intacta."""
+    old = mod_dir + ".old"
+    shutil.rmtree(old, ignore_errors=True)    # sobra de uma troca interrompida
+    os.rename(mod_dir, old)
+    try:
+        os.rename(new, mod_dir)
+    except OSError:
+        os.rename(old, mod_dir)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
+
+
+def install(target: str, mod_dir: str, fetch_fn=fetch) -> bool:
+    """Baixa o pacote da versão `target` e troca a pasta. Não reinicia a Ponte."""
+    work = tempfile.mkdtemp(prefix=".herdr-assist-update-", dir=os.path.dirname(mod_dir))
+    try:
+        archive = os.path.join(work, "mod.tar.gz")
+        fetch_fn(ASSET_URL.format(target), archive)
+        extract(archive, work)
+        new = os.path.join(work, "herdr-assist")
+        with open(os.path.join(new, "VERSION"), encoding="utf-8") as fh:
+            if normalize(fh.read()) != target:
+                raise ValueError("o pacote não é da versão %s" % target)
+        swap(new, mod_dir)
+        return True
+    except (OSError, ValueError, tarfile.TarError) as exc:
+        log.warning("update: %s; ficando na versão atual", exc)
+        return False
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def restart_bridge(python_bin: str) -> None:
-    """Sobe o start.py --restart destacado e devolve o controle.
+    """Sobe `ctl.py restart` destacado e devolve o controle.
 
-    Quem mata a ponte é ele, pelo pidfile — que é o nosso próprio pid. Por isso
-    o processo precisa estar destacado: se fosse filho comum, morreria junto com
-    quem o gerou. É o mesmo caminho da ação `restart-bridge`, e não um segundo
-    jeito de reiniciar.
+    O restart mata o terminal da Ponte, que é quem chama aqui; por isso o
+    processo precisa estar em outra sessão, ou morreria junto.
     """
-    kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
-              "stdin": subprocess.DEVNULL, "cwd": DIR}
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x00000008 | 0x08000000   # DETACHED | NO_WINDOW
-    else:
-        kwargs["start_new_session"] = True
-    subprocess.Popen([python_bin, os.path.join(DIR, "start.py"), "--restart"], **kwargs)
+    subprocess.Popen([python_bin, os.path.join(DIR, "ctl.py"), "restart"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     stdin=subprocess.DEVNULL, cwd=DIR, start_new_session=True)
 
 
-def check(herdr_bin: str, force: bool = False) -> dict:
-    """Uma rodada completa. Devolve o estado, para log e para a tela.
-
-    `force` ignora só o switch de automáticas — é o gesto do "Verificar agora"
-    do painel, e da tecla `u` da administração. Não ignora a guarda de checkout
-    local: ali reinstalar destruiria o ambiente de trabalho de qualquer forma.
-    """
+def check(mod_dir: str = DIR, fetch_fn=fetch) -> dict:
+    """Uma rodada completa. Devolve o estado, para log e para a tela."""
     st = load_state()
     cur = installed_version()
     pub = published_version()
@@ -208,45 +208,17 @@ def check(herdr_bin: str, force: bool = False) -> dict:
         st["checked"] = int(time.time())
     st["installed"] = cur
 
-    src = plugin_source(herdr_bin)
-    go, why = should_update(cur, pub, src.get("kind", ""), st.get("tried", ""))
-    if go and not (force or auto_enabled()):
+    go, why = should_update(cur, pub)
+    if go and is_dev(mod_dir):
+        go, why = False, "dev"
+    elif go and not auto_enabled():
         go, why = False, "off"
+
+    if go:
+        log.info("update: %s → %s, trocando a pasta do mod", cur, pub)
+        why = "installed" if install(pub, mod_dir, fetch_fn) else "failed"
+    elif why not in ("same", "unknown"):
+        log.info("update: instalada %s, publicada %s — %s", cur, pub, why)
     st["state"] = why
     save_state(st)
-
-    if not go:
-        if why not in ("same", "unknown"):
-            log.info("update: instalada %s, publicada %s — %s", cur, pub, why)
-        return st
-
-    log.info("update: %s → %s, reinstalando", cur, pub)
-    st["tried"] = pub
-    st["tried_at"] = int(time.time())
-    save_state(st)          # antes do install: uma queda no meio não pode
-                            # apagar o registro da tentativa
-    if not install(pub, src.get("repo", ""), herdr_bin):
-        log.warning("update: o install falhou; ficando na %s", cur)
-        st["state"] = "failed"
-        save_state(st)
-        return st
-    st["state"] = "installed"
-    save_state(st)
     return st
-
-
-def _run(args: list, timeout: float) -> "str | None":
-    """Roda um comando e devolve o stdout; None em qualquer falha."""
-    kwargs = {"capture_output": True, "text": True, "timeout": timeout}
-    if os.name == "nt":
-        kwargs["creationflags"] = 0x08000000    # CREATE_NO_WINDOW
-    try:
-        r = subprocess.run(args, **kwargs)
-    except (OSError, subprocess.SubprocessError) as exc:
-        log.warning("%s: %s", args[1] if len(args) > 1 else args[0], exc)
-        return None
-    if r.returncode != 0:
-        log.warning("%s saiu %d: %s", " ".join(args[1:3]), r.returncode,
-                    (r.stderr or "").strip()[:200])
-        return None
-    return r.stdout

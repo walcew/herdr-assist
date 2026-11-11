@@ -101,10 +101,6 @@ WIRE_MAX_B = 20000
 HC_KEYS = {"Escape": "esc", "C-c": "ctrl+c", "BSpace": "backspace"}
 CTL_SETTLE_S = 0.4       # tempo para a TUI reflowar antes da primeira leitura
 
-# CLI do Herdr TUI: só o update.check ainda a usa (sai junto com o update do mod).
-HERDR_BIN = (os.environ.get("HERDR_BIN") or shutil.which("herdr")
-             or "/opt/homebrew/bin/herdr")
-
 # Eventos do core que podem mudar a lista de agentes; os demais (size, turn,
 # title, keep) não mexem em nada que o painel recebe. O `doc` é tratado à parte.
 REFRESH_EVENTS = {"created", "lost", "restarted", "finished", "removed",
@@ -119,7 +115,7 @@ AGENT_NAMES = {"claude-code": "claude"}
 LIMITS_POLL_S = 60.0     # cadência da coleta com painel conectado
 LIMITS_STEP_S = 5.0      # passo do laço: painel que conecta espera pouco
 
-# Atualização da ponte (ver update.py). O passo curto relê o manifesto local,
+# Atualização do mod (ver update.py). O passo curto relê o VERSION local,
 # que é um open + regex; o longo é o que sai na rede atrás do release. Mesma
 # divisão do limits_loop, e pelo mesmo motivo: um evento barato não precisa
 # esperar a cadência do caro.
@@ -1277,12 +1273,11 @@ async def update_loop() -> None:
     novo (update.check). A releitura do manifesto local é de minuto em minuto e
     responde a uma pergunta diferente: o código em disco ainda é o que este
     processo está rodando? Quando deixa de ser, reiniciar é a única saída —
-    trocar os arquivos nunca trocou o processo, porque a ponte sobe destacada
-    e o start.py sai cedo se a porta já responde.
+    trocar os arquivos nunca trocou o processo em execução.
 
-    Isso cobre também o `herdr plugin install` feito na mão, que é o passo cujo
-    par (`restart-bridge`) todo mundo esquece: em até um minuto a ponte percebe
-    sozinha e sobe de novo, sem depender de ninguém lembrar.
+    Isso cobre também a cópia manual da pasta do mod, cujo par (reiniciar a
+    Ponte) todo mundo esquece: em até um minuto a ponte percebe sozinha e sobe
+    de novo, via `ctl.py restart`.
     """
     await asyncio.sleep(UPDATE_DELAY_S)
     loop = asyncio.get_running_loop()
@@ -1291,7 +1286,7 @@ async def update_loop() -> None:
     while True:
         if last is None or time.monotonic() - last >= UPDATE_POLL_S:
             last = time.monotonic()
-            await loop.run_in_executor(None, update.check, HERDR_BIN)
+            await loop.run_in_executor(None, update.check)
         disco = update.installed_version()
         if disco and BOOT_VERSION and disco != BOOT_VERSION and tries <= UPDATE_TRIES:
             tries += 1
