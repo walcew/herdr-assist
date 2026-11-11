@@ -280,7 +280,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
         s, rf = self.connect_ready()
         out = self.command(s, rf, {"type": "read_pane", "pane_id": "t1a", "lines": 40})
         self.assertEqual(out, [{"type": "pane_content", "pane_id": "t1a",
-                                "content": "linha 1\nlinha 2 ação"}])
+                                "content": b.NEUTRAL_SGR + "linha 1\nlinha 2 ação"}])
         self.assertEqual(self.calls("terminal.read"), [{"terminal": "t1a", "lines": 40}])
 
     def test_read_pane_corta_por_linhas(self):
@@ -288,7 +288,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
         s, rf = self.connect_ready()
         out = self.command(s, rf, {"type": "read_pane", "pane_id": "t1a", "lines": 3,
                                    "cols": 50, "rows": 20})
-        self.assertEqual(out[0]["content"], "l7\nl8\nl9")
+        self.assertEqual(out[0]["content"], b.NEUTRAL_SGR + "l7\nl8\nl9")
 
     def test_read_pane_respeita_o_limite_de_payload(self):
         # aspas dobram no JSON: 12000 bytes de conteúdo viram mais que WIRE_MAX_B
@@ -300,7 +300,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
             raw = rf.readline()
         self.assertLessEqual(len(raw.rstrip("\n").encode()), b.WIRE_MAX_B)
         content = json.loads(raw)["content"]
-        self.assertTrue(content.startswith("0") and content.splitlines()[-1].startswith("39"))
+        self.assertTrue(content.startswith(b.NEUTRAL_SGR + "0") and content.splitlines()[-1].startswith("39"))
         self.assertLess(len(content.splitlines()), 40)   # as mais antigas caíram
 
     def test_send_text_digita_no_pane_travado_sem_enter(self):
@@ -392,7 +392,7 @@ class TestBridgeOverFakeHc(BridgeHarness):
         self.set_screen("tela")
         s, rf = self.connect_ready()
         out = self.read_locked(s, rf)
-        self.assertEqual(out[0]["content"], "tela")
+        self.assertEqual(out[0]["content"], b.NEUTRAL_SGR + "tela")
         self.assertEqual(self.calls("terminal.attach"),
                          [{"terminal": "t1a", "cols": 50, "rows": 20}])
         # a ponte descarta o stream, mas devolve o crédito da repintura

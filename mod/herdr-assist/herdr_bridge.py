@@ -954,6 +954,14 @@ async def hc_call(method: str, params: dict):
     return await rpc_conn.request(method, params) if rpc_conn else None
 
 
+# O core só entrega texto puro, e o firmware pinta texto sem SGR com a cor
+# padrão dele (verde). Branco (37) deixa a tela neutra; o estado SGR persiste
+# entre linhas no term_parse, então um prefixo basta.
+# shortcut: monocromático até o herdr-core oferecer terminal.read com estilo;
+# aí a Ponte repassa o SGR do core e este prefixo sai.
+NEUTRAL_SGR = "\x1b[37m"
+
+
 def trim_text(raw: str, keep: int) -> str:
     """Últimas `keep` linhas do texto, dentro de CONTENT_MAX_B.
 
@@ -1378,7 +1386,7 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
             # ensure_ascii=False: box-drawing cru pesa ~1.2x no JSON (a forma
             # \uXXXX passa de 1.4x e estouraria o RX do firmware à toa)
             return json.dumps({"type": "pane_content", "pane_id": pane_id,
-                               "content": c}, separators=(",", ":"),
+                               "content": NEUTRAL_SGR + c}, separators=(",", ":"),
                               ensure_ascii=False).encode()
 
         payload = encode_payload(content)
