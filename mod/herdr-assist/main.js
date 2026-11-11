@@ -1,13 +1,15 @@
-// Mod de controle do herdr-assist: status da Ponte, Reiniciar e aviso de
-// porta ocupada. Abre como dialog pelo `mod.open herdr-assist` (a tecla do
-// keys.json chama o mesmo comando): com "place": "none" não existe cópia
-// visível para receber um `<mod>.<command>`, então o mod.json descreve o
-// overlay e cada abertura é uma cópia nova.
+// Mod de controle do herdr-assist, em duas formas:
+// - indicador: a cópia que o mod.json encaixa no layout ("place") na 1ª vez
+//   que o Herdr vê a pasta. Vive enquanto o layout mostra o bloco, então é ela
+//   quem garante a Ponte ao abrir o app; o clique abre o dialog.
+// - dialog: `mod.open herdr-assist` (a tecla do keys.json chama o mesmo
+//   comando) abre o overlay que o mod.json descreve, uma cópia nova a cada vez,
+//   com status, Reiniciar e o aviso de porta ocupada.
 // O JS só desenha; as operações são o ctl.py desta pasta, por exec.
 
 import { View, div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { exec, appHome, theme, props } from "herdr";
+import { exec, appHome, theme, props, run } from "herdr";
 
 // chave: [en, pt]
 const STRINGS = {
@@ -38,13 +40,13 @@ export default class HerdrAssist extends View {
     this.busy = false;
     this.askPid = null;
     this.error = "";
-    const dialog = !!props()?.overlay;
-    // Toda cópia garante a Ponte; só o dialog consulta status, e só enquanto aberto.
+    // Toda cópia garante a Ponte. O indicador segue com o timer mesmo oculto,
+    // então consulta devagar; o dialog só vive enquanto está aberto.
     cx.spawn(async (cx) => {
       await this.ctl("ensure");
-      if (dialog) await this.refresh(cx);
+      await this.refresh(cx);
     });
-    if (dialog) cx.timer.every(3000, (cx) => cx.spawn(async (cx) => this.refresh(cx)));
+    cx.timer.every(props()?.overlay ? 3000 : 10000, (cx) => cx.spawn(async (cx) => this.refresh(cx)));
   }
 
   async ctl(...args) {
@@ -82,10 +84,21 @@ export default class HerdrAssist extends View {
     return s.replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
   }
 
+  // Chip: ponto (viva, parada, porta ocupada por outra), nome e nº de painéis.
+  indicator(th, st) {
+    const color = !st ? th.unknown : st.holder && !st.holder.is_bridge ? th.blocked : st.alive ? th.done : th.idle;
+    return h_flex().id("herdr-assist").size_full().bg(th.chrome).text_size(12).child(
+      h_flex().id("chip").h_full().px(10).gap(6).items_center().cursor_pointer()
+        .hover((s) => s.bg(th.hover)).on_click(() => run("mod.open", { name: "herdr-assist" }))
+        .child(div().size(8).rounded(4).bg(color))
+        .child(div().text_color(th.foreground).child("herdr-assist"))
+        .child(div().text_color(th.dim).child(st ? "· " + st.panels.length : "")));
+  }
+
   render(cx) {
-    if (!props()?.overlay) return div(); // cópia posta num layout: só mantém a Ponte
     const th = theme();
     const st = this.st;
+    if (!props()?.overlay) return this.indicator(th, st);
     const button = (id, label, primary, onClick) =>
       h_flex().id(id).h(30).px(12).items_center().rounded(8).border_1()
         .border_color(primary ? th.solid : th.input).bg(primary ? th.solid : th.raised)
