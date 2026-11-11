@@ -2,28 +2,24 @@
 # /// script
 # requires-python = ">=3.9"
 # ///
-"""Ponte entre o socket do Herdr e o painel herdr-assist na LAN.
+"""Ponte entre o herdr-core (Herdr desktop) e o painel herdr-assist na LAN.
 
-O Herdr expõe sua API num unix socket, que um dispositivo na rede não alcança.
-Esta ponte traduz: fala o protocolo nativo do Herdr (JSON por linha) e serve o
-mesmo conteúdo por TCP. Os eventos do Herdr disparam o envio na hora, mas não
-bastam: o agent_status é derivado por regra sobre o conteúdo do terminal e o
-Herdr 0.8.0 não emite pane.agent_status_changed nessas transições (verificado
-ao vivo). Quem garante o teto de latência é a reconciliação por timeout — um
-pane.list local por segundo enquanto houver painel conectado, com broadcast
-só quando o estado de fato mudou.
+O core expõe sua API pelo `hc connect` (JSON-RPC 2.0, uma mensagem por linha
+em stdin/stdout), que um dispositivo na rede não alcança. Esta ponte traduz:
+assina os eventos do core (events.subscribe) e serve o mesmo conteúdo por TCP.
+Cada mudança de terminal dispara o envio na hora; não há polling.
 
 Sem dependências externas: só a stdlib, compatível com o python3 de fábrica do
-macOS (3.9). Roda como plugin do Herdr (ver start.py), que fornece as variáveis
-HERDR_SOCKET_PATH e HERDR_PLUGIN_CONFIG_DIR; para rodar avulsa:
+macOS (3.9). Para rodar avulsa:
 
     BRIDGE_TOKEN=... python3 mod/herdr-assist/herdr_bridge.py
 
 Toda conexão exige um handshake `{"type":"hello","token":"..."}` na primeira
 linha — sem token não roda: se nenhum existir, um é gerado e salvo (0600).
 
-Variáveis: HERDR_SOCK, BRIDGE_PORT (9375), BRIDGE_BIND (0.0.0.0), BRIDGE_TOKEN,
-BRIDGE_MACHINES (máquinas SSH salvas a incluir: vazio, "all" ou lista).
+Variáveis: HC_BIN (hc), HERDR_APP_BIN (herdr-app), BRIDGE_PORT (9375),
+BRIDGE_BIND (0.0.0.0), BRIDGE_TOKEN, BRIDGE_MACHINES (máquinas SSH salvas do
+Herdr TUI a incluir: vazio, "all" ou lista).
 """
 from __future__ import annotations
 
@@ -53,9 +49,12 @@ import update
 from accounts import read_account_email, default_dir, CONFIG_VAR  # noqa: E402
 from proc_env import read_process_env  # noqa: E402
 
-SOCK = (os.environ.get("HERDR_SOCK")
-        or os.environ.get("HERDR_SOCKET_PATH")  # fornecida pelo plugin do Herdr
-        or os.path.expanduser("~/.config/herdr/herdr.sock"))
+# Binários do Herdr desktop: a variável vence (é o que injeta o hc falso nos
+# testes), senão o PATH, senão onde o instalador os põe.
+HC_BIN = (os.environ.get("HC_BIN") or shutil.which("hc")
+          or os.path.expanduser("~/.local/bin/hc"))
+HERDR_APP_BIN = (os.environ.get("HERDR_APP_BIN") or shutil.which("herdr-app")
+                 or os.path.expanduser("~/.local/bin/herdr-app"))
 PORT = int(os.environ.get("BRIDGE_PORT", "9375"))
 BIND = os.environ.get("BRIDGE_BIND", "0.0.0.0")
 CONFIG_DIR = os.environ.get("HERDR_PLUGIN_CONFIG_DIR",
@@ -94,28 +93,16 @@ SAFE_KEYS = {"y", "n", "a", "Enter", "Tab", "Escape", "C-c", "Up", "Down",
              "Left", "Right", "BSpace"} | {str(n) for n in range(10)}
 MAX_TEXT = 1000
 
-# pane_content vai com SGR (cores) e sem filtro de conteúdo; os caps casam com
-# os buffers do firmware (HERDR_CONTENT_LEN 12288, RX_BUF_LEN 24576) e cortam
-# linhas inteiras — nunca no meio de um escape.
-PANE_LINES = 40
-CONTENT_MAX_B = 12000
-WIRE_MAX_B = 20000
-SGR_RE = re.compile(r"\x1b\[[0-9;:]*m")
-
-# Enquanto a sessão está aberta no painel, o pane é travado na resolução da tela
-# do dispositivo (ver ctl_acquire). A API JSON do Herdr não tem tamanho de
-# terminal — pane.resize é proporção de split —, então quem faz isso é a CLI.
+# CLI do Herdr TUI: só o que ainda não migrou (máquinas SSH, update.check).
 HERDR_BIN = (os.environ.get("HERDR_BIN") or shutil.which("herdr")
              or "/opt/homebrew/bin/herdr")
-CTL_SETTLE_S = 0.4       # tempo para a TUI reflowar antes da primeira leitura
 
-# Eventos sem pane_id na assinatura; sinalizam mudança na composição dos panes.
-GENERIC_EVENTS = ("pane.updated", "pane.created", "pane.closed",
-                  "pane.agent_detected", "pane.focused", "pane.exited")
-DEBOUNCE_S = 0.25        # silêncio que fecha uma rajada de eventos
-BURST_CAP_S = 0.5        # rajada contínua não adia o envio além disto
-RECONCILE_BUSY_S = 1.0   # painel conectado: teto de latência do status
-RECONCILE_IDLE_S = 5.0   # sem painel: só manter o cache morno
+# Eventos do core que podem mudar a lista de agentes; os demais (size, turn,
+# title, doc, keep) não mexem em nada que o painel recebe.
+REFRESH_EVENTS = {"created", "lost", "restarted", "finished", "removed",
+                  "status", "labels", "foreground"}
+# Nome do app no status do core -> nome que o firmware conhece ("CC"/"CX").
+AGENT_NAMES = {"claude-code": "claude"}
 
 # Uso de limites dos provedores de IA. As credenciais são as que os próprios
 # CLIs mantêm renovadas no disco — nada se configura aqui, e nenhum token sai
@@ -145,6 +132,7 @@ def _cred_path(agent: str, config_dir: str) -> str:
 
 clients: set[asyncio.StreamWriter] = set()
 known_panes: set[str] = set()
+terminals: dict = {}     # endereço (t1m) -> Terminal do core, como veio dele
 # Nem o Herdr nem sua API guardam quando o status mudou, então o instante em que
 # um agente entra em "working" é carimbado aqui — é o que o painel usa para
 # cronometrar. Vai como epoch absoluto (ver push_agents).
@@ -156,10 +144,6 @@ last_limits_snapshot = ""  # último {"type":"limits"} serializado que foi ao ar
 # um stale_since que andasse a cada falha quebraria o dedup do snapshot.
 limits_last_good: dict[tuple[str, str], dict] = {}
 limits_ok: dict[tuple[str, str], bool] = {}  # só para logar transições, não cada ciclo
-# Controller de resolução: no máximo um pane travado por vez (o painel só abre
-# uma sessão de cada vez). proc é o `herdr terminal session control` vivo.
-ctl: dict = {"pane": None, "size": None, "proc": None}
-_req_id = 0
 
 # Descoberta de contas por pane (ver accounts.py): qual config-dir cada pane
 # usa e o conjunto de contas em uso, para taguear agents[] e alimentar a
@@ -199,15 +183,6 @@ cost_cache: dict = {}        # path -> (mtime, size, {"total","days"})
 last_cost_snapshot = ""      # dedup do payload cost
 
 
-async def pane_pid(pane_id: str):
-    """Pid do processo em primeiro plano do pane, via `pane.process_info`."""
-    info = await herdr_request("pane.process_info", {"pane_id": pane_id})
-    if not info:
-        return None
-    procs = (info.get("process_info") or {}).get("foreground_processes") or []
-    return procs[0].get("pid") if procs else None
-
-
 def _read_env_filtered(pid):
     """Ambiente do processo `pid`, já filtrado só às chaves de CONFIG_VAR.
 
@@ -232,29 +207,19 @@ def _cached_env(pid):
 async def refresh_accounts(panes) -> None:
     """Recalcula pane_account/account_dirs/acc_email_cache.
 
-    Chamada só quando a composição de panes (pane_id, agent) muda (ver
-    push_agents) — não a cada ciclo de reconciliação de 1s. Todo I/O
-    bloqueante (leitura de ambiente por pid) roda num executor: o event loop
-    não pode travar enquanto ctypes/`/proc`/`ps` respondem.
+    Chamada só quando a composição de panes (pane_id, agent, pid) muda (ver
+    push_agents), não a cada evento. O pid vem do foreground do terminal no
+    core, já presente no snapshot. Todo I/O bloqueante (leitura de ambiente
+    por pid) roda num executor: o event loop não pode travar enquanto
+    ctypes/`/proc`/`ps` respondem.
     """
     global pane_account, account_dirs, acc_email_cache
 
-    live_keys = {(p["pane_id"], p.get("agent")) for p in panes}
-    for k in list(pane_pid_cache):   # poda pid cache de panes/agentes que sumiram
-        if k not in live_keys:
-            pane_pid_cache.pop(k, None)
-
-    # resolve os pids que faltam, concorrente (cada um já é I/O não-bloqueante
-    # via cli_run/subprocess assíncrono, então gather em vez de await sequencial)
     targets = [p for p in panes if p.get("agent") in CONFIG_VAR]
-    to_resolve = [p for p in targets
-                 if (p["pane_id"], p.get("agent")) not in pane_pid_cache]
-    if to_resolve:
-        resolved = await asyncio.gather(*(pane_pid(p["pane_id"]) for p in to_resolve))
-        for p, pid in zip(to_resolve, resolved):
-            pane_pid_cache[(p["pane_id"], p.get("agent"))] = pid
-    pids = {p["pane_id"]: pane_pid_cache.get((p["pane_id"], p.get("agent")))
-           for p in targets}
+    pane_pid_cache.clear()
+    pane_pid_cache.update({(p["pane_id"], p.get("agent")): p.get("pid")
+                           for p in targets})
+    pids = {p["pane_id"]: p.get("pid") for p in targets}
 
     # leitura de ambiente é bloqueante — todas de uma vez, fora do event loop
     new_pids = {pid for pid in pids.values() if pid and pid not in pid_env_cache}
@@ -303,13 +268,6 @@ def load_token() -> str:
     return tok
 
 
-# No Windows o socket do Herdr é um named pipe cujo NOME é o caminho inteiro
-# (\\.\pipe\C:\Users\...\herdr.sock): open() normaliza o caminho e tropeça no
-# "C:" do meio, CreateFileW devolve erro 123, e o CPython nem expõe AF_UNIX ali.
-# A CLI devolve o mesmo JSON, é o caminho que a documentação do Herdr indica
-# para automação, e custa ~19ms por chamada — barato o bastante para o ritmo
-# desta ponte. Só o transporte muda: o protocolo com o painel é idêntico.
-USE_CLI = os.name == "nt" or not hasattr(socket, "AF_UNIX")
 # Sem isto cada chamada pisca um console: a ponte roda destacada, sem console
 # próprio, e um flash por segundo seria insuportável.
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -342,87 +300,6 @@ async def cli_run(args: list[str], timeout: float = 10) -> str | None:
     return out.decode("utf-8", "replace")
 
 
-async def cli_request(method: str, params: dict) -> dict | None:
-    """Traduz um método da API para a CLI, devolvendo a MESMA forma de result.
-
-    Quem chama não sabe qual transporte está em uso — é isso que mantém o resto
-    da ponte com um caminho só.
-    """
-    pane = params.get("pane_id", "")
-    if method == "pane.list":
-        out = await cli_run(["pane", "list"])
-        if not out:
-            return None
-        try:
-            return json.loads(out).get("result")
-        except (ValueError, AttributeError):
-            return None
-    if method == "pane.read":
-        # a CLI devolve o ANSI cru no stdout, não JSON
-        args = ["pane", "read", pane,
-                "--source", params.get("source", "visible"),
-                "--format", params.get("format", "ansi")]
-        if params.get("lines"):
-            args += ["--lines", str(params["lines"])]
-        out = await cli_run(args)
-        return None if out is None else {"read": {"text": out}}
-    if method == "pane.send_keys":
-        keys = params.get("keys", [])
-        out = await cli_run(["pane", "send-keys", pane, *keys])
-        return None if out is None else {}
-    if method == "pane.send_text":
-        out = await cli_run(["pane", "send-text", pane, params.get("text", "")])
-        return None if out is None else {}
-    if method == "pane.focus":
-        # a CLI separa: `pane focus` é por direção; focar por id é `agent focus`
-        out = await cli_run(["agent", "focus", pane])
-        return None if out is None else {}
-    if method == "pane.process_info":
-        out = await cli_run(["pane", "process-info", "--pane", pane])
-        if not out:
-            return None
-        try:
-            return json.loads(out).get("result")
-        except (ValueError, AttributeError):
-            return None
-    log.warning("metodo sem equivalente na CLI: %s", method)
-    return None
-
-
-async def herdr_request(method: str, params: dict | None = None) -> dict | None:
-    """Um request ao Herdr, pelo transporte que a plataforma permite."""
-    if USE_CLI:
-        return await cli_request(method, params or {})
-    return await sock_request(method, params)
-
-
-async def sock_request(method: str, params: dict | None = None) -> dict | None:
-    """Um request ao Herdr. O socket atende um por conexão, então abre e fecha."""
-    global _req_id
-    _req_id += 1
-    try:
-        reader, writer = await asyncio.open_unix_connection(SOCK)
-    except (FileNotFoundError, ConnectionRefusedError):
-        log.warning("Herdr não está rodando (%s)", SOCK)
-        return None
-    try:
-        writer.write((json.dumps({"id": f"b{_req_id}", "method": method,
-                                  "params": params or {}}) + "\n").encode())
-        await writer.drain()
-        line = await asyncio.wait_for(reader.readline(), timeout=10)
-    except (asyncio.TimeoutError, ConnectionResetError, BrokenPipeError):
-        return None
-    finally:
-        writer.close()
-    if not line:
-        return None
-    resp = json.loads(line)
-    if "error" in resp:
-        log.warning("herdr %s: %s", method, resp["error"].get("message"))
-        return None
-    return resp.get("result")
-
-
 def clip(text: str, limit: int) -> str:
     """Corta em `limit` bytes sem partir caractere UTF-8.
 
@@ -446,116 +323,12 @@ async def broadcast_line(line: str) -> None:
             clients.discard(w)
 
 
-async def read_pane_ansi(pane_id: str, lines: int = PANE_LINES) -> str:
-    """Tela fiel, com SGR (cores/estilos), para o pane_content do painel.
-
-    O emulador interno do Herdr é o motor do Ghostty; format:"ansi" re-emite o
-    grid já emulado com os estilos por célula — é a única leitura que a ponte
-    faz, porque o painel mostra a sessão como ela é em vez de interpretá-la.
-
-    source "visible" (e não "recent") porque é o viewport: é ele que a rolagem
-    move, seja o app rolando o próprio conteúdo ou o Herdr rolando o scrollback.
-    Com "recent" o painel ficaria preso no fim, sem enxergar o que o usuário
-    rolou. Nesse modo o Herdr ignora `lines` — quem manda é o tamanho do pane.
-    """
-    result = await herdr_request("pane.read", {"pane_id": pane_id, "lines": lines,
-                                               "source": "visible", "format": "ansi",
-                                               "strip_ansi": False})
-    if not result:
-        return ""
-    return result.get("read", {}).get("text", "")
-
-
-async def ctl_release() -> None:
-    """Solta a trava de resolução: o pane volta ao tamanho da UI do Herdr."""
-    proc = ctl["proc"]
-    pane = ctl["pane"]
-    ctl.update(pane=None, size=None, proc=None)
-    if not proc or proc.returncode is not None:
-        return
-    try:
-        proc.stdin.write(b'{"type":"terminal.release"}\n')
-        await proc.stdin.drain()
-        await asyncio.wait_for(proc.wait(), 2)
-    except (OSError, asyncio.TimeoutError):
-        with contextlib.suppress(ProcessLookupError):
-            proc.kill()
-    log.info("pane %s solto", pane)
-
-
-async def ctl_acquire(pane_id: str, cols: int, rows: int) -> bool:
-    """Trava o pane em cols x rows. True se o controller acabou de subir.
-
-    O Herdr redimensiona o pty de verdade (TIOCSWINSZ) e trava o tamanho
-    enquanto este cliente viver, devolvendo tudo quando ele cai. O stdin em pipe
-    é o cinto de segurança: se esta ponte morrer de qualquer jeito, o filho vê
-    EOF, manda `Detach` sozinho e a sessão volta ao normal.
-    """
-    if (ctl["pane"] == pane_id and ctl["size"] == (cols, rows)
-            and ctl["proc"] and ctl["proc"].returncode is None):
-        return False
-    await ctl_release()
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            HERDR_BIN, "terminal", "session", "control", pane_id,
-            "--cols", str(cols), "--rows", str(rows),
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.DEVNULL,   # os frames do controller não servem aqui
-            stderr=asyncio.subprocess.DEVNULL)
-    except OSError as err:
-        log.warning("resolução não travada em %s: %s", pane_id, err)
-        return False
-    ctl.update(pane=pane_id, size=(cols, rows), proc=proc)
-    log.info("pane %s travado em %dx%d", pane_id, cols, rows)
-    return True
-
-
-async def ctl_scroll(pane_id: str, up: bool, lines: int, col: int, row: int) -> bool:
-    """Rolagem nativa: manda uma roda de mouse ao pane travado.
-
-    Quem decide o destino é o Herdr (server/headless.rs): app com mouse
-    tracking (é o caso do Claude Code) recebe o evento e rola o próprio
-    conteúdo; senão o scrollback do emulador é que anda. A posição não é
-    detalhe: com o ponteiro fora da área de transcript o Claude Code ignora a
-    roda (medido), por isso vem a célula sob o dedo, não o centro da tela.
-    """
-    proc = ctl["proc"]
-    if ctl["pane"] != pane_id or not proc or proc.returncode is not None:
-        return False
-    cols, rows = ctl["size"]
-    cmd = {"type": "terminal.scroll", "direction": "up" if up else "down",
-           "lines": lines, "source": "wheel",
-           "column": max(0, min(col, cols - 1)), "row": max(0, min(row, rows - 1))}
-    try:
-        proc.stdin.write((json.dumps(cmd) + "\n").encode())
-        await proc.stdin.drain()
-    except OSError:
-        return False
-    return True
-
-
-def trim_ansi(raw: str, keep: int) -> str:
-    """Últimas `keep` linhas da tela autêntica, dentro de CONTENT_MAX_B.
-
-    Sem CHROME_RE aqui: spinners e réguas agora renderizam direito no painel.
-    Só as linhas em branco do fim caem; estourando o cap, caem linhas inteiras
-    mais antigas (nunca um corte no meio de escape/UTF-8).
-    """
-    lines = raw.splitlines()
-    while lines and not SGR_RE.sub("", lines[-1]).strip():
-        lines.pop()
-    lines = lines[-keep:]
-    while len(lines) > 1 and len("\n".join(lines).encode()) > CONTENT_MAX_B:
-        lines.pop(0)
-    return "\n".join(lines)
-
-
 def _session_from_pid(p: dict, acc: tuple):
     """sessionId do registro <config-dir>/sessions/<pid>.json do Claude Code.
 
     O CC escreve esse arquivo ao subir (pid, sessionId, cwd...) e o remove ao
     sair — pid→sessão determinístico, imune ao desempate por mtime. O pid vem
-    do process_info do pane (pane_pid_cache): se o registro existe para ele,
+    do foreground do terminal (pane_pid_cache): se o registro existe para ele,
     foi o claude vivo desse pane que o escreveu, então não precisa de
     validação extra. Falha de forma limpa quando o foreground do pane é um
     FILHO do claude (um tool em execução no instante da resolução do pid) —
@@ -738,30 +511,39 @@ async def machines_loop() -> None:
         await asyncio.sleep(REMOTE_POLL_S)
 
 
-async def push_agents() -> set[str] | None:
-    """Reconcilia com o Herdr; envia aos painéis só o que de fato mudou.
+def agent_panes() -> list:
+    """Os agentes do core no formato de pane que o resto da ponte já usa.
 
-    Retorna os pane_ids de TODOS os panes (com e sem agente) para o event_loop
-    saber quando reassinar, ou None se o Herdr não respondeu — que não é motivo
-    para reassinar.
+    Agente = terminal vivo que reporta status. Ficam de fora a própria ponte
+    (rótulo herdr-assist=bridge) e os terminais de outras máquinas
+    (`machine/t7`), que a v1 não espelha. Space e tab vêm do rótulo `where`
+    ("space / tab"), e o pid é o do processo em primeiro plano.
     """
+    panes = []
+    for addr, t in sorted(terminals.items()):
+        st = t.get("status") or {}
+        labels = t.get("labels") or {}
+        if (t.get("state") != "live" or not st or "/" in addr
+                or labels.get("herdr-assist") == "bridge"):
+            continue
+        space, _, tab = (labels.get("where") or "").partition(" / ")
+        fg = t.get("foreground") or {}
+        panes.append({"pane_id": addr,
+                      "agent": AGENT_NAMES.get(st.get("app"), st.get("app") or ""),
+                      "agent_status": st.get("state") or "unknown",
+                      "cwd": fg.get("cwd") or t.get("cwd") or "",
+                      "space": space, "tab": tab, "pid": fg.get("pid")})
+    return panes
+
+
+async def push_agents() -> None:
+    """Monta `agents` a partir do estado do core; envia só o que de fato mudou."""
     global last_snapshot, working_since, pane_paths
-    result = await herdr_request("pane.list")
-    if not result:
-        return None
-    panes = result.get("panes", [])
-    # nome amigável do agente = rótulo da aba no Herdr ("OMP", "agent-claude");
-    # o basename do cwd ("tmp", "luispoveda93") não diz nada a quem olha a tela
-    # a CLI não tem equivalente de tab.list: no Windows fica o basename
-    tabs_res = {} if USE_CLI else await herdr_request("tab.list") or {}
-    tab_label = {t.get("tab_id"): (t.get("label") or "")
-                 for t in tabs_res.get("tabs", [])}
-    # Composição de panes (todos, não só os com agente) chaveada por
-    # (pane_id, agent): é ela que decide troca de conta (login/logout, pane
-    # novo de outra conta, OU o mesmo pane trocando de agente — o pid do SO
-    # muda mesmo com o pane_id estável), então o refresh roda sobre `panes`
-    # inteiro, não sobre a lista já filtrada de agentes.
-    new_set = {(p["pane_id"], p.get("agent")) for p in panes}
+    panes = agent_panes()
+    # Composição chaveada por (pane_id, agent, pid): é ela que decide troca de
+    # conta (login/logout, terminal novo de outra conta, OU o mesmo terminal
+    # trocando de agente ou reiniciando o CLI, que muda o pid).
+    new_set = {(p["pane_id"], p.get("agent"), p.get("pid")) for p in panes}
     if new_set != _prev_agent_panes[0]:
         _prev_agent_panes[0] = new_set
         await refresh_accounts(panes)
@@ -783,16 +565,14 @@ async def push_agents() -> set[str] | None:
     to_meta: set = set()   # rollouts com header fora do cache (ler no executor)
     codex_cands: set = set()   # candidatos do ciclo, p/ poda do cache de headers
     for p in panes:
-        if not p.get("agent"):
-            continue
-        pid, status = p["pane_id"], p.get("agent_status", "unknown")
-        label = tab_label.get(p.get("tab_id"), "")
+        pid, status = p["pane_id"], p["agent_status"]
         a = {
             "pane_id": pid,
-            "agent": p.get("agent", ""),
+            "agent": p["agent"],
             "status": status,
-            "project": friendly_name(label, p.get("cwd", "")),
-            "workspace_id": p.get("workspace_id", ""),
+            # nome da tab, senão o da space (tab sem nome vem como número)
+            "project": friendly_name(p["tab"], p["space"]) or os.path.basename(p["cwd"]),
+            "workspace_id": p["space"],
         }
         acc = pane_account.get(pid)
         if acc:
@@ -880,104 +660,140 @@ async def push_agents() -> set[str] | None:
     if snapshot != last_snapshot:
         last_snapshot = snapshot
         await broadcast_line(snapshot)
-    return {p["pane_id"] for p in panes}
 
 
-async def poll_loop() -> None:
-    """Reconciliação pura, para quando o transporte é a CLI (ver USE_CLI).
+class Hc:
+    """Uma conexão `hc connect`: requests casados por id, notificações numa fila.
 
-    A CLI não assina eventos, então aqui não há o disparo imediato do
-    event_loop — só o piso de latência do `pane.list`. Na prática a diferença é
-    menor do que parece: o Herdr 0.8.0 já não emite evento nas transições de
-    agent_status (é derivado do conteúdo do terminal), então mesmo com socket
-    quem garante o teto é esta mesma reconciliação. O que se perde é a reação
-    instantânea a pane criado/fechado.
+    A fila recebe (method, params) de cada notificação e None quando o
+    processo cai, para quem a consome saber que precisa reconectar.
+    """
+
+    def __init__(self) -> None:
+        self.proc = None
+        self.alive = False
+        self.pending: dict = {}
+        self.notes: asyncio.Queue = asyncio.Queue()
+        self.next_id = 0
+
+    async def start(self) -> bool:
+        try:
+            # limit alto: o snapshot do events.subscribe vem numa linha só
+            self.proc = await asyncio.create_subprocess_exec(
+                HC_BIN, "connect", stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                limit=1 << 24, creationflags=NO_WINDOW)
+        except (OSError, ValueError) as exc:
+            log.warning("hc connect: %s", exc)
+            return False
+        self.alive = True
+        asyncio.create_task(self._read())
+        return True
+
+    async def _read(self) -> None:
+        while True:
+            try:
+                line = await self.proc.stdout.readline()
+            except (ValueError, ConnectionError):   # linha acima do limit
+                line = b""
+            if not line:
+                break
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if "id" in msg:
+                fut = self.pending.pop(msg["id"], None)
+                if fut and not fut.done():
+                    fut.set_result(msg)
+            elif "method" in msg:
+                self.notes.put_nowait((msg["method"], msg.get("params") or {}))
+        for fut in self.pending.values():
+            if not fut.done():
+                fut.set_result({})
+        self.alive = False
+        self.pending.clear()
+        self.notes.put_nowait(None)
+
+    async def request(self, method: str, params: dict | None = None,
+                      timeout: float = 10):
+        """Result do método, ou None em erro, timeout ou conexão caída."""
+        if not self.alive:
+            return None
+        self.next_id += 1
+        rid = self.next_id
+        fut = asyncio.get_running_loop().create_future()
+        self.pending[rid] = fut
+        try:
+            self.proc.stdin.write((json.dumps({"jsonrpc": "2.0", "id": rid,
+                                               "method": method,
+                                               "params": params or {}}) + "\n").encode())
+            await self.proc.stdin.drain()
+            resp = await asyncio.wait_for(fut, timeout)
+        except (OSError, asyncio.TimeoutError):
+            self.pending.pop(rid, None)
+            return None
+        if "error" in resp or "result" not in resp:
+            log.warning("hc %s: %s", method, (resp.get("error") or {}).get("message"))
+            return None
+        return resp.get("result")
+
+    async def close(self) -> None:
+        if self.proc and self.proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                self.proc.kill()
+            await self.proc.wait()
+
+
+async def hc_loop() -> None:
+    """Mantém `terminals` em dia com o core e os painéis com ele.
+
+    Duas conexões: depois do events.subscribe a conexão só carrega
+    notificações, então os requests vão por outra. Cada evento relevante relê
+    o terminal com terminal.get em vez de aplicar o `data` do evento: o estado
+    lido é sempre o atual, então ordem e eventos repetidos não importam. Um
+    `missed` (a ponte ficou para trás) refaz a lista inteira com
+    terminal.list. Se qualquer das conexões cair, reconecta.
     """
     while True:
-        await push_agents()
-        await asyncio.sleep(RECONCILE_BUSY_S if clients else RECONCILE_IDLE_S)
-
-
-async def event_loop() -> None:
-    """Mantém os painéis em dia combinando eventos e reconciliação.
-
-    Os eventos genéricos e o pane.agent_status_changed (assinado por pane, o
-    único jeito que a API aceita) disparam envio imediato; o timeout do
-    readline faz o resto — fecha rajadas (DEBOUNCE_S) e, no silêncio, vira a
-    reconciliação que garante o teto de latência do status. Quando o conjunto
-    de panes muda, a conexão é refeita para reassinar os novos.
-    """
-    while True:
-        try:
-            reader, writer = await asyncio.open_unix_connection(SOCK)
-        except (FileNotFoundError, ConnectionRefusedError):
-            log.warning("Herdr indisponível, tentando em 5s")
-            await asyncio.sleep(5)
-            continue
-
-        subscribed = await push_agents()   # estado inicial + panes a assinar
-        if subscribed is None:
-            writer.close()
-            await asyncio.sleep(2)
-            continue
-        subs = [{"type": t} for t in GENERIC_EVENTS]
-        subs += [{"type": "pane.agent_status_changed", "pane_id": pid}
-                 for pid in sorted(subscribed)]
-        writer.write((json.dumps({"id": "sub", "method": "events.subscribe",
-                                  "params": {"subscriptions": subs}}) + "\n").encode())
-        await writer.drain()
-        resubscribe = False
-        pending_since = None
-        got_response = False
-        try:
-            while True:
-                if pending_since:
-                    timeout = DEBOUNCE_S
-                else:
-                    timeout = RECONCILE_BUSY_S if clients else RECONCILE_IDLE_S
-                try:
-                    line = await asyncio.wait_for(reader.readline(), timeout)
-                except asyncio.TimeoutError:
-                    pending_since = None
-                    ids = await push_agents()
-                    if ids is not None and ids != subscribed:
-                        resubscribe = True
+        rpc, sub = Hc(), Hc()
+        if await rpc.start() and await sub.start():
+            snap = await sub.request("events.subscribe", {})
+            if snap is not None:
+                terminals.clear()
+                terminals.update({t["address"]: t for t in snap.get("terminals", [])})
+                log.info("hc: assinado, %d terminal(is)", len(terminals))
+                await push_agents()
+                while True:
+                    note = await sub.notes.get()
+                    if note is None:
                         break
-                    continue
-                if not line:
-                    break
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not got_response:   # 1ª linha é a resposta do subscribe
-                    got_response = True
-                    if "error" in msg:
-                        log.warning("subscribe recusado: %s",
-                                    msg["error"].get("message"))
+                    method, params = note
+                    addr = params.get("terminal") or ""
+                    if method == "missed":
+                        log.warning("hc: eventos perdidos, ressincronizando")
+                        res = await rpc.request("terminal.list", {})
+                        if res is None:
+                            break
+                        terminals.clear()
+                        terminals.update({t["address"]: t for t in res.get("terminals", [])})
+                    elif method == "event" and params.get("type") in REFRESH_EVENTS and addr:
+                        t = (await rpc.request("terminal.get", {"terminal": addr})
+                             if params.get("type") != "removed" else None)
+                        if not rpc.alive:
+                            break
+                        if t:
+                            terminals[addr] = t
+                        else:
+                            terminals.pop(addr, None)
                     else:
-                        log.info("assinado: %d genéricos + %d panes",
-                                 len(GENERIC_EVENTS), len(subscribed))
-                    continue
-                ev = msg.get("event", "")
-                now = time.monotonic()
-                if (ev == "pane_agent_status_changed" or
-                        (pending_since and now - pending_since > BURST_CAP_S)):
-                    pending_since = None
-                    ids = await push_agents()
-                    if ids is not None and ids != subscribed:
-                        resubscribe = True
-                        break
-                elif pending_since is None:
-                    pending_since = now
-        except (ConnectionResetError, BrokenPipeError):
-            pass
-        finally:
-            writer.close()
-        if resubscribe:
-            log.info("conjunto de panes mudou, reassinando")
-            continue
-        log.warning("conexão de eventos caiu, reassinando em 2s")
+                        continue    # heartbeat e eventos que não mudam agents
+                    await push_agents()
+        await rpc.close()
+        await sub.close()
+        log.warning("hc connect caiu, reconectando em 2s")
         await asyncio.sleep(2)
 
 
@@ -1269,9 +1085,6 @@ async def update_loop() -> None:
             else:
                 log.info("versão em disco mudou (%s → %s): reiniciando",
                          BOOT_VERSION, disco)
-                # Soltar antes de morrer: um pane travado na resolução do painel
-                # ficaria assim, com a ponte que o travou fora do ar.
-                await ctl_release()
                 update.restart_bridge(sys.executable)
         await asyncio.sleep(UPDATE_STEP_S)
 
@@ -1296,61 +1109,26 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
     if remote and kind not in ("focus", "send_keys"):
         return await deny("pane de outra máquina: só focus e send_keys")
 
-    if kind == "read_pane":
-        lines = max(1, min(int(msg.get("lines", PANE_LINES)), 60))
-        # O painel manda a geometria da própria tela: enquanto ele estiver lendo
-        # este pane, a sessão fica nesse tamanho e o conteúdo cabe sem arrastar.
-        cols, rows = int(msg.get("cols", 0)), int(msg.get("rows", 0))
-        if 4 <= cols <= 400 and 2 <= rows <= 200 and await ctl_acquire(pane_id, cols, rows):
-            await asyncio.sleep(CTL_SETTLE_S)
-        content = trim_ansi(await read_pane_ansi(pane_id, lines), lines)
-
-        def encode_payload(c: str) -> bytes:
-            # ensure_ascii=False: box-drawing cru pesa ~1.2x no JSON (a forma
-            # \uXXXX passa de 1.4x e estouraria o RX do firmware à toa)
-            return json.dumps({"type": "pane_content", "pane_id": pane_id,
-                               "content": c}, separators=(",", ":"),
-                              ensure_ascii=False).encode()
-
-        payload = encode_payload(content)
-        while len(payload) > WIRE_MAX_B and "\n" in content:
-            content = content.split("\n", 1)[1]   # densidade patológica: derruba as antigas
-            payload = encode_payload(content)
-        writer.write(payload + b"\n")
-        await writer.drain()
-
-    elif kind == "send_keys":
-        keys = msg.get("keys", [])
-        if not all(k in SAFE_KEYS for k in keys):
+    if kind in ("send_keys", "send_text"):
+        # validação antes de tudo: vale mesmo enquanto o envio não existe
+        keys, text = msg.get("keys", []), msg.get("text", "")
+        if kind == "send_keys" and not all(k in SAFE_KEYS for k in keys):
             return await deny("tecla fora da allowlist")
-        log.info("send_keys pane=%s keys=%s", pane_id, keys)
-        if remote:
-            await cli_run(["--machine", remote[0], "pane", "send-keys", remote[1], *keys])
-        else:
-            await herdr_request("pane.send_keys", {"pane_id": pane_id, "keys": keys})
-
-    elif kind == "send_text":
-        text = msg.get("text", "")
-        if not text or len(text) > MAX_TEXT:
+        if kind == "send_text" and (not text or len(text) > MAX_TEXT):
             return await deny("texto vazio ou longo demais")
-        log.info("send_text pane=%s len=%d", pane_id, len(text))
-        await herdr_request("pane.send_text", {"pane_id": pane_id, "text": text})
 
-    elif kind == "focus":
+    if remote and kind == "send_keys":
+        log.info("send_keys pane=%s keys=%s", pane_id, keys)
+        await cli_run(["--machine", remote[0], "pane", "send-keys", remote[1], *keys])
+
+    elif remote and kind == "focus":
         log.info("focus pane=%s", pane_id)
-        if remote:
-            await cli_run(["--machine", remote[0], "agent", "focus", remote[1]])
-        else:
-            await herdr_request("pane.focus", {"pane_id": pane_id})
+        await cli_run(["--machine", remote[0], "agent", "focus", remote[1]])
 
-    elif kind == "scroll_pane":
-        lines = max(1, min(int(msg.get("lines", 1)), 20))
-        await ctl_scroll(pane_id, msg.get("dir") != "down", lines,
-                         int(msg.get("col", 0)), int(msg.get("row", 0)))
-
-    elif kind == "release_pane":
-        if ctl["pane"] == pane_id:
-            await ctl_release()
+    elif kind in ("read_pane", "send_keys", "send_text", "focus",
+                  "scroll_pane", "release_pane"):
+        # shortcut: comandos de terminal ainda não portados para o hc (tickets #9 e #11)
+        return await deny("not supported yet")
 
     elif kind == "ping":
         # Com push, ficar em silêncio é normal — o painel usa isto para saber
@@ -1438,8 +1216,6 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
     finally:
         clients.discard(writer)
         writer.close()
-        if not clients:   # ninguém mais olhando: devolve a sessão ao tamanho normal
-            await ctl_release()
         log.info("painel desconectado: %s", peer)
 
 
@@ -1524,18 +1300,13 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
 
 async def main() -> None:
     global TOKEN, BOOT_VERSION
-    if USE_CLI:
-        if not HERDR_BIN or not shutil.which(HERDR_BIN) and not os.path.isfile(HERDR_BIN):
-            log.error("binário do herdr não encontrado (%s)", HERDR_BIN)
-            sys.exit(1)
-        log.info("falando com o Herdr pela CLI (%s)", HERDR_BIN)
-    elif not os.path.exists(SOCK):
-        log.error("socket do Herdr não encontrado: %s", SOCK)
+    if not shutil.which(HC_BIN):
+        log.error("binário do hc não encontrado (%s)", HC_BIN)
         sys.exit(1)
     TOKEN = load_token()
     BOOT_VERSION = update.installed_version()
     log.info("ponte versão %s", BOOT_VERSION or "?")
-    asyncio.create_task(poll_loop() if USE_CLI else event_loop())
+    asyncio.create_task(hc_loop())
     asyncio.create_task(limits_loop())
     asyncio.create_task(update_loop())
     if MACHINES:
