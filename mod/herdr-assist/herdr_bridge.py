@@ -92,6 +92,13 @@ log = logging.getLogger("bridge")
 SAFE_KEYS = {"y", "n", "a", "Enter", "Tab", "Escape", "C-c", "Up", "Down",
              "Left", "Right", "BSpace"} | {str(n) for n in range(10)}
 MAX_TEXT = 1000
+# Texto do pane: PANE_LINES por padrão; o corte (CONTENT_MAX_B) e o teto do
+# JSON no fio (WIRE_MAX_B) existem porque o RX do firmware é de tamanho fixo.
+PANE_LINES = 40
+CONTENT_MAX_B = 12000
+WIRE_MAX_B = 20000
+# Nome da tecla do painel -> nome do `hc keys`; as demais só mudam a caixa.
+HC_KEYS = {"Escape": "esc", "C-c": "ctrl+c", "BSpace": "backspace"}
 
 # CLI do Herdr TUI: só o que ainda não migrou (máquinas SSH, update.check).
 HERDR_BIN = (os.environ.get("HERDR_BIN") or shutil.which("herdr")
@@ -273,8 +280,8 @@ def load_token() -> str:
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
-async def cli_run(args: list[str], timeout: float = 10) -> str | None:
-    """Roda o herdr e devolve o stdout. None em qualquer falha.
+async def cli_run(args: list[str], timeout: float = 10, binary: str = "") -> str | None:
+    """Roda o herdr (ou `binary`) e devolve o stdout. None em qualquer falha.
 
     Decodifica aqui, em utf-8: deixar o Python decidir pelo locale (cp1252 no
     Windows) estoura na primeira caixa ou seta que a tela do terminal trouxer,
@@ -282,7 +289,7 @@ async def cli_run(args: list[str], timeout: float = 10) -> str | None:
     """
     try:
         proc = await asyncio.create_subprocess_exec(
-            HERDR_BIN, *args,
+            binary or HERDR_BIN, *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
             creationflags=NO_WINDOW)
@@ -747,6 +754,29 @@ class Hc:
             await self.proc.wait()
 
 
+rpc_conn = None   # conexão de requests do hc_loop; None enquanto desconectado
+
+
+async def hc_call(method: str, params: dict):
+    """Request ao core pela conexão do hc_loop; None em erro ou sem conexão."""
+    return await rpc_conn.request(method, params) if rpc_conn else None
+
+
+def trim_text(raw: str, keep: int) -> str:
+    """Últimas `keep` linhas do texto, dentro de CONTENT_MAX_B.
+
+    Só as linhas em branco do fim caem; estourando o cap, caem linhas inteiras
+    mais antigas (nunca um corte no meio de um caractere UTF-8).
+    """
+    lines = raw.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines = lines[-keep:]
+    while len(lines) > 1 and len("\n".join(lines).encode()) > CONTENT_MAX_B:
+        lines.pop(0)
+    return "\n".join(lines)
+
+
 async def hc_loop() -> None:
     """Mantém `terminals` em dia com o core e os painéis com ele.
 
@@ -760,6 +790,8 @@ async def hc_loop() -> None:
     while True:
         rpc, sub = Hc(), Hc()
         if await rpc.start() and await sub.start():
+            global rpc_conn
+            rpc_conn = rpc
             snap = await sub.request("events.subscribe", {})
             if snap is not None:
                 terminals.clear()
@@ -791,6 +823,7 @@ async def hc_loop() -> None:
                     else:
                         continue    # heartbeat e eventos que não mudam agents
                     await push_agents()
+        rpc_conn = None
         await rpc.close()
         await sub.close()
         log.warning("hc connect caiu, reconectando em 2s")
@@ -1125,9 +1158,50 @@ async def handle_command(msg: dict, writer: asyncio.StreamWriter) -> None:
         log.info("focus pane=%s", pane_id)
         await cli_run(["--machine", remote[0], "agent", "focus", remote[1]])
 
-    elif kind in ("read_pane", "send_keys", "send_text", "focus",
-                  "scroll_pane", "release_pane"):
-        # shortcut: comandos de terminal ainda não portados para o hc (tickets #9 e #11)
+    elif kind == "read_pane":
+        lines = max(1, min(int(msg.get("lines", PANE_LINES)), 60))
+        # cols/rows do painel e a trava de resolução ficam para o ticket #11
+        res = await hc_call("terminal.read", {"terminal": pane_id, "lines": lines})
+        if res is None:
+            return await deny("read failed")
+        content = trim_text(res.get("text", ""), lines)
+
+        def encode_payload(c: str) -> bytes:
+            # ensure_ascii=False: box-drawing cru pesa ~1.2x no JSON (a forma
+            # \uXXXX passa de 1.4x e estouraria o RX do firmware à toa)
+            return json.dumps({"type": "pane_content", "pane_id": pane_id,
+                               "content": c}, separators=(",", ":"),
+                              ensure_ascii=False).encode()
+
+        payload = encode_payload(content)
+        while len(payload) > WIRE_MAX_B and "\n" in content:
+            content = content.split("\n", 1)[1]   # densidade patológica: derruba as antigas
+            payload = encode_payload(content)
+        writer.write(payload + b"\n")
+        await writer.drain()
+
+    elif kind == "send_text":
+        log.info("send_text pane=%s (%d chars)", pane_id, len(text))
+        # force: o painel quer o texto já, inclusive num agente bloqueado
+        # esperando resposta; sem wait, que o envio só confirma a entrega.
+        if await hc_call("terminal.send", {"terminal": pane_id, "text": text,
+                                           "force": True}) is None:
+            await deny("send failed")
+
+    elif kind == "send_keys":
+        log.info("send_keys pane=%s keys=%s", pane_id, keys)
+        names = [HC_KEYS.get(k, k.lower()) for k in keys]
+        if await hc_call("terminal.keys", {"terminal": pane_id, "keys": names}) is None:
+            await deny("keys failed")
+
+    elif kind == "focus":
+        log.info("focus pane=%s", pane_id)
+        if await cli_run(["do", "agent.focus", "--terminal", pane_id],
+                         binary=HERDR_APP_BIN) is None:
+            await deny("focus failed")
+
+    elif kind in ("scroll_pane", "release_pane"):
+        # shortcut: rolagem e trava de resolução ainda não portadas (ticket #11)
         return await deny("not supported yet")
 
     elif kind == "ping":

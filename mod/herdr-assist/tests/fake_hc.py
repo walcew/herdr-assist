@@ -7,7 +7,9 @@ de um cenário que o teste controla em FAKE_HC_DIR:
 - terminals.json: a verdade do core (lista de Terminal), relida a cada request;
 - notify.jsonl: notificações que o teste anexa; quem assinou events.subscribe
   as repassa em ordem (`{"method": "event"|"missed"|..., "params": ...}`);
-- calls.jsonl: cada request recebido, registrado para o teste conferir.
+- calls.jsonl: cada request recebido, registrado para o teste conferir;
+- read.txt: o texto que terminal.read devolve (terminal.send/keys só confirmam).
+  Esses três métodos falham com not_found se o terminal não está em terminals.json.
 """
 import json
 import os
@@ -64,6 +66,14 @@ def handle(req):
             if t["address"] == params.get("terminal"):
                 return t
         raise LookupError("not_found")
+    if method in ("terminal.read", "terminal.send", "terminal.keys"):
+        if params.get("terminal") not in [t["address"] for t in terminals()]:
+            raise LookupError("not_found")
+        if method == "terminal.read":
+            path = os.path.join(DIR, "read.txt")
+            text = open(path).read() if os.path.exists(path) else ""
+            return {"text": text, "complete": True, "how": "screen"}
+        return {"turn": 1, "status": None}
     if method == "events.subscribe":
         threading.Thread(target=tail_notifications, daemon=True).start()
         return {"channel": None, "seq": 1, "terminals": terminals()}

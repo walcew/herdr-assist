@@ -14,9 +14,12 @@ import tempfile
 import time
 import unittest
 
+import herdr_bridge as b
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 BRIDGE = os.path.join(os.path.dirname(HERE), "herdr_bridge.py")
 FAKE_HC = os.path.join(HERE, "fake_hc.py")
+FAKE_APP = os.path.join(HERE, "fake_herdr_app.py")
 TOKEN = "test-token"
 
 
@@ -53,7 +56,7 @@ class TestBridgeOverFakeHc(unittest.TestCase):
         ])
         self.port = free_port()
         env = {"PATH": "/usr/bin:/bin", "HOME": self.dir,
-               "HC_BIN": FAKE_HC, "FAKE_HC_DIR": self.dir,
+               "HC_BIN": FAKE_HC, "HERDR_APP_BIN": FAKE_APP, "FAKE_HC_DIR": self.dir,
                "BRIDGE_PORT": str(self.port), "BRIDGE_BIND": "127.0.0.1",
                "BRIDGE_TOKEN": TOKEN, "HERDR_PLUGIN_CONFIG_DIR": self.dir,
                "PYTHONDONTWRITEBYTECODE": "1"}
@@ -79,6 +82,40 @@ class TestBridgeOverFakeHc(unittest.TestCase):
     def calls(self, method):
         with open(os.path.join(self.dir, "calls.jsonl")) as fh:
             return [c["params"] for c in map(json.loads, fh) if c["method"] == method]
+
+    def app_calls(self):
+        path = os.path.join(self.dir, "app.jsonl")
+        if not os.path.exists(path):
+            return []
+        with open(path) as fh:
+            return [json.loads(line) for line in fh]
+
+    def set_screen(self, text):
+        with open(os.path.join(self.dir, "read.txt"), "w") as fh:
+            fh.write(text)
+
+    def command(self, s, rf, msg):
+        """Manda um comando do painel; devolve as respostas que ele gerou.
+
+        A ponte trata os comandos de uma conexão em ordem: o pong do ping que
+        vai atrás só chega depois que o comando terminou.
+        """
+        s.sendall((json.dumps(msg) + "\n" + '{"type":"ping"}\n').encode())
+        replies = []
+        while True:
+            line = rf.readline()
+            if not line:
+                self.fail("ponte fechou a conexão")
+            m = json.loads(line)
+            if m.get("type") == "pong":
+                return replies
+            if m.get("type") in ("pane_content", "error"):
+                replies.append(m)
+
+    def connect_ready(self):
+        s, rf = self.connect()
+        self.ready(rf)
+        return s, rf
 
     def connect(self, token=TOKEN):
         deadline = time.time() + 10
@@ -164,6 +201,105 @@ class TestBridgeOverFakeHc(unittest.TestCase):
             self.assertEqual(json.loads(rf.readline()),
                              {"type": "error", "message": "token invalido"})
             self.assertEqual(rf.readline(), "")   # e a ponte desconecta
+
+    def test_read_pane_devolve_o_texto_do_core(self):
+        self.set_screen("linha 1\nlinha 2 ação\n")
+        s, rf = self.connect_ready()
+        out = self.command(s, rf, {"type": "read_pane", "pane_id": "t1a", "lines": 40})
+        self.assertEqual(out, [{"type": "pane_content", "pane_id": "t1a",
+                                "content": "linha 1\nlinha 2 ação"}])
+        self.assertEqual(self.calls("terminal.read"), [{"terminal": "t1a", "lines": 40}])
+
+    def test_read_pane_corta_por_linhas_e_ignora_cols_rows(self):
+        self.set_screen("\n".join("l%d" % n for n in range(10)) + "\n\n\n")
+        s, rf = self.connect_ready()
+        out = self.command(s, rf, {"type": "read_pane", "pane_id": "t1a", "lines": 3,
+                                   "cols": 50, "rows": 20})
+        self.assertEqual(out[0]["content"], "l7\nl8\nl9")
+
+    def test_read_pane_respeita_o_limite_de_payload(self):
+        # aspas dobram no JSON: 12000 bytes de conteúdo viram mais que WIRE_MAX_B
+        self.set_screen("\n".join("%02d" % n + '"' * 298 for n in range(40)))
+        s, rf = self.connect_ready()
+        s.sendall(b'{"type":"read_pane","pane_id":"t1a","lines":60}\n')
+        raw = rf.readline()
+        while '"pane_content"' not in raw:
+            raw = rf.readline()
+        self.assertLessEqual(len(raw.rstrip("\n").encode()), b.WIRE_MAX_B)
+        content = json.loads(raw)["content"]
+        self.assertTrue(content.startswith("0") and content.splitlines()[-1].startswith("39"))
+        self.assertLess(len(content.splitlines()), 40)   # as mais antigas caíram
+
+    def test_send_text_chega_ao_core_ja_com_force(self):
+        s, rf = self.connect_ready()
+        self.assertEqual(self.command(s, rf, {"type": "send_text", "pane_id": "t1a",
+                                              "text": "oi agente"}), [])
+        self.assertEqual(self.calls("terminal.send"),
+                         [{"terminal": "t1a", "text": "oi agente", "force": True}])
+
+    def test_send_text_vazio_ou_longo_e_erro_sem_chegar_ao_core(self):
+        s, rf = self.connect_ready()
+        for text in ("", "x" * (b.MAX_TEXT + 1)):
+            out = self.command(s, rf, {"type": "send_text", "pane_id": "t1a", "text": text})
+            self.assertEqual([m["type"] for m in out], ["error"])
+        self.assertEqual(self.calls("terminal.send"), [])
+
+    def test_send_keys_traduz_cada_tecla_da_allowlist_para_o_hc(self):
+        esperado = {"y": "y", "n": "n", "a": "a", "Enter": "enter", "Tab": "tab",
+                    "Escape": "esc", "C-c": "ctrl+c", "Up": "up", "Down": "down",
+                    "Left": "left", "Right": "right", "BSpace": "backspace",
+                    **{str(n): str(n) for n in range(10)}}
+        self.assertEqual(set(esperado), b.SAFE_KEYS)    # nenhuma tecla ficou sem tradução
+        s, rf = self.connect_ready()
+        for painel, hc in esperado.items():
+            self.assertEqual(self.command(s, rf, {"type": "send_keys", "pane_id": "t1a",
+                                                  "keys": [painel]}), [])
+            self.assertEqual(self.calls("terminal.keys")[-1],
+                             {"terminal": "t1a", "keys": [hc]})
+
+    def test_send_keys_varias_teclas_numa_chamada(self):
+        s, rf = self.connect_ready()
+        self.command(s, rf, {"type": "send_keys", "pane_id": "t1a", "keys": ["Up", "Enter"]})
+        self.assertEqual(self.calls("terminal.keys"),
+                         [{"terminal": "t1a", "keys": ["up", "enter"]}])
+
+    def test_send_keys_fora_da_allowlist_e_erro_sem_chegar_ao_core(self):
+        s, rf = self.connect_ready()
+        out = self.command(s, rf, {"type": "send_keys", "pane_id": "t1a",
+                                   "keys": ["Enter", "C-d"]})
+        self.assertEqual([m["type"] for m in out], ["error"])
+        self.assertEqual(self.calls("terminal.keys"), [])
+
+    def test_focus_roda_agent_focus_no_herdr_app(self):
+        s, rf = self.connect_ready()
+        self.assertEqual(self.command(s, rf, {"type": "focus", "pane_id": "t1b"}), [])
+        self.assertEqual(self.app_calls(), [["do", "agent.focus", "--terminal", "t1b"]])
+
+    def test_pane_desconhecido_ou_de_outra_maquina_e_erro(self):
+        s, rf = self.connect_ready()
+        for pane in ("t9z", "t1c", "m1/t1a", ""):    # t1c existe mas não é agente
+            for msg in ({"type": "read_pane"}, {"type": "send_text", "text": "x"},
+                        {"type": "send_keys", "keys": ["Enter"]}, {"type": "focus"}):
+                out = self.command(s, rf, dict(msg, pane_id=pane))
+                self.assertEqual([m["type"] for m in out], ["error"], (pane, msg))
+        self.assertEqual(self.app_calls(), [])
+        for method in ("terminal.read", "terminal.send", "terminal.keys"):
+            self.assertEqual(self.calls(method), [])
+
+    def test_falha_do_core_vira_error(self):
+        s, rf = self.connect_ready()
+        # o terminal some do core sem a ponte ter visto o evento
+        self.set_terminals([terminal("t1b", "idle", "eletrilha / 1")])
+        for msg in ({"type": "read_pane"}, {"type": "send_text", "text": "x"},
+                    {"type": "send_keys", "keys": ["Enter"]}):
+            out = self.command(s, rf, dict(msg, pane_id="t1a"))
+            self.assertEqual([m["type"] for m in out], ["error"], msg)
+
+    def test_scroll_e_release_seguem_nao_suportados(self):
+        s, rf = self.connect_ready()
+        for kind in ("scroll_pane", "release_pane"):
+            out = self.command(s, rf, {"type": kind, "pane_id": "t1a"})
+            self.assertEqual(out, [{"type": "error", "message": "not supported yet"}])
 
 
 if __name__ == "__main__":
