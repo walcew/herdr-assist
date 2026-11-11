@@ -83,7 +83,7 @@ da ponte. Sem a TCP ele encontra e não conecta.
 ss -ltnp | grep 9375                       # está ouvindo?
 tail -f <estado>/bridge.log                # o que ela está fazendo
 python3 ctl.py status                      # Ponte, porta, painéis e quem escuta a porta (JSON)
-python3 admin.py                           # TUI: status, token, pareamento, restart
+python3 ctl.py discover                    # painéis em modo de pareamento na LAN (JSON)
 herdr plugin log list                      # logs das ações do plugin, do lado do Herdr
 ```
 

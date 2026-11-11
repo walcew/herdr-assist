@@ -81,18 +81,18 @@ Check that the listed code matches the one on the panel screen and select it
 confirms **"Paired with …"**, saves it and **restarts already connected** —
 your sessions show up in the Sessions tab.
 
-### Windows, or SSH without a TUI
+### From the command line (`pair.py`)
 
-The admin screen is `curses`-based and exists only on macOS and Linux. On
-Windows (or in a TUI-less SSH session), the same protocol lives in `pair.py`:
+`pair.py` is gone: in the Herdr desktop app, pairing lives in the control mod's
+**Pair** tab (`cmd-alt-a`). Without the dialog (an SSH session, a script), the
+same protocol is in the mod's `ctl.py`:
 
 ```sh
-python3 pair.py              # listens, lists panels and asks
-python3 pair.py --id 4B5E94  # pairs straight with that panel
+python3 ctl.py discover                 # panels announcing now: [{id, ip, port}]
+python3 ctl.py pair 192.168.1.42 9376   # sends the configuration to that panel
 ```
 
-The script sits in the plugin directory (the checkout created by
-`herdr plugin install`).
+The script sits in the mod directory (`~/.config/herdr-app/mods/herdr-assist`).
 
 > The M5Stack Cardputer port pairs exactly the same way — same bridge, same
 > flow, only the device screen differs.

@@ -300,8 +300,8 @@ percentuais), `pong`.
 Windows. Lá o socket do Herdr é um named pipe cujo *nome* é o caminho inteiro
 (`\\.\pipe\C:\Users\...\herdr.sock`), que o Python não consegue abrir — então a ponte fala
 com o Herdr pela CLI e reconcilia por polling em vez de `events.subscribe`. O
-pareamento é pelo `mod/herdr-assist/pair.py`; a tela de administração, que é curses,
-segue só no macOS e no Linux.
+pareamento por linha de comando é o `mod/herdr-assist/ctl.py discover` e o
+`ctl.py pair <ip> <porta>`.
 
 A ponte é o ponto onde as decisões de segurança acontecem, porque qualquer um na LAN
 alcança essa porta. **Toda conexão exige um token** (handshake `hello` na primeira linha;
@@ -421,10 +421,8 @@ testar o fluxo.
 | Arquivo | Papel |
 |---|---|
 | `mod/herdr-assist/start.py` | Startup do plugin: sobe a ponte destacada, idempotente, multiplataforma |
-| `mod/herdr-assist/pair.py` | Pareamento por linha de comando, sem curses — o caminho do Windows |
+| `mod/herdr-assist/ctl.py` | Operações do Mod de controle (JSON): status, reinício, rotação do token, descoberta e pareamento de painéis |
 | `mod/herdr-assist/herdr_bridge.py` | Ponte: socket do Herdr ↔ TCP, handshake com token, allowlist, sanitização, coleta de uso de limites (Claude/Codex) |
-| `mod/herdr-assist/admin.py` | Tela de administração no Herdr: status, token, pareamento, instalação do atalho |
-| `mod/herdr-assist/i18n.py` | Textos da tela de administração (en/pt), idioma vindo do locale do host |
 | `src/pairing.c` | Modo de pareamento do painel: anúncio por broadcast + recepção da config |
 | `src/DEMO_LVGL.c` | Ponto de entrada: inicializa painel, config, Wi-Fi, conexões e UI |
 | `src/panel_cfg.c` | Configuração persistente (NVS): rede Wi-Fi + até 4 hosts Herdr + idioma |

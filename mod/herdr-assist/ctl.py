@@ -10,6 +10,10 @@ escuta a porta, se é a Ponte do mod, subir e reiniciar) fica testável aqui.
                              e não for a Ponte do mod
     ctl.py ensure            sobe a Ponte se não há uma viva e a porta está livre
     ctl.py restart           encerra a Ponte do mod e sobe outra
+    ctl.py token             token atual, lido do doc
+    ctl.py rotate-token      grava um token novo no doc; a Ponte aplica pelo evento doc
+    ctl.py discover          painéis em modo de pareamento na LAN (escuta ~2,5 s)
+    ctl.py pair <ip> <porta> manda ao painel a configuração pronta (host, porta, token)
 
 A Ponte do mod é o terminal do core com o rótulo herdr-assist=bridge. Sem os
 rótulos herdr.space/herdr.tab ela fica fora das telas do app.
@@ -19,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -32,8 +37,9 @@ DIR = os.path.dirname(os.path.abspath(__file__))
 HC_BIN = (os.environ.get("HC_BIN") or shutil.which("hc")
           or os.path.expanduser("~/.local/bin/hc"))
 LABEL = "herdr-assist=bridge"
-DOC_NAME = "herdr-assist"
+DOC_NAME = os.environ.get("HERDR_ASSIST_DOC", "herdr-assist")   # como a Ponte
 DEFAULT_PORT = 9375
+PAIR_PORT = 9376   # UDP dos anúncios do painel em modo de pareamento
 
 
 def run(args: list, stdin: str | None = None, timeout: float = 5) -> str:
@@ -52,18 +58,50 @@ def hc_json(args: list):
         return None
 
 
-def doc_get() -> dict:
-    """Configuração da ponte, lida do doc do core por um `hc connect` curto."""
-    req = {"jsonrpc": "2.0", "id": 1, "method": "doc.get", "params": {"name": DOC_NAME}}
+def rpc(method: str, params: dict) -> tuple:
+    """(result, error) de um request por um `hc connect` curto."""
+    req = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     for line in run([HC_BIN, "connect"], stdin=json.dumps(req) + "\n").splitlines():
         try:
             msg = json.loads(line)
         except ValueError:
             continue
         if msg.get("id") == 1:
-            value = (msg.get("result") or {}).get("value")
-            return value if isinstance(value, dict) else {}
-    return {}
+            return msg.get("result"), msg.get("error")
+    return None, {"message": "hc connect failed"}
+
+
+def doc_read() -> tuple:
+    """(configuração, versão) do doc do core; ({}, None) se o core falhou."""
+    res, err = rpc("doc.get", {"name": DOC_NAME})
+    if err or not isinstance(res, dict):
+        return {}, None
+    value = res.get("value")
+    return (value if isinstance(value, dict) else {}), res.get("version", 0)
+
+
+def doc_get() -> dict:
+    """Configuração da ponte, lida do doc do core."""
+    return doc_read()[0]
+
+
+def rotate_token() -> dict:
+    """Grava um token novo no doc, mantendo o resto da configuração.
+
+    Em conflito de versão (outro escritor entre o get e o set) relê e tenta
+    mais uma vez, como a Ponte faz.
+    """
+    new = secrets.token_hex(16)
+    err = {"message": "hc connect failed"}
+    for _ in range(2):
+        doc, version = doc_read()
+        if version is None:
+            break
+        _, err = rpc("doc.set", {"name": DOC_NAME, "value": {**doc, "token": new},
+                                 "version": version})
+        if not err:
+            return {"ok": True, "token": new}
+    return {"ok": False, "error": "doc.set: " + str(err.get("message", err))}
 
 
 def bridge_port() -> int:
@@ -147,16 +185,83 @@ def panels(port: int) -> list:
     return found
 
 
-def lan_ip() -> str:
-    """IP desta máquina na rota padrão; UDP connect não manda pacote."""
+def host_name() -> str:
+    """Nome curto desta máquina; vira o rótulo do host no painel (cabe em 15)."""
+    return socket.gethostname().split(".")[0][:15]
+
+
+def route_ip(peer: str) -> str:
+    """IP desta máquina na rota até `peer`; UDP connect não manda pacote."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        s.connect(("192.0.2.1", 9))
+        s.connect((peer, 9))
         return s.getsockname()[0]
     except OSError:
         return ""
     finally:
         s.close()
+
+
+def lan_ip() -> str:
+    """IP desta máquina na rota padrão."""
+    return route_ip("192.0.2.1")
+
+
+def discover(seconds: float = 2.5, port: int = PAIR_PORT) -> dict:
+    """Painéis que se anunciaram em `seconds`; o painel manda um beacon por segundo."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        s.bind(("", port))
+    except OSError as exc:
+        s.close()
+        return {"panels": [], "error": "udp %d: %s" % (port, exc)}
+    found = {}
+    end = time.time() + seconds
+    try:
+        while (left := end - time.time()) > 0:
+            s.settimeout(left)
+            try:
+                data, addr = s.recvfrom(512)
+                msg = json.loads(data)
+                if msg.get("t") == "herdr-assist" and msg.get("id"):
+                    found[str(msg["id"])] = {"id": str(msg["id"]), "ip": addr[0],
+                                             "port": int(msg.get("port", PAIR_PORT))}
+            except socket.timeout:
+                break
+            except (ValueError, TypeError, AttributeError):   # lixo da LAN
+                continue
+    finally:
+        s.close()
+    return {"panels": [found[k] for k in sorted(found)]}
+
+
+def send_config(ip: str, port: int, token: str, bridge: int) -> dict:
+    """Manda a configuração pronta ao painel, que grava na NVS e reinicia."""
+    # auto: o painel grava o slot sem IP e acha a Ponte por broadcast, então
+    # o DHCP trocar o IP do host não quebra o pareamento
+    payload = {"t": "pair", "name": host_name(), "host": route_ip(ip),
+               "port": bridge, "token": token, "auto": True}
+    try:
+        with socket.create_connection((ip, port), timeout=8) as s:
+            s.settimeout(8)
+            s.sendall((json.dumps(payload) + "\n").encode())
+            reply = s.recv(256).decode(errors="replace")
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        if json.loads(reply).get("ok"):
+            return {"ok": True}
+    except (ValueError, AttributeError):
+        pass
+    return {"ok": False, "error": "the panel refused the configuration"}
+
+
+def pair(ip: str, port: int) -> dict:
+    token = doc_get().get("token")
+    if not isinstance(token, str) or not token.strip():
+        return {"ok": False, "error": "no token in the doc: start the bridge before pairing"}
+    return send_config(ip, port, token, bridge_port())
 
 
 def lang() -> str:
@@ -223,8 +328,17 @@ def main(argv: list) -> int:
         out = ensure(bridge_port())
     elif cmd == "restart":
         out = restart(bridge_port())
+    elif cmd == "token":
+        out = {"token": doc_get().get("token", "")}
+    elif cmd == "rotate-token":
+        out = rotate_token()
+    elif cmd == "discover":
+        out = discover()
+    elif cmd == "pair" and len(argv) == 3 and argv[2].isdigit():
+        out = pair(argv[1], int(argv[2]))
     else:
-        print(json.dumps({"error": "usage: ctl.py status|port-holder|kill-holder <pid>|ensure|restart"}))
+        print(json.dumps({"error": "usage: ctl.py status|port-holder|kill-holder <pid>|ensure"
+                                   "|restart|token|rotate-token|discover|pair <ip> <port>"}))
         return 2
     print(json.dumps(out))
     return 0

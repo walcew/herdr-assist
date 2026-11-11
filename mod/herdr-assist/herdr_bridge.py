@@ -1525,7 +1525,7 @@ class DiscoveryResponder(asyncio.DatagramProtocol):
                 self.limited = True
                 log.warning("descoberta: limite de respostas atingido, silenciando")
             return
-        # IP desta máquina na rota até o painel (mesmo truque do admin.py);
+        # IP desta máquina na rota até o painel (mesmo truque do ctl.py);
         # é o campo que o painel adota, então precisa ser o da interface certa
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:

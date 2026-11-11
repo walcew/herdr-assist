@@ -79,18 +79,18 @@ Confira que o código listado é o mesmo da tela do painel e selecione (clique,
 **"Pareado com …"**, grava e **reinicia já conectado** — as sessões aparecem
 na aba Sessões.
 
-### Windows ou SSH sem TUI
+### Pela linha de comando (`pair.py`)
 
-A tela de administração é `curses` e só existe no macOS e no Linux. No Windows
-(ou numa sessão SSH sem TUI), o mesmo protocolo está no `pair.py`:
+O `pair.py` saiu: no Herdr desktop, o pareamento fica na aba **Parear** do mod
+de controle (`cmd-alt-a`). Sem o dialog (sessão SSH, script), o mesmo protocolo
+está no `ctl.py` do mod:
 
 ```sh
-python3 pair.py              # escuta, lista os painéis e pergunta
-python3 pair.py --id 4B5E94  # pareia direto com esse painel
+python3 ctl.py discover                 # painéis anunciando agora: [{id, ip, port}]
+python3 ctl.py pair 192.168.1.42 9376   # manda a configuração a esse painel
 ```
 
-O script fica no diretório do plugin (o checkout que o
-`herdr plugin install` criou).
+O script fica na pasta do mod (`~/.config/herdr-app/mods/herdr-assist`).
 
 > O porte para M5Stack Cardputer pareia do mesmo jeito — mesma ponte, mesmo
 > fluxo, só muda a tela do aparelho.

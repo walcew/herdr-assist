@@ -1,8 +1,17 @@
 # cd mod/herdr-assist && python -m unittest tests.test_ctl -v
+import json
+import os
+import shutil
 import signal
+import socket
+import tempfile
+import threading
 import unittest
+from unittest import mock
 
 import ctl
+
+FAKE_HC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_hc.py")
 
 
 def listen(found):
@@ -66,6 +75,126 @@ class TestKillHolder(unittest.TestCase):
         self.assertFalse(ctl.kill_holder(7, 9375, self.holder(h), self.kill)["ok"])
         self.assertFalse(ctl.kill_holder(7, 9375, self.holder(None), self.kill)["ok"])
         self.assertEqual(self.killed, [])
+
+
+class FakeCore(unittest.TestCase):
+    """ctl.py falando com o tests/fake_hc.py, que guarda os docs em docs.json."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.dir)
+        env = mock.patch.dict(os.environ, {"FAKE_HC_DIR": self.dir})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("BRIDGE_PORT", None)
+        hc = mock.patch.object(ctl, "HC_BIN", FAKE_HC)
+        hc.start()
+        self.addCleanup(hc.stop)
+
+    def set_doc(self, value, version):
+        with open(os.path.join(self.dir, "docs.json"), "w") as fh:
+            json.dump({ctl.DOC_NAME: {"value": value, "version": version}}, fh)
+
+    def doc(self):
+        with open(os.path.join(self.dir, "docs.json")) as fh:
+            return json.load(fh)[ctl.DOC_NAME]
+
+
+class TestRotateToken(FakeCore):
+    # que o painel com o token antigo é recusado depois disso já é coberto no
+    # seam da Ponte: test_bridge_hc.test_evento_doc_com_token_novo_recusa_o_antigo_sem_reiniciar
+
+    def test_grava_token_novo_com_a_versao_e_mantem_o_resto(self):
+        self.set_doc({"token": "old", "port": 9400, "avatar_repos": ["r"]}, 3)
+        got = ctl.rotate_token()
+        self.assertTrue(got["ok"])
+        self.assertNotEqual(got["token"], "old")
+        self.assertEqual(len(got["token"]), 32)
+        self.assertEqual(self.doc(), {"value": {"token": got["token"], "port": 9400,
+                                                "avatar_repos": ["r"]}, "version": 4})
+
+    def test_conflito_rele_e_tenta_de_novo_uma_vez(self):
+        self.set_doc({"token": "old"}, 3)
+        open(os.path.join(self.dir, "conflict_once"), "w").close()
+        got = ctl.rotate_token()
+        self.assertTrue(got["ok"])
+        # o outro escritor levou à 4; a segunda tentativa grava a 5
+        self.assertEqual(self.doc(), {"value": {"token": got["token"]}, "version": 5})
+
+    def test_token_le_do_doc(self):
+        self.set_doc({"token": "abc"}, 1)
+        self.assertEqual(ctl.doc_get()["token"], "abc")
+
+
+class PanelServer:
+    """Painel falso em modo de pareamento: lê a configuração e responde."""
+
+    def __init__(self, ok=True):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(1)
+        self.port = self.sock.getsockname()[1]
+        self.got = None
+        self.ok = ok
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+
+    def serve(self):
+        conn, _ = self.sock.accept()
+        with conn:
+            self.got = json.loads(conn.makefile().readline())
+            conn.sendall(json.dumps({"t": "paired", "ok": self.ok}).encode() + b"\n")
+        self.sock.close()
+
+
+class TestPair(FakeCore):
+    def test_envia_host_porta_e_token_do_doc(self):
+        self.set_doc({"token": "tok", "port": 9400}, 2)
+        panel = PanelServer()
+        self.assertEqual(ctl.pair("127.0.0.1", panel.port), {"ok": True})
+        panel.thread.join(2)
+        self.assertEqual(panel.got, {"t": "pair", "name": ctl.host_name(), "host": "127.0.0.1",
+                                     "port": 9400, "token": "tok", "auto": True})
+
+    def test_painel_que_recusa_e_erro(self):
+        self.set_doc({"token": "tok"}, 1)
+        panel = PanelServer(ok=False)
+        got = ctl.pair("127.0.0.1", panel.port)
+        self.assertFalse(got["ok"])
+        self.assertTrue(got["error"])
+
+    def test_sem_token_nao_conecta(self):
+        got = ctl.pair("127.0.0.1", 9)
+        self.assertEqual(got["ok"], False)
+        self.assertIn("no token", got["error"])
+
+
+class TestDiscover(unittest.TestCase):
+    def test_lista_os_anuncios_e_ignora_o_resto(self):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        out = {}
+        t = threading.Thread(target=lambda: out.update(ctl.discover(0.6, port)))
+        t.start()
+        tx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        for _ in range(5):   # repete como o beacon, até o listener estar de pé
+            for msg in (b'{"t":"herdr-assist","id":"B2","port":9376}', b"lixo",
+                        b'{"t":"outro","id":"X"}', b'{"t":"herdr-assist","id":"A1","port":"x"}',
+                        b'[1]', b'{"t":"herdr-assist","id":"A1"}'):
+                tx.sendto(msg, ("127.0.0.1", port))
+            threading.Event().wait(0.05)
+        tx.close()
+        t.join()
+        self.assertEqual(out, {"panels": [{"id": "A1", "ip": "127.0.0.1", "port": 9376},
+                                          {"id": "B2", "ip": "127.0.0.1", "port": 9376}]})
+
+    def test_porta_ocupada_vira_erro(self):
+        with mock.patch.object(socket.socket, "bind", side_effect=OSError("busy")):
+            got = ctl.discover(0.1, 9376)
+        self.assertEqual(got["panels"], [])
+        self.assertIn("busy", got["error"])
 
 
 if __name__ == "__main__":
