@@ -133,6 +133,9 @@ static void handle_agents(conn_slot_t *s, const cJSON *root)
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "workspace_id")))) {
             strlcpy(a->workspace_id, f->valuestring, HERDR_ID_LEN);
         }
+        if (cJSON_IsString((f = cJSON_GetObjectItem(item, "machine")))) {
+            strlcpy(a->machine, f->valuestring, sizeof(a->machine));
+        }
         if (cJSON_IsString((f = cJSON_GetObjectItem(item, "account")))) {
             strncpy(a->account, f->valuestring, sizeof(a->account) - 1);
         }

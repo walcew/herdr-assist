@@ -35,6 +35,10 @@ typedef struct {
     char    project[HERDR_NAME_LEN];  /* basename do cwd */
     char    status[HERDR_STATUS_LEN]; /* idle | working | blocked | unknown */
     char    workspace_id[HERDR_ID_LEN];
+    /* Máquina de origem quando o agente roda em outra máquina que o Herdr do
+     * host espelha (nome amigável, ex. "WalcewAir"); "" = o próprio host.
+     * Aí o project vem com o código dela na frente ("WAL/bnmp"). */
+    char    machine[16];
     uint8_t host;                     /* índice em panel_cfg hosts[] */
     /* Epoch em que a ponte viu o agente entrar em "working"; 0 nos demais
      * status. A API do Herdr não expõe tempo algum, então quem carimba é ela. */
