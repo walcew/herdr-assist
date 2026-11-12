@@ -286,9 +286,12 @@ class TestBridgeOverFakeHc(BridgeHarness):
         with open(os.path.join(self.dir, "machines.json"), "w") as fh:
             json.dump({"walcewair": "WalcewAir"}, fh)
         self.set_terminals([terminal("walcewair/t2", "done", "bnmp / 1")])
-        _, rf = self.connect_ready()
-        agents = self.agents_until(
-            rf, lambda ag: ag.get("walcewair/t2", {}).get("machine") == "WalcewAir")
+        _, rf = self.connect()
+        # o nome pode chegar já no primeiro snapshot ou num seguinte
+        named = lambda ag: ag.get("walcewair/t2", {}).get("machine") == "WalcewAir"
+        agents = self.ready(rf)
+        if not named(agents):
+            agents = self.agents_until(rf, named)
         self.assertEqual(agents["walcewair/t2"]["project"], "WAL/bnmp")
 
     def test_comandos_alcancam_o_agente_de_outra_maquina(self):
