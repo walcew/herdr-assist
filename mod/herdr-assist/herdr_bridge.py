@@ -539,16 +539,16 @@ def friendly_name(label: str, cwd: str) -> str:
 def panel_status(t: dict) -> str:
     """Status do core no vocabulário do painel (idle|working|done|blocked).
 
-    No core, done e error ficam até a próxima volta; quem diz que alguém já os
-    viu é o rótulo `herdr.seen` (a volta que a tela viu) igual a `turn`. Visto,
-    vira idle, como no Herdr TUI. O painel não conhece error: sem ser visto, é
-    pedido de atenção, então vai como blocked.
+    No core, done fica até a próxima volta; quem diz que alguém já o viu é o
+    rótulo `herdr.seen` (a volta que a tela viu) igual a `turn`. Visto, vira
+    idle, como no Herdr TUI. O painel não conhece error, e ele não se resolve
+    só de ser visto: vai sempre como blocked, pedido de atenção.
     """
     state = (t.get("status") or {}).get("state") or "unknown"
-    if state in ("done", "error"):
-        if (t.get("labels") or {}).get("herdr.seen") == str(t.get("turn", 0)):
-            return "idle"
-        return "blocked" if state == "error" else "done"
+    if state == "error":
+        return "blocked"
+    if state == "done" and (t.get("labels") or {}).get("herdr.seen") == str(t.get("turn", 0)):
+        return "idle"
     return state
 
 
