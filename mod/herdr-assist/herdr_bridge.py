@@ -536,6 +536,22 @@ def friendly_name(label: str, cwd: str) -> str:
     return os.path.basename(cwd or "")
 
 
+def panel_status(t: dict) -> str:
+    """Status do core no vocabulário do painel (idle|working|done|blocked).
+
+    No core, done e error ficam até a próxima volta; quem diz que alguém já os
+    viu é o rótulo `herdr.seen` (a volta que a tela viu) igual a `turn`. Visto,
+    vira idle, como no Herdr TUI. O painel não conhece error: sem ser visto, é
+    pedido de atenção, então vai como blocked.
+    """
+    state = (t.get("status") or {}).get("state") or "unknown"
+    if state in ("done", "error"):
+        if (t.get("labels") or {}).get("herdr.seen") == str(t.get("turn", 0)):
+            return "idle"
+        return "blocked" if state == "error" else "done"
+    return state
+
+
 def agent_panes() -> list:
     """Os agentes do core no formato de pane que o resto da ponte já usa.
 
@@ -558,7 +574,7 @@ def agent_panes() -> list:
         machine = addr.split("/", 1)[0] if "/" in addr else ""
         panes.append({"pane_id": addr,
                       "agent": AGENT_NAMES.get(st.get("app"), st.get("app") or ""),
-                      "agent_status": st.get("state") or "unknown",
+                      "agent_status": panel_status(t),
                       "cwd": fg.get("cwd") or t.get("cwd") or "",
                       "space": space, "tab": tab, "machine": machine,
                       "pid": None if machine else fg.get("pid")})

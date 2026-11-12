@@ -268,6 +268,19 @@ class TestBridgeOverFakeHc(BridgeHarness):
         self.assertNotIn("account", r)     # pid é da outra máquina: sem conta/contexto
         self.assertNotIn("machine", agents["t1a"])
 
+    def test_done_e_error_vistos_viram_idle(self):
+        # herdr.seen == turn: a tela já viu essa volta; error sem ver pede atenção
+        self.set_terminals([
+            terminal("t1", "done", turn=3, labels={"herdr.seen": "3"}),
+            terminal("t2", "done", turn=4, labels={"herdr.seen": "3"}),
+            terminal("t3", "error", turn=5, labels={"herdr.seen": "5"}),
+            terminal("t4", "error", turn=5),
+        ])
+        _, rf = self.connect()
+        agents = self.ready(rf)
+        self.assertEqual([agents[a]["status"] for a in ("t1", "t2", "t3", "t4")],
+                         ["idle", "done", "idle", "blocked"])
+
     def test_agente_de_outra_maquina_vem_com_o_nome_amigavel_dela(self):
         # a ponte pergunta o nome à própria máquina (hc exec) e reenvia com ele
         with open(os.path.join(self.dir, "machines.json"), "w") as fh:
