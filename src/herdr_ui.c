@@ -55,13 +55,19 @@ static lv_obj_t *s_lock_icon;   /* cadeado: terminal exige o padrão */
 static bool s_lock_shown;
 static lv_obj_t *s_host_area;
 
+/* Um card por host pareado e mais um por máquina que o Herdr dele espelha
+   (machine != ""). Cabe um remoto por host além do próprio; o excedente fica
+   só na aba de sessões. */
+#define HOST_CARDS_MAX (CFG_MAX_HOSTS * 2)
 typedef struct {
     int       host;
+    char      machine[16];
     lv_obj_t *status;
     lv_obj_t *cells[HEAT_CELLS];
 } host_widget_t;
-static host_widget_t s_hw[CFG_MAX_HOSTS];
+static host_widget_t s_hw[HOST_CARDS_MAX];
 static int s_hw_count;
+static lv_coord_t s_host_area_w;
 
 /* --- sessões --- */
 static lv_obj_t *s_sess_list;
@@ -467,48 +473,68 @@ static void refresh_lock_icon(void)
 }
 
 /**
- * Monta os cards de host (nome, status e mapa de calor) numa faixa de largura w.
+ * Lista os cards que a home deve ter, na ordem: cada host habilitado e, logo
+ * abaixo dele, as máquinas remotas que trouxe, na ordem em que aparecem.
+ */
+static int list_host_cards(host_widget_t *out)
+{
+    const panel_cfg_t *cfg = panel_cfg_get();
+    int n = 0;
+    for (int h = 0; h < CFG_MAX_HOSTS && n < HOST_CARDS_MAX; h++) {
+        if (!cfg->hosts[h].enabled) {
+            continue;
+        }
+        out[n].host = h;
+        out[n++].machine[0] = '\0';
+        for (int i = 0; i < s_ui_agent_count && n < HOST_CARDS_MAX; i++) {
+            const herdr_agent_t *a = &s_ui_agents[i];
+            if (a->host != h || !a->machine[0]) {
+                continue;
+            }
+            bool seen = false;
+            for (int j = 0; j < n && !seen; j++) {
+                seen = out[j].host == h && strcmp(out[j].machine, a->machine) == 0;
+            }
+            if (!seen) {
+                out[n].host = h;
+                strlcpy(out[n++].machine, a->machine, sizeof(out[0].machine));
+            }
+        }
+    }
+    return n;
+}
+
+/**
+ * (Re)monta os cards (nome, status e mapa de calor) dentro de s_host_area.
  *
  * A largura entra resolvida em pixels — e não como LV_PCT(100) — porque o passo
  * das células do mapa de calor sai dela, e o layout ainda não foi calculado
  * quando os cards nascem.
  */
-static void build_host_cards(lv_obj_t *parent, lv_coord_t w)
+static void fill_host_cards(void)
 {
-    const panel_cfg_t *cfg = panel_cfg_get();
+    host_widget_t keys[HOST_CARDS_MAX];
+    int count = list_host_cards(keys);
+    lv_obj_clean(s_host_area);
+    s_hw_count = 0;
+
     /* Clampado no passo de projeto: em retrato sobra espaço e o tamanho de hoje
        é o desejado; em paisagem a coluna é estreita e as células encolhem. */
-    lv_coord_t step = LV_MIN(21, (w - 24) / HEAT_CELLS);
+    lv_coord_t step = LV_MIN(21, (s_host_area_w - 24) / HEAT_CELLS);
     lv_coord_t cell = step - 4;
-
-    lv_coord_t area_h = ui_landscape() ? avatar_slot_h() : 152;
-    int enabled = 0;
-    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
-        enabled += cfg->hosts[h].enabled;
-    }
     /* Só em paisagem, onde a coluna é alta e os cards colados no topo destoariam
        do mascote ao lado; centrados, os dois blocos ficam na mesma linha. Em
        retrato a faixa é justa e a pilha segue do topo, como sempre foi. E com a
        coluna cheia volta ao topo nas duas: centrar o que não cabe empurraria o
        primeiro card para fora e a rolagem começaria no meio da lista. */
     bool center = ui_landscape() &&
-                  enabled * HOST_CARD_H + (enabled - 1) * HOST_CARD_GAP <= area_h;
-
-    s_host_area = ui_plain(parent);
-    lv_obj_set_size(s_host_area, w, area_h);
-    lv_obj_set_flex_flow(s_host_area, LV_FLEX_FLOW_COLUMN);
+                  count * HOST_CARD_H + (count - 1) * HOST_CARD_GAP <= avatar_slot_h();
     lv_obj_set_flex_align(s_host_area, center ? LV_FLEX_ALIGN_CENTER : LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(s_host_area, HOST_CARD_GAP, 0);
-    lv_obj_add_flag(s_host_area, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(s_host_area, LV_DIR_VER);
 
-    for (int h = 0; h < CFG_MAX_HOSTS; h++) {
-        if (!cfg->hosts[h].enabled) {
-            continue;
-        }
+    for (int k = 0; k < count; k++) {
         host_widget_t *hw = &s_hw[s_hw_count++];
-        hw->host = h;
+        *hw = keys[k];
 
         lv_obj_t *card = ui_card(s_host_area, 8);
         lv_obj_set_size(card, LV_PCT(100), HOST_CARD_H);
@@ -517,7 +543,7 @@ static void build_host_cards(lv_obj_t *parent, lv_coord_t w)
         lv_obj_set_style_pad_top(card, 10, 0);
 
         lv_obj_t *name = lv_label_create(card);
-        lv_label_set_text(name, host_label(h));
+        lv_label_set_text(name, hw->machine[0] ? hw->machine : host_label(hw->host));
         lv_obj_set_style_text_font(name, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(name, UI_TEXT, 0);
         lv_obj_align(name, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -545,6 +571,34 @@ static void build_host_cards(lv_obj_t *parent, lv_coord_t w)
         lv_obj_set_style_text_font(empty, &lv_font_ui_12, 0);
         lv_obj_set_style_text_color(empty, UI_MUTED, 0);
     }
+}
+
+/** Uma máquina remota apareceu ou sumiu desde que os cards foram montados? */
+static bool host_cards_stale(void)
+{
+    host_widget_t keys[HOST_CARDS_MAX];
+    int count = list_host_cards(keys);
+    if (count != s_hw_count) {
+        return true;
+    }
+    for (int k = 0; k < count; k++) {
+        if (keys[k].host != s_hw[k].host || strcmp(keys[k].machine, s_hw[k].machine) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void build_host_cards(lv_obj_t *parent, lv_coord_t w)
+{
+    s_host_area_w = w;
+    s_host_area = ui_plain(parent);
+    lv_obj_set_size(s_host_area, w, ui_landscape() ? avatar_slot_h() : 152);
+    lv_obj_set_flex_flow(s_host_area, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_host_area, HOST_CARD_GAP, 0);
+    lv_obj_add_flag(s_host_area, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_host_area, LV_DIR_VER);
+    fill_host_cards();
 }
 
 static void build_home(void)
@@ -664,12 +718,17 @@ static void refresh_home(void)
     led_status_set_state(st);   /* a fita do P3 mostra o mesmo estado */
     update_beacon(blocked);
 
+    if (host_cards_stale()) {
+        fill_host_cards();
+    }
     for (int w = 0; w < s_hw_count; w++) {
         host_widget_t *hw = &s_hw[w];
         herdr_conn_state_t conn = herdr_model_get_conn(hw->host);
         int n = 0;
         for (int i = 0; i < s_ui_agent_count && n < HEAT_CELLS; i++) {
-            if (s_ui_agents[i].host == hw->host) {
+            /* machine "" = os do próprio host; só o card daquela máquina os conta */
+            if (s_ui_agents[i].host == hw->host &&
+                strcmp(s_ui_agents[i].machine, hw->machine) == 0) {
                 lv_obj_set_style_bg_color(hw->cells[n++],
                                           ui_status_color(s_ui_agents[i].status), 0);
             }
