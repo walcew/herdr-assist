@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`hc` falso para os testes da ponte: só o subcomando `connect`.
+"""`hc` falso para os testes da ponte: o subcomando `connect` (e `exec`).
 
 Fala o JSONL do `hc connect` (JSON-RPC 2.0, uma mensagem por linha) a partir
 de um cenário que o teste controla em FAKE_HC_DIR:
@@ -8,6 +8,7 @@ de um cenário que o teste controla em FAKE_HC_DIR:
 - notify.jsonl: notificações que o teste anexa; quem assinou events.subscribe
   as repassa em ordem (`{"method": "event"|"missed"|..., "params": ...}`);
 - calls.jsonl: cada request recebido, registrado para o teste conferir;
+- machines.json: {id: nome} que `exec --on <id>` imprime (sai 1 se não há);
 - read.txt: o texto que terminal.read devolve. terminal.send, terminal.keys e
   terminal.label só confirmam; read, send, keys e attach falham com not_found
   se o terminal não está em terminals.json;
@@ -208,8 +209,20 @@ def framed():
 
 
 def main():
+    if sys.argv[1:2] == ["exec"]:
+        # `exec --on <m> <cmd>`: devolve o nome de machines.json ({id: nome})
+        try:
+            with open(os.path.join(DIR, "machines.json")) as fh:
+                names = json.load(fh)
+        except FileNotFoundError:
+            names = {}
+        name = names.get(sys.argv[3]) if len(sys.argv) > 3 else None
+        if name is None:
+            sys.exit(1)
+        print(name)
+        return
     if sys.argv[1:2] != ["connect"]:
-        sys.exit("fake hc: only `connect`")
+        sys.exit("fake hc: only `connect` and `exec`")
     while True:
         line = sys.stdin.buffer.readline()
         if not line:

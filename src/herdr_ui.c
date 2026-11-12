@@ -138,6 +138,20 @@ static const char *host_label(int host)
     return h->name[0] ? h->name : (h->host[0] ? h->host : "auto");
 }
 
+/** De onde o agente é: a máquina remota, ou o host que o trouxe. */
+static const char *agent_origin(const herdr_agent_t *a)
+{
+    return a->machine[0] ? a->machine : host_label(a->host);
+}
+
+/* O project sem o código da máquina ("WAL/bnmp" -> "bnmp"): onde a origem já
+   aparece por extenso, o código só repete. */
+static const char *agent_project(const herdr_agent_t *a)
+{
+    const char *slash = a->machine[0] ? strchr(a->project, '/') : NULL;
+    return slash ? slash + 1 : a->project;
+}
+
 /** Ordem de urgência para o modo prioridade: bloqueado primeiro. */
 /* Ordem de quem pede atenção primeiro: "done" (terminou, ninguém abriu ainda)
    vem antes de "working", que não espera nada de quem olha o painel. */
@@ -212,7 +226,7 @@ static void do_open_detail(const herdr_agent_t *agent)
     s_detail_open = true;
     s_poll_tick = DETAIL_POLL_TICKS;  /* força read_pane no próximo tick */
     lv_label_set_text_fmt(s_detail_title, "%s / %s \xC2\xB7 %s",
-                          host_label(agent->host), agent->project, agent->agent);
+                          agent_origin(agent), agent_project(agent), agent->agent);
     lv_obj_set_style_bg_color(s_detail_dot, ui_status_color(agent->status), 0);
     term_view_clear(s_term_view, T(STR_LOADING));
     lv_obj_clear_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
@@ -812,7 +826,7 @@ static void add_session_row(int flat_idx, bool multi_acct)
     }
 
     lv_obj_t *name = lv_label_create(row);
-    lv_label_set_text(name, a->project);
+    lv_label_set_text(name, agent_project(a));
     lv_obj_set_style_text_font(name, &lv_font_ui_16, 0);
     lv_obj_set_style_text_color(name, UI_TEXT, 0);
     /* corta o nome longo em vez de deixá-lo passar por baixo do cronômetro;
@@ -822,7 +836,7 @@ static void add_session_row(int flat_idx, bool multi_acct)
     lv_coord_t name_max = SESS_ROW_W - SESS_TEXT_X - chip_slot -
                           (has_timer ? SESS_TIME_RESERVE : SESS_PAD_X);
     lv_point_t nsz;
-    lv_txt_get_size(&nsz, a->project, &lv_font_ui_16,
+    lv_txt_get_size(&nsz, agent_project(a), &lv_font_ui_16,
                     lv_obj_get_style_text_letter_space(name, LV_PART_MAIN), 0,
                     LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     lv_coord_t name_w = LV_MIN(nsz.x, name_max);
@@ -845,7 +859,7 @@ static void add_session_row(int flat_idx, bool multi_acct)
     if (multi_acct && a->account[0]) {
         parts[np++] = a->org[0] ? a->org : "conta";
     } else if (!s_group_by_host) {
-        parts[np++] = host_label(a->host);
+        parts[np++] = agent_origin(a);
     }
     parts[np++] = a->model[0] ? a->model : a->agent;
     if (a->effort[0]) {
@@ -924,14 +938,16 @@ static void refresh_session_timers(void)
 /**
  * Preenche `out` com os índices dos agentes a exibir.
  *
- * host < 0 pega todos. No modo prioridade os bloqueados sobem, mantendo a
+ * host < 0 pega todos; machine != NULL fica só com os daquela máquina ("" =
+ * os do próprio host). No modo prioridade os bloqueados sobem, mantendo a
  * ordem original entre iguais (ordenação estável por seleção).
  */
-static int collect_agents(int host, int *out, int max)
+static int collect_agents(int host, const char *machine, int *out, int max)
 {
     int n = 0;
     for (int i = 0; i < s_ui_agent_count && n < max; i++) {
-        if (host < 0 || s_ui_agents[i].host == host) {
+        if ((host < 0 || s_ui_agents[i].host == host) &&
+            (!machine || strcmp(s_ui_agents[i].machine, machine) == 0)) {
             out[n++] = i;
         }
     }
@@ -1018,7 +1034,7 @@ static void rebuild_session_rows(void)
     }
 
     if (!s_group_by_host) {
-        int n = collect_agents(-1, order, HERDR_MAX_AGENTS_TOTAL);
+        int n = collect_agents(-1, NULL, order, HERDR_MAX_AGENTS_TOTAL);
         if (n == 0) {
             add_muted_line(T(STR_NO_SESSIONS));
         }
@@ -1033,16 +1049,39 @@ static void rebuild_session_rows(void)
             continue;
         }
         herdr_conn_state_t conn = herdr_model_get_conn(h);
-        add_section_label(s_sess_list, host_label(h),
-                          conn == HERDR_CONN_ONLINE ? T(STR_ONLINE) :
-                          conn == HERDR_CONN_CONNECTING ? T(STR_CONNECTING) : T(STR_OFFLINE),
-                          conn == HERDR_CONN_ONLINE ? UI_IDLE :
-                          conn == HERDR_CONN_CONNECTING ? UI_WORKING : UI_BLOCKED);
-        int n = collect_agents(h, order, HERDR_MAX_AGENTS_TOTAL);
+        const char *conn_text = conn == HERDR_CONN_ONLINE ? T(STR_ONLINE) :
+                                conn == HERDR_CONN_CONNECTING ? T(STR_CONNECTING) : T(STR_OFFLINE);
+        lv_color_t conn_color = conn == HERDR_CONN_ONLINE ? UI_IDLE :
+                                conn == HERDR_CONN_CONNECTING ? UI_WORKING : UI_BLOCKED;
+        add_section_label(s_sess_list, host_label(h), conn_text, conn_color);
+        int n = collect_agents(h, "", order, HERDR_MAX_AGENTS_TOTAL);
         for (int i = 0; i < n; i++) {
             add_session_row(order[i], multi_acct);
         }
-        if (n == 0) {
+        bool any_remote = false;
+        /* Uma seção por máquina que o Herdr do host espelha, na ordem em que
+           aparece; o status é o da conexão com o host, que é por onde ela vem. */
+        for (int i = 0; i < s_ui_agent_count; i++) {
+            const herdr_agent_t *a = &s_ui_agents[i];
+            if (a->host != h || !a->machine[0]) {
+                continue;
+            }
+            any_remote = true;
+            bool seen = false;
+            for (int j = 0; j < i && !seen; j++) {
+                seen = s_ui_agents[j].host == h &&
+                       strcmp(s_ui_agents[j].machine, a->machine) == 0;
+            }
+            if (seen) {
+                continue;
+            }
+            add_section_label(s_sess_list, a->machine, conn_text, conn_color);
+            int m = collect_agents(h, a->machine, order, HERDR_MAX_AGENTS_TOTAL);
+            for (int k = 0; k < m; k++) {
+                add_session_row(order[k], multi_acct);
+            }
+        }
+        if (n == 0 && !any_remote) {
             add_muted_line(conn == HERDR_CONN_ONLINE ? T(STR_NO_SESSIONS)
                                                      : T(STR_WAITING_BRIDGE));
         }

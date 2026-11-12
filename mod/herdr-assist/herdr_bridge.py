@@ -575,6 +575,29 @@ def machine_code(name: str) -> str:
     return "".join(w[0] for w in words)[:3].upper()
 
 
+# id da máquina no core -> nome amigável dela (ComputerName no macOS, senão o
+# hostname). "" enquanto a busca está em voo; o id fica se a busca falhar.
+machine_names: dict = {}
+
+
+def machine_label(machine: str) -> str:
+    """Nome amigável da máquina; dispara a busca na primeira vez que ela aparece."""
+    if machine not in machine_names:
+        machine_names[machine] = ""
+        asyncio.get_running_loop().create_task(_fetch_machine_name(machine))
+    return machine_names[machine] or machine
+
+
+async def _fetch_machine_name(machine: str) -> None:
+    out = await cli_run(HC_BIN, ["exec", "--on", machine,
+                                 "scutil --get ComputerName 2>/dev/null || hostname -s"],
+                        timeout=15)
+    lines = (out or "").strip().splitlines()
+    # 15 bytes: o campo do firmware tem 16 com o NUL
+    machine_names[machine] = clip(lines[0].strip(), 15) if lines else machine
+    await push_agents()
+
+
 async def push_agents() -> None:
     """Monta `agents` a partir do estado do core; envia só o que de fato mudou."""
     global last_snapshot, working_since, pane_paths
@@ -616,7 +639,7 @@ async def push_agents() -> None:
         if p["machine"]:
             # mesmo formato da ponte do TUI: código da máquina antes do projeto
             a["project"] = f"{machine_code(p['machine'])}/{a['project']}"
-            a["machine"] = p["machine"]
+            a["machine"] = machine_label(p["machine"])
         acc = None if p["machine"] else pane_account.get(pid)
         if acc:
             a["account"] = acc_email_cache.get(acc, "")

@@ -268,6 +268,16 @@ class TestBridgeOverFakeHc(BridgeHarness):
         self.assertNotIn("account", r)     # pid é da outra máquina: sem conta/contexto
         self.assertNotIn("machine", agents["t1a"])
 
+    def test_agente_de_outra_maquina_vem_com_o_nome_amigavel_dela(self):
+        # a ponte pergunta o nome à própria máquina (hc exec) e reenvia com ele
+        with open(os.path.join(self.dir, "machines.json"), "w") as fh:
+            json.dump({"walcewair": "WalcewAir"}, fh)
+        self.set_terminals([terminal("walcewair/t2", "done", "bnmp / 1")])
+        _, rf = self.connect_ready()
+        agents = self.agents_until(
+            rf, lambda ag: ag.get("walcewair/t2", {}).get("machine") == "WalcewAir")
+        self.assertEqual(agents["walcewair/t2"]["project"], "WAL/bnmp")
+
     def test_comandos_alcancam_o_agente_de_outra_maquina(self):
         self.set_terminals([terminal("walcewair/t2", "idle", "bnmp / 1")])
         s, rf = self.connect_ready()
