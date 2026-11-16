@@ -31,19 +31,38 @@ só stdlib (3.9+), sem toolchain.
    painéis; o clique abre o dialog. Essa cópia é quem sobe a Ponte quando o app abre (um
    mod `place: "none"` só roda com o dialog aberto, e o app não tem autostart de mod).
 
-### Se o indicador conflitar com o layout
+   **Os layouts do Herdr (`main`, `terminals`, `win98`) são reescritos a cada start do app.**
+   Se o indicador caiu num deles, ele some no próximo start (reiniciar o app ou o Mac) e a
+   Ponte deixa de subir sozinha. Para ele ficar, use um layout seu: veja
+   [Fixar o indicador num layout seu](#fixar-o-indicador-num-layout-seu).
 
-Se o encaixe automático (`place` + `overlay`) atrapalhar o seu layout, ponha o indicador à
-mão: troque `"place": "bottom"` por `"none"` no `mod.json` e acrescente este bloco ao
-layout, no ponto que quiser:
+### Fixar o indicador num layout seu
+
+O encaixe automático só acontece na primeira vez que o app vê a pasta, e os layouts do
+Herdr voltam ao original a cada start. Para a Ponte subir sempre com o app, clone o layout
+(o clone é seu e o Herdr não reescreve):
+
+```sh
+herdr-app do layout.clone '{"name":"main","as":"main-assist"}'
+```
+
+O clone já fica ativo. Acrescente nele, no ponto que quiser (o rodapé de
+`~/.config/herdr-app/layouts/main-assist.json`, por exemplo), este bloco:
 
 ```json
 { "id": "herdr-assist", "type": "block", "size": { "px": 28 }, "content": { "mod": "herdr-assist" } }
 ```
 
-O `overlay` do `mod.json` continua valendo: o dialog abre igual. A atualização automática
-troca a pasta inteira, `mod.json` incluso; se o encaixe voltar depois de uma atualização,
-repita a edição.
+O `overlay` do `mod.json` continua valendo: o dialog abre igual. O preço do clone é não
+receber mais as mudanças que o Herdr fizer no layout `main`.
+
+Sem layout próprio, a Ponte só sobe quando alguma cópia do mod roda: depois de reiniciar o
+app ou o Mac, abra o dialog com `cmd-alt-a` (ele garante a Ponte, que segue no ar depois
+de fechar o dialog).
+
+Se o encaixe automático (`place` + `overlay`) atrapalhar o seu layout, troque
+`"place": "bottom"` por `"none"` no `mod.json`. A atualização automática troca a pasta
+inteira, `mod.json` incluso; se o encaixe voltar depois de uma atualização, repita a edição.
 
 ## Saindo do Herdr TUI
 
@@ -137,7 +156,7 @@ da Ponte. Sem a TCP ele encontra e não conecta.
 | Sintoma | Causa provável |
 |---|---|
 | Aviso de porta ocupada no dialog | a ponte do Herdr TUI ainda está de pé: veja [Saindo do Herdr TUI](#saindo-do-herdr-tui) |
-| Painéis em `OFFLINE` ao abrir o app, sem indicador no layout | a Ponte só sobe quando há uma cópia do mod viva: abra o dialog com `cmd-alt-a` ou ponha o bloco do indicador no layout |
+| Painéis em `OFFLINE` ao abrir o app, sem indicador no layout | o Herdr reescreve os layouts dele a cada start e o indicador sumiu: abra o dialog com `cmd-alt-a` ou [fixe o indicador num layout seu](#fixar-o-indicador-num-layout-seu) |
 | Painel pareado em `OFFLINE`, log sem erro | falta a regra **UDP** (a descoberta não chega), ou o token foi rotacionado |
 | Mod sumiu de `mods/` depois de uma atualização, `.herdr-assist.old` no lugar | a máquina caiu no meio da troca: `python3 ~/.config/herdr-app/mods/.herdr-assist.old/ctl.py status` restaura a pasta |
 | `cmd-alt-a` não abre o dialog | o `keys.json` do mod não foi mesclado, ou a tecla já é de outro comando |

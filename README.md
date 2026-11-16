@@ -84,8 +84,12 @@ cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
 The first time the app sees the folder it docks a small indicator at the bottom of the
 active layout; that copy is what starts the bridge when the app opens, and clicking it
 opens the control dialog (also `cmd-alt-a`, or `herdr-app do mod.open --name herdr-assist`).
+Herdr rewrites its own layouts (`main`, `terminals`, `win98`) on every start, so the
+indicator is gone after the app or the Mac restarts and the bridge no longer starts by
+itself: keep the indicator in a layout of your own (`layout.clone`, see the mod README)
+or open the dialog with `cmd-alt-a` after each start.
 The bridge is pure Python stdlib: the `python3` macOS ships (3.9+) is enough, no toolchain.
-Everything else — the footer block as a manual layout entry, leaving the old Herdr TUI
+Everything else — the footer block in a cloned layout, leaving the old Herdr TUI
 plugin, the config doc, the log, the firewall rules — is in
 [`mod/herdr-assist/README.md`](mod/herdr-assist/README.md).
 

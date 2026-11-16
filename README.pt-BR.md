@@ -87,8 +87,12 @@ cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
 Na primeira vez que o app vê a pasta, ele encaixa um indicador pequeno no rodapé do
 layout ativo; essa cópia é quem sobe a ponte quando o app abre, e clicar nela abre o
 dialog de controle (também `cmd-alt-a`, ou `herdr-app do mod.open --name herdr-assist`).
+O Herdr reescreve os layouts dele (`main`, `terminals`, `win98`) a cada start, então o
+indicador some depois de reiniciar o app ou o Mac e a ponte deixa de subir sozinha: deixe o
+indicador num layout seu (`layout.clone`, veja o README do mod) ou abra o dialog com
+`cmd-alt-a` depois de cada start.
 A ponte é stdlib pura do Python: funciona com o `python3` de fábrica do macOS (3.9+), sem
-toolchain. O resto — o bloco do rodapé como entrada manual no layout, como deixar o plugin
+toolchain. O resto — o bloco do rodapé num layout clonado, como deixar o plugin
 antigo do Herdr TUI, o doc de configuração, o log e as regras de firewall — está em
 [`mod/herdr-assist/README.md`](mod/herdr-assist/README.md).
 

@@ -29,7 +29,9 @@ into the app's home and open the control dialog (`cmd-alt-a`):
 cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
 ```
 
-Opening the app (or the dialog) starts the bridge. It is pure-stdlib Python:
+Opening the app starts the bridge while the footer indicator is in the layout
+(Herdr rewrites its own layouts on every start: keep it in a cloned layout, or
+open the dialog with `cmd-alt-a`, which also starts it). It is pure-stdlib Python:
 the stock macOS `python3` (3.9+) is enough, no toolchain. Full install notes
 (keys, the footer indicator, leaving the old Herdr TUI plugin) are in the
 [mod README](../mod/herdr-assist/README.md).

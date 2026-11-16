@@ -28,7 +28,9 @@ mod para o home do app e abra o dialog de controle (`cmd-alt-a`):
 cp -R mod/herdr-assist ~/.config/herdr-app/mods/herdr-assist
 ```
 
-Abrir o app (ou o dialog) sobe a ponte. É Python puro, só stdlib: o `python3`
+Abrir o app sobe a ponte enquanto o indicador do rodapé estiver no layout (o
+Herdr reescreve os layouts dele a cada start: deixe o indicador num layout
+clonado, ou abra o dialog com `cmd-alt-a`, que também sobe a ponte). É Python puro, só stdlib: o `python3`
 que o macOS traz (3.9+) basta, sem toolchain. A instalação completa (teclas,
 indicador no rodapé, como deixar o plugin antigo do Herdr TUI) está no
 [README do mod](../mod/herdr-assist/README.md).
